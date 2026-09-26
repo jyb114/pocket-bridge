@@ -49,6 +49,7 @@ const SUITE = [
   ['test-upload-handler.js', [], '上传处理器：路径穿越、来源、大小（自带服务）'],
   ['test-codex-queue.js', [], '队列状态机（自带 mock rpc，不碰真会话）'],
   ['test-release-lock.js', [], '释放写锁：什么情况下**不许**动手（自带服务与假目标）'],
+  ['test-codex-handback-race.js', [], '手机在自动交还期间重连时，旧清理不得取消新会话订阅'],
   ['test-codex-proxy-scope.js', [], '代理配置只作用于托管执行端；启动时不修改用户级 Windows 环境'],
   ['test-first-load.js', [], '首次加载横幅：该显示的显示、该消失的消失（假 DOM）'],
   ['test-notify-onboarding.js', [], '手机端「开启提醒」引导：一张卡片、点一下就好、不装 App'],

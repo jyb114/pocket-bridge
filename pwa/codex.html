@@ -703,9 +703,9 @@ if (window.DshI18n) window.DshI18n.register({
   "消息未发送：会话由另一个执行服务占用": { en: "Message not sent: another executor holds this conversation", es: "Mensaje no enviado: otro ejecutor tiene esta conversación" },
   "这条会话正开在电脑上，手机发不出去。<br><br>你能做的：<br>· 点下面「释放电脑端的锁」→ 手机继续用这条会话（会关掉电脑上的 Codex，正在跑的任务可能被中断）<br>· 或者另开一条会话（不会接着当前任务的进度）<br><br>你输入的内容和附件都还在。": { en: "This conversation is open on your computer, so the phone cannot send.<br><br>What you can do:<br>· Tap “Release the lock on the computer” below → keep using this conversation on the phone (it closes Codex on the computer, so a running task may be interrupted)<br>· Or start a new conversation (it will not continue the current task)<br><br>Your text and attachments are still here.", es: "Esta conversación está abierta en el ordenador, así que el teléfono no puede enviar.<br><br>Qué puedes hacer:<br>· Pulsa «Liberar el bloqueo del ordenador» → sigue usando esta conversación en el teléfono (cierra Codex en el ordenador, así que una tarea en curso puede interrumpirse)<br>· O abre otra conversación (no continuará la tarea actual)<br><br>Tu texto y adjuntos siguen aquí." },
   "释放手机端的锁": { en: "Release the lock on the phone", es: "Liberar el bloqueo del teléfono" },
-  "释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会动电脑上的 Codex，正在跑的任务不受影响\n· 手机下次发消息会自动重新接上\n\n确定吗？": {
-    en: "Release the lock on the phone?\n\n· Only the phone's hold on this session is released\n· Codex on your computer is not touched; running tasks are unaffected\n· The phone reconnects automatically next time you send\n\nContinue?",
-    es: "¿Liberar el bloqueo del teléfono?\n\n· Solo se libera la retención del teléfono sobre esta sesión\n· No se toca Codex en tu ordenador; las tareas en curso no se ven afectadas\n· El teléfono se reconecta solo la próxima vez que envíes\n\n¿Continuar?"
+  "释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会关闭电脑上的 Codex，也不会主动发送停止任务命令\n· 若手机任务仍在运行，建议等它结束后再操作\n· 手机下次发消息会自动重新接上\n\n确定吗？": {
+    en: "Release the lock on the phone?\n\n· Only the phone's hold on this session is released\n· Desktop Codex is not closed and no stop-task command is sent\n· If a phone task is still running, consider waiting until it finishes\n· The phone reconnects automatically next time you send\n\nContinue?",
+    es: "¿Liberar el bloqueo del teléfono?\n\n· Solo se libera la retención del teléfono sobre esta sesión\n· No se cierra Codex de escritorio ni se envía ninguna orden de detener la tarea\n· Si una tarea del teléfono sigue en curso, conviene esperar a que termine\n· El teléfono se reconecta solo la próxima vez que envíes\n\n¿Continuar?"
   },
   "正在释放手机端的锁…": { en: "Releasing the lock on the phone…", es: "Liberando el bloqueo del teléfono…" },
   "手机端的锁已经松开（电脑上的 Codex 没被动过）。": {
@@ -713,10 +713,6 @@ if (window.DshI18n) window.DshI18n.register({
     es: "El bloqueo del teléfono está liberado (no se tocó Codex en tu ordenador)."
   },
   "释放手机端的锁：没成功": { en: "Release the phone-side lock: it did not work", es: "Liberar el bloqueo del teléfono: no funcionó" },
-  "只松开手机这边占的会话，不会动电脑上的 Codex，也不会打断正在跑的任务。": {
-    en: "Only releases the phone's hold on this session — Codex on your computer is not touched and running tasks are not interrupted.",
-    es: "Solo libera la retención del teléfono sobre esta sesión: no se toca Codex en tu ordenador ni se interrumpen las tareas en curso."
-  },
   "释放电脑端的锁": { en: "Release the lock on the computer", es: "Liberar el bloqueo del ordenador" },
   "电脑上的 Codex 开着这条会话时，手机发不出消息。点它让电脑端交出来（占着的是手机这端时，就是还回去）。": {
     en: "When this conversation is open in desktop Codex, the phone cannot send messages. Tap to hand it over from the computer (if the phone holds it, the lock is simply released).",
@@ -730,9 +726,9 @@ if (window.DshI18n) window.DshI18n.register({
     en: "What the “lock” is: only one writer may hold a conversation at a time. When Codex on your computer has this conversation open, it holds the write permission — the phone can read, but sending reports “the conversation is held by another execution service”. The two buttons below are two different ways out, with very different costs.",
     es: "Qué es el «bloqueo»: solo un escritor puede tener una conversación a la vez. Cuando Codex en tu ordenador tiene abierta esta conversación, retiene el permiso de escritura: el teléfono puede leer, pero al enviar aparece «la conversación está en uso por otro servicio de ejecución». Los dos botones de abajo son dos salidas con costes muy distintos."
   },
-  "只松开手机这边占的会话：不动电脑上的任何程序，也不打断任何任务。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。": {
-    en: "Releases only the phone's hold on this conversation: no program on your computer is touched and no task is interrupted. It is also released **automatically** a while after the phone closes or disconnects, so you normally never need this button.",
-    es: "Libera solo la retención del teléfono sobre esta conversación: no se toca ningún programa del ordenador ni se interrumpe ninguna tarea. También se libera **automáticamente** un rato después de cerrar o desconectar el teléfono, así que normalmente no hace falta pulsarlo."
+  "只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。": {
+    en: "Releases only the phone's hold on this conversation: desktop Codex is not closed, and no stop-task command is sent. It is also released **automatically** a while after the phone closes or disconnects, so you normally never need this button.",
+    es: "Libera solo la retención del teléfono sobre esta conversación: no se cierra Codex de escritorio ni se envía ninguna orden de detener la tarea. También se libera **automáticamente** un rato después de cerrar o desconectar el teléfono, así que normalmente no hace falta pulsarlo."
   },
   "⚠️ 会关掉电脑上的 Codex，正在跑的任务可能被中断": {
     en: "⚠️ This closes Codex on your computer; a running task may be interrupted",
@@ -4183,7 +4179,7 @@ function openLockPanel() {
     safe.id = 'lock-release-phone';
     safe.textContent = tr('释放手机端的锁');
     safe.onclick = function () {
-      if (!confirm(tr('释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会动电脑上的 Codex，正在跑的任务不受影响\n· 手机下次发消息会自动重新接上\n\n确定吗？'))) return;
+      if (!confirm(tr('释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会关闭电脑上的 Codex，也不会主动发送停止任务命令\n· 若手机任务仍在运行，建议等它结束后再操作\n· 手机下次发消息会自动重新接上\n\n确定吗？'))) return;
       var safeLabel = safe.textContent;
       safe.disabled = true;
       safe.textContent = tr('正在释放手机端的锁…');
@@ -4198,7 +4194,7 @@ function openLockPanel() {
 
     var safeCost = document.createElement('div');
     safeCost.className = 'info';
-    safeCost.textContent = tr('只松开手机这边占的会话：不动电脑上的任何程序，也不打断任何任务。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。');
+    safeCost.textContent = tr('只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。');
     inner.appendChild(safeCost);
 
     // ★ 危险按钮上面先摆一条红色警告 —— 它真的会关掉电脑上的 Codex。

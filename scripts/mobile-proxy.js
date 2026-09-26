@@ -5115,11 +5115,14 @@ function handleUpgrade(req, socket, head) {
 // 这只是释放手机端占用，不停止尚在运行的服务或声称中断任务。
 let codexPhoneClients = 0;
 let codexReleaseTimer = null;
+let codexPhoneGeneration = 0;
+let codexHandbackUnsubscribe = null;
 const CODEX_RELEASE_GRACE_MS = 60 * 1000;
 
 /** 有手机连上来 → 取消「交还」倒计时 */
 function codexPhoneAttached() {
   codexPhoneClients += 1;
+  codexPhoneGeneration += 1;
   if (codexReleaseTimer) {
     clearTimeout(codexReleaseTimer);
     codexReleaseTimer = null;
@@ -5127,15 +5130,38 @@ function codexPhoneAttached() {
   }
 }
 
+/** Count the accepted phone immediately, but do not let it resume a thread
+ * until an already-started unsubscribe has finished. */
+async function codexPhoneEntering(socket) {
+  if (socket.destroyed) return false;
+  codexPhoneAttached();
+  socket.once('close', codexPhoneDetached);
+  const pending = codexHandbackUnsubscribe;
+  if (pending) {
+    try { await pending; } catch (err) { /* The old cleanup may have failed. */ }
+  }
+  return !socket.destroyed;
+}
+
 /** 手机那条连接断了；**全**断了才开始倒计时 */
 function codexPhoneDetached() {
   codexPhoneClients = Math.max(0, codexPhoneClients - 1);
   if (codexPhoneClients > 0 || codexReleaseTimer) return;
+  const generation = codexPhoneGeneration;
   codexReleaseTimer = setTimeout(async () => {
     codexReleaseTimer = null;
-    if (codexPhoneClients > 0) return;                       // 有人回来了
+    if (codexPhoneClients > 0 || generation !== codexPhoneGeneration) return;
     try {
-      const r = await codexLock.releasePhone(null, { log });
+      const r = await codexLock.releasePhone(null, {
+        log,
+        shouldCancel: () => codexPhoneClients > 0 || generation !== codexPhoneGeneration,
+        onUnsubscribe: (operation) => {
+          codexHandbackUnsubscribe = operation;
+          const clear = () => { if (codexHandbackUnsubscribe === operation) codexHandbackUnsubscribe = null; };
+          operation.then(clear, clear);
+        }
+      });
+      if (r.cancelled) { log('手机已重新连上 Codex —— 取消旧的自动交还'); return; }
       log(`手机已断开 ${Math.round(CODEX_RELEASE_GRACE_MS / 1000)} 秒，把 Codex 交还给电脑：` +
         (r.serverNotRunning ? '托管服务本来就没在运行'
           : r.released && r.released.length ? `已取消订阅 ${r.released.length} 条会话（服务保持运行）`
@@ -5197,6 +5223,7 @@ function codexProxyInfo() {
 }
 
 async function proxyCodexWs(req, socket, head) {
+  if (!await codexPhoneEntering(socket)) return;
   const t = require('./targets.js');
   const port = t.codex.port();
 
@@ -5293,10 +5320,9 @@ async function proxyCodexWs(req, socket, head) {
     };
     upstream.on('end', () => { log('WS Codex 上游结束'); logCxStats('上游结束'); socket.end(); });
     socket.on('end', () => { log('WS Codex 客户端结束'); upstream.end(); });
-    socket.on('close', () => { logCxStats('客户端关闭'); codexPhoneDetached(); });
+    socket.on('close', () => { logCxStats('客户端关闭'); });
 
     log('WS → Codex app-server 已接通');
-    codexPhoneAttached();
   });
 
   upstream.on('error', async (err) => {

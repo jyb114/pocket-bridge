@@ -294,12 +294,21 @@ function createLockService(base, deps) {
     //     电脑端能立刻接手，而手机这边服务还是热的、页面连回来就能用。
     if (allLoaded) {
       try {
-        const loaded = await rpcFor(port)('thread/loaded/list', {});
-        const ids = (loaded && (loaded.data || loaded.threadIds)) || [];
-        out.loadedBefore = Array.isArray(ids) ? ids.slice() : [];
-        for (const id of out.loadedBefore) {
-          try { await unsubscribeOwn(id, rpcFor(port)); out.released.push(id); }
-          catch (err) { out.releaseErrors.push(`${id}: ${err.message}`); }
+        const cancelled = () => opts && typeof opts.shouldCancel === 'function' && opts.shouldCancel();
+        if (cancelled()) out.cancelled = true;
+        else {
+          const loaded = await rpcFor(port)('thread/loaded/list', {});
+          const ids = (loaded && (loaded.data || loaded.threadIds)) || [];
+          out.loadedBefore = Array.isArray(ids) ? ids.slice() : [];
+          for (const id of out.loadedBefore) {
+            // A phone may reconnect while loaded/list is in flight. Never
+            // unsubscribe a thread from that newer connection.
+            if (cancelled()) { out.cancelled = true; break; }
+            const operation = unsubscribeOwn(id, rpcFor(port));
+            if (opts && typeof opts.onUnsubscribe === 'function') opts.onUnsubscribe(operation);
+            try { await operation; out.released.push(id); }
+            catch (err) { out.releaseErrors.push(`${id}: ${err.message}`); }
+          }
         }
         if (out.released.length) log(`释放手机端的锁：松开了 ${out.released.length} 条会话的占用（服务保持热）`);
       } catch (err) {
