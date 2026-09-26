@@ -126,7 +126,7 @@ try {
     $testInstall = Join-Path $work 'installed'
     New-Item -ItemType Directory -Path $testInstall | Out-Null
     [IO.File]::WriteAllText((Join-Path $testInstall 'installer-test.flag'), 'temporary installer smoke test')
-    $install = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$testInstall") -Wait -PassThru
+    $install = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$testInstall") -WindowStyle Hidden -Wait -PassThru
     if ($install.ExitCode -ne 0) { throw "Silent install failed: $($install.ExitCode)" }
     $installedNode = Join-Path $testInstall "runtime\node-v$nodeVersion-win-x64\node.exe"
     if (-not (Test-Path -LiteralPath $installedNode)) { throw 'Installed Node is missing' }
@@ -200,14 +200,14 @@ try {
     New-Item -ItemType Directory -Path $testUploads | Out-Null
     [IO.File]::WriteAllText((Join-Path $testInstall 'config.json'), '{"test":"preserve"}')
     [IO.File]::WriteAllText((Join-Path $testUploads 'keep.txt'), 'sentinel-upload')
-    $upgrade = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$testInstall") -Wait -PassThru
+    $upgrade = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$testInstall") -WindowStyle Hidden -Wait -PassThru
     if ($upgrade.ExitCode -ne 0) { throw "Silent upgrade failed: $($upgrade.ExitCode)" }
     if ((Get-Content -LiteralPath (Join-Path $testInstall 'config.json') -Raw) -ne '{"test":"preserve"}') { throw 'Upgrade changed config.json' }
     if ((Get-Content -LiteralPath $accessFile -Raw) -ne $originalAccess) { throw 'Upgrade changed access key' }
     if ((Get-Content -LiteralPath $e2eeFile -Raw) -ne $originalE2ee) { throw 'Upgrade changed E2EE key' }
     if ((Get-Content -LiteralPath (Join-Path $testUploads 'keep.txt') -Raw) -ne 'sentinel-upload') { throw 'Upgrade changed uploads' }
     $uninstaller = Join-Path $testInstall 'Uninstall Pocket Bridge.exe'
-    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
     if ($uninstall.ExitCode -ne 0) { throw "Silent uninstall failed: $($uninstall.ExitCode)" }
     if (Test-Path -LiteralPath $installedNode) { throw 'Uninstall did not remove program files' }
     foreach ($private in @('config.json', 'logs\access-key.txt', 'logs\e2ee-secret.txt', 'uploads\keep.txt')) {
