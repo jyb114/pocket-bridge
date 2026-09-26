@@ -18,6 +18,83 @@
 
   var Rec = global.SpeechRecognition || global.webkitSpeechRecognition;
 
+  // Resolve at the moment a user opens help or starts recognition. The language
+  // can change without reloading the Codex page.
+  var WORDS = {
+    zh: {
+      iosUnavailable: 'iPhone 上的 Safari 不开放语音识别接口 —— 请用键盘右下角那个麦克风，效果一样，而且更稳。',
+      browserUnavailable: '这个浏览器不支持语音识别 —— 请用键盘上的麦克风按钮。',
+      permission: '没有麦克风权限 —— 在浏览器设置里允许一下就能用',
+      noSpeech: '没听到声音，再试一次', error: '识别出错：', startFailed: '启动失败：',
+      availableHelp: '<b>语音输入怎么用</b><br>1. 先点一下输入框，把光标放进去<br>' +
+        '2. 点这个 🎤 按钮<br>3. 直接说话，停下来它自己会结束<br>' +
+        '<div style="color:#81858c;font-size:12.5px;margin-top:6px">再点一次按钮可以提前结束。</div>',
+      unavailableTitle: '这里没有内置语音按钮 —— 但键盘上有',
+      iosExplanation: 'iPhone 的 Safari <b>不开放</b>网页语音接口，所以网页里做不了。',
+      browserExplanation: '这个浏览器没开放网页语音接口。',
+      keyboardIntro: '不过手机键盘自带的听写就能干这件事，而且更稳。',
+      keyboardSteps: '<b>怎么用：</b><br>1. 点一下输入框，让键盘弹出来<br>' +
+        '2. 看键盘<b>右下角</b>那个 🎤（在空格键右边）<br>' +
+        '3. 点它，然后说话 —— 字会自己出现在输入框里',
+      keyboardSettings: '<b>键盘上找不到 🎤？</b>要先把它打开：<br>' +
+        '<b>设置 → 通用 → 键盘 → 启用「听写」</b>，打开后键盘右下角就有了。',
+      gotIt: '知道了'
+    },
+    en: {
+      iosUnavailable: 'iPhone Safari does not offer speech recognition to web pages. Use the microphone on your keyboard instead.',
+      browserUnavailable: 'This browser does not support speech recognition. Use the microphone on your keyboard instead.',
+      permission: 'Microphone access is blocked. Allow it in your browser settings and try again.',
+      noSpeech: 'No speech detected. Please try again.', error: 'Speech recognition error: ', startFailed: 'Could not start recognition: ',
+      availableHelp: '<b>How to use voice input</b><br>1. Tap the text box to place the cursor<br>' +
+        '2. Tap the 🎤 button<br>3. Speak; recognition stops when you pause<br>' +
+        '<div style="color:#81858c;font-size:12.5px;margin-top:6px">Tap the button again to stop early.</div>',
+      unavailableTitle: 'No built-in voice button here — use your keyboard',
+      iosExplanation: 'iPhone Safari does <b>not</b> offer speech recognition to web pages.',
+      browserExplanation: 'This browser does not offer speech recognition to web pages.',
+      keyboardIntro: 'Your phone keyboard can dictate instead, and it is usually more reliable.',
+      keyboardSteps: '<b>How to use it:</b><br>1. Tap the text box to open the keyboard<br>' +
+        '2. Find the 🎤 button on your keyboard<br>3. Tap it and speak; your words appear in the text box',
+      keyboardSettings: '<b>Cannot find 🎤 on the keyboard?</b> Turn on dictation in ' +
+        '<b>Settings → General → Keyboard → Enable Dictation</b>.',
+      gotIt: 'Got it'
+    },
+    es: {
+      iosUnavailable: 'Safari en iPhone no ofrece reconocimiento de voz a las páginas web. Usa el micrófono del teclado.',
+      browserUnavailable: 'Este navegador no admite el reconocimiento de voz. Usa el micrófono del teclado.',
+      permission: 'El acceso al micrófono está bloqueado. Permítelo en los ajustes del navegador e inténtalo de nuevo.',
+      noSpeech: 'No se detectó voz. Inténtalo de nuevo.', error: 'Error de reconocimiento de voz: ',
+      startFailed: 'No se pudo iniciar el reconocimiento: ',
+      availableHelp: '<b>Cómo usar la entrada de voz</b><br>1. Toca el campo de texto para situar el cursor<br>' +
+        '2. Toca el botón 🎤<br>3. Habla; el reconocimiento se detiene cuando haces una pausa<br>' +
+        '<div style="color:#81858c;font-size:12.5px;margin-top:6px">Vuelve a tocar el botón para detenerlo antes.</div>',
+      unavailableTitle: 'Aquí no hay micrófono integrado: usa el del teclado',
+      iosExplanation: 'Safari en iPhone <b>no</b> ofrece reconocimiento de voz a las páginas web.',
+      browserExplanation: 'Este navegador no ofrece reconocimiento de voz a las páginas web.',
+      keyboardIntro: 'Puedes usar el dictado del teclado del teléfono; suele ser más fiable.',
+      keyboardSteps: '<b>Cómo usarlo:</b><br>1. Toca el campo de texto para abrir el teclado<br>' +
+        '2. Busca el botón 🎤 del teclado<br>3. Tócalo y habla; las palabras aparecerán en el campo de texto',
+      keyboardSettings: '<b>¿No encuentras 🎤 en el teclado?</b> Activa Dictado en ' +
+        '<b>Ajustes → General → Teclado → Activar Dictado</b>.',
+      gotIt: 'Entendido'
+    }
+  };
+
+  function words() {
+    var lang = '';
+    try { if (global.DshI18n && global.DshI18n.lang) lang = global.DshI18n.lang(); } catch (e) { }
+    if (!lang) {
+      try { lang = global.localStorage && global.localStorage.getItem('dsh-lang'); } catch (e) { }
+    }
+    if (!lang) {
+      var list = global.navigator && (global.navigator.languages || [global.navigator.language]) || [];
+      for (var i = 0; i < list.length; i++) {
+        var candidate = String(list[i] || '').toLowerCase().split('-')[0];
+        if (WORDS[candidate]) { lang = candidate; break; }
+      }
+    }
+    return WORDS[String(lang || '').toLowerCase().split('-')[0]] || WORDS.en;
+  }
+
   /** 这个浏览器能不能做语音识别 */
   function available() {
     return !!Rec;
@@ -26,14 +103,14 @@
   /** 为什么不能用 —— 给使用者一句人话 */
   function whyNot() {
     if (Rec) return null;
+    var copy = words();
     var ua = String(global.navigator && global.navigator.userAgent || '');
     var isIOS = /iPad|iPhone|iPod/.test(ua) ||
       (/Macintosh/.test(ua) && 'ontouchend' in document);
     if (isIOS) {
-      return 'iPhone 上的 Safari 不开放语音识别接口 —— 请用键盘右下角那个麦克风，' +
-        '效果一样，而且更稳。';
+      return copy.iosUnavailable;
     }
-    return '这个浏览器不支持语音识别 —— 请用键盘上的麦克风按钮。';
+    return copy.browserUnavailable;
   }
 
   /**
@@ -72,10 +149,11 @@
 
     r.onerror = function (ev) {
       // not-allowed = 使用者拒绝了麦克风权限；no-speech = 没听到
+      var copy = words();
       var msg = ev.error === 'not-allowed'
-        ? '没有麦克风权限 —— 在浏览器设置里允许一下就能用'
-        : (ev.error === 'no-speech' ? '没听到声音，再试一次'
-          : ('识别出错：' + ev.error));
+        ? copy.permission
+        : (ev.error === 'no-speech' ? copy.noSpeech
+          : (copy.error + ev.error));
       if (o.onError) o.onError(msg);
     };
 
@@ -89,7 +167,7 @@
       r.start();
     } catch (err) {
       // 重复 start() 会抛 —— 直接告诉调用方，别静默失败
-      if (o.onError) o.onError('启动失败：' + err.message);
+      if (o.onError) o.onError(words().startFailed + err.message);
       return null;
     }
 
@@ -152,8 +230,11 @@
   function explain() {
     if (document.getElementById('dsh-voice-help')) return;
 
-    var isAndroid = /Android/i.test(String(global.navigator && global.navigator.userAgent || ''));
+    var ua = String(global.navigator && global.navigator.userAgent || '');
+    var isIOS = /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && 'ontouchend' in document);
     var ok = available();
+    var copy = words();
 
     var box = document.createElement('div');
     box.id = 'dsh-voice-help';
@@ -168,37 +249,25 @@
 
     var html;
     if (ok) {
-      html =
-        '<b>语音输入怎么用</b><br>' +
-        '1. 先点一下输入框，把光标放进去<br>' +
-        '2. 点这个 🎤 按钮<br>' +
-        '3. 直接说话，停下来它自己会结束<br>' +
-        '<div style="color:#81858c;font-size:12.5px;margin-top:6px">' +
-        '再点一次按钮可以提前结束。</div>';
+      html = copy.availableHelp;
     } else {
       html =
-        '<b>这里没有内置语音按钮 —— 但键盘上有</b>' +
+        '<b>' + copy.unavailableTitle + '</b>' +
         '<div style="color:#c9ccd1;margin-top:7px">' +
-        (isAndroid ? '这个浏览器没开放网页语音接口。' :
-          'iPhone 的 Safari <b>不开放</b>网页语音接口，所以网页里做不了。') +
-        '不过手机键盘自带的听写就能干这件事，而且更稳。<br><br>' +
-        '<b>怎么用：</b><br>' +
-        '1. 点一下输入框，让键盘弹出来<br>' +
-        '2. 看键盘<b>右下角</b>那个 🎤（在空格键右边）<br>' +
-        '3. 点它，然后说话 —— 字会自己出现在输入框里' +
+        (isIOS ? copy.iosExplanation : copy.browserExplanation) +
+        copy.keyboardIntro + '<br><br>' +
+        copy.keyboardSteps +
         '</div>' +
-        (isAndroid ? '' :
+        (isIOS ?
           '<div style="margin-top:9px;padding:9px 11px;background:#232326;border-radius:9px;' +
           'color:#c9ccd1;font-size:12.5px">' +
-          '<b>键盘上找不到 🎤？</b>要先把它打开：<br>' +
-          '<b>设置 → 通用 → 键盘 → 启用「听写」</b>，打开后键盘右下角就有了。' +
-          '</div>');
+          copy.keyboardSettings + '</div>' : '');
     }
 
     box.innerHTML = html +
       '<div style="text-align:right;margin-top:11px">' +
       '<button id="dsh-voice-help-x" style="background:#2c2c2e;color:#eee;' +
-      'border:0;border-radius:9px;padding:9px 16px;font-size:13.5px">知道了</button></div>';
+      'border:0;border-radius:9px;padding:9px 16px;font-size:13.5px">' + copy.gotIt + '</button></div>';
 
     document.body.appendChild(box);
     var x = document.getElementById('dsh-voice-help-x');

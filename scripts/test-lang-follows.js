@@ -160,6 +160,37 @@ function run(env) {
       okSet === false && env.__out.reloads === 0 && env.__out.cookies.length === 0);
   }
 
+  // ⑧ 语音识别也要跟着界面语言。
+  //
+  //    原来两个调用点都写死 'zh-CN' —— 界面切成英文了，语音还按中文识别，
+  //    说英文出来一堆同音错字。voice.js 本来就支持 o.lang，只是没人传。
+  {
+    const boot = fs.readFileSync(path.join(BASE, 'pwa', 'boot.js'), 'utf8');
+    const codex = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
+    for (const [name, src] of [['boot.js（DSH 页的麦克风）', boot], ['codex.html（Codex 页的麦克风）', codex]]) {
+      ok(`${name}：不再写死 zh-CN`, !/lang:\s*'zh-CN'/.test(src), '还写死着');
+      ok(`${name}：语音语言由 voiceLang() 决定`, /lang:\s*voiceLang\(\)/.test(src));
+      ok(`${name}：有 voiceLang() 的定义`, /function voiceLang\(/.test(src));
+    }
+    // voiceLang 的行为：三种界面语言 → 三种识别语言
+    const { extractFunction } = require('./page-source.js');
+    const fn = extractFunction(boot, 'voiceLang');
+    for (const [ui, want] of [['zh', 'zh-CN'], ['en', 'en-US'], ['es', 'es-ES']]) {
+      const box = { window: { DshI18n: { lang: () => ui } }, console };
+      box.window.window = box.window;
+      vm.createContext(box);
+      vm.runInContext(fn, box, { filename: 'voiceLang' });
+      const got = box.voiceLang ? box.voiceLang() : (vm.runInContext('voiceLang()', box));
+      ok(`界面 ${ui} → 识别 ${want}`, got === want, String(got));
+    }
+    // 认不出来时退回中文（不炸、不乱选）
+    const box2 = { window: {}, console };
+    box2.window.window = box2.window;
+    vm.createContext(box2);
+    vm.runInContext(fn, box2, { filename: 'voiceLang' });
+    ok('拿不到界面语言时退回中文', vm.runInContext('voiceLang()', box2) === 'zh-CN');
+  }
+
   console.log(`\n${pass} 通过 / ${fail} 失败\n`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log('跑挂了：' + (e && e.stack)); process.exit(1); });

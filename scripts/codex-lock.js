@@ -1,3 +1,7 @@
+// 锁的两个方向（使用者 2026-09-27 明确要的）：
+//   · 「释放电脑端的锁」= release()：让**电脑上**的 Codex 松手（最后一招是关掉它，有代价）
+//   · 「释放手机端的锁」= releasePhone()：只收**手机这边**的摊子，一个电脑程序都不碰
+//
 // 「释放电脑端的锁」—— 手机被 Codex 的独占写锁挡在门外时的那条出路。
 //
 // 背景（PLAN.md 十三/十四）：Codex 的**同一个会话同时只能有一个写入者**。
@@ -237,6 +241,118 @@ function createLockService(base, deps) {
   }
 
   /**
+   * 释放**手机这边**的占用 —— 电脑上的东西一个都不碰。
+   *
+   * 使用者 2026-09-27 要的就是这个：「手机端可以释放电脑端的锁，也可以释放手机端的锁」。
+   * 两个按钮的分工必须说清楚，不然会像这次一样出事：
+   *
+   *   release()      找的是**电脑端**占着的锁；最后一招是关掉电脑上的 Codex
+   *                  —— 有代价（正在跑的任务可能被打断），所以必须 confirm
+   *   releasePhone() 只收手机自己的摊子：
+   *                    · 指定会话时只还回这一条（thread/unsubscribe）
+   *                    · 无会话编号时供「所有手机都离线」清理已加载的会话
+   *                    · 仅显式要求时才停掉**我们自己起的** app-server
+   *                      （targets.codex.stop() 只按我们记的 pid 杀；桌面版不在它的
+   *                       范围内 —— 它会回「端口还占着，说明是别的实例，不该由我们关」）
+   *
+   * 因此它**不需要** confirm：它不可能打断电脑上的任何任务。
+   * 停掉我们自己的 app-server 之后，手机下次打开会话会自动把它重新拉起来
+   * （看门狗 + 打开会话时的 ensure），所以这个按钮是「松开」，不是「关掉功能」。
+   */
+  async function releasePhone(threadId, opts) {
+    const log = (opts && opts.log) || (() => { });
+    const out = {
+      ok: false, phone: true, threadId: threadId || null,
+      unsubscribed: false, released: [], releaseErrors: [],
+      serverStopped: false, serverMessage: '', serviceKept: true
+    };
+
+    // An invalid supplied ID must never fall through to the all-threads path.
+    // The null case is reserved for the no-phone-clients cleanup timer.
+    const allLoaded = threadId === null;
+    if (!allLoaded && !threadIdOk(threadId)) {
+      out.code = 'bad-thread';
+      return out;
+    }
+
+    // ① A button for one thread must not unsubscribe any other phone session.
+    if (!allLoaded) {
+      try {
+        await unsubscribeOwn(threadId, rpcFor(port));
+        out.unsubscribed = true;
+        log(`释放手机端的锁：已让 app-server 松开 ${threadId}`);
+      } catch (err) {
+        out.unsubscribeError = err && err.message ? err.message : String(err);
+        log(`释放手机端的锁：松开 ${threadId} 失败：${out.unsubscribeError}`);
+      }
+    }
+
+    // ①b Only the no-phone-clients cleanup releases every loaded thread.
+    //
+    //     为什么不直接停服务：停了手机切回来要等冷启动，那就不叫「流畅切换」了
+    //     （使用者的要求是「不影响手机端的使用」）。逐条松开之后，
+    //     电脑端能立刻接手，而手机这边服务还是热的、页面连回来就能用。
+    if (allLoaded) {
+      try {
+        const loaded = await rpcFor(port)('thread/loaded/list', {});
+        const ids = (loaded && (loaded.data || loaded.threadIds)) || [];
+        out.loadedBefore = Array.isArray(ids) ? ids.slice() : [];
+        for (const id of out.loadedBefore) {
+          try { await unsubscribeOwn(id, rpcFor(port)); out.released.push(id); }
+          catch (err) { out.releaseErrors.push(`${id}: ${err.message}`); }
+        }
+        if (out.released.length) log(`释放手机端的锁：松开了 ${out.released.length} 条会话的占用（服务保持热）`);
+      } catch (err) {
+        // Whether any lock remains is unknown when enumeration fails.
+        out.loadedError = err && err.message ? err.message : String(err);
+      }
+    }
+
+    // ② **只有明确要求**才把我们自己起的 app-server 停掉（默认不停，保住手机的热连接）
+    //
+    // ★ 先问一句「我们那个服务到底在不在」再决定要不要停。
+    //   实测踩到的坑：服务根本没在跑时直接调 stop()，它会回一句
+    //   「Codex 远程服务没在运行」→ 按「停止成功」判据就成了 ok:false，
+    //   而这恰恰是**手机这边本来就没占着**（也就是我们要的结果）。
+    //   managedPid() 本来就是干这个的：只认我们记下 pid 的那个 app-server，
+    //   桌面版自己那个不算（端口还被别人占着时它返回 null）。
+    const t = targetsFor();
+    let ours = null;
+    try {
+      ours = t && typeof t.managedPid === 'function' ? t.managedPid() : null;
+    } catch (err) { ours = null; }
+
+    if (!(opts && opts.stopService)) {
+      // 默认路径：服务留着（手机回来就是热的）。下面那段只在显式要求时才走。
+      out.serverNotRunning = !ours;
+      const allReleased = allLoaded && out.released.length > 0 && out.releaseErrors.length === 0;
+      out.ok = out.unsubscribed || allReleased || !ours;
+      return out;
+    }
+
+    if (!ours) {
+      out.serverNotRunning = true;
+      log('释放手机端的锁：我们自己那个 app-server 本来就没在跑 —— 手机这边没有占用');
+    } else {
+      try {
+        const r = await t.stop(opts && opts.lang);
+        out.serverStopped = !!(r && r.ok);
+        out.serverMessage = (r && r.message) || '';
+        log(`释放手机端的锁：停掉我们自己的 app-server → ${out.serverMessage || '(没有动作)'}`);
+      } catch (err) {
+        out.serverError = err && err.message ? err.message : String(err);
+        log(`释放手机端的锁：停服务失败：${out.serverError}`);
+      }
+    }
+
+    // 「成功」= 手机这边确实不再占着了：
+    //   · 会话松开了；· 我们那个服务真停了；· 它本来就没在跑；· 端口是别人的（桌面版，不归我们管）
+    out.ok = out.unsubscribed || out.serverStopped || out.serverNotRunning ||
+      /not-ours|不是我们|别的实例/i.test(out.serverMessage || '');
+    return out;
+  }
+
+  /**
    * 试着把这条会话拿过来（= 手机发消息时做的第一件事）。
    *
    * 成功之后**必须**还回去：拿过来就等于占了写锁，而我们的目的只是问一句
@@ -295,6 +411,21 @@ function createLockService(base, deps) {
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
       catch (err) { json(400, { error: '请求不是 JSON' }); return; }
 
+      // ★ 手机端自己的锁：**不碰电脑上的任何程序**，所以：
+      //   · 不要求 confirm（没有代价可言）
+      //   · 也不要求会话编号（没有会话时也能把自己起的服务收掉）
+      if (body.action === 'phone') {
+        let pout;
+        try {
+          pout = await releasePhone(body.threadId, { lang: body.lang, log: logger });
+        } catch (err) {
+          json(500, { error: `释放失败：${err.message}` });
+          return;
+        }
+        json(pout.ok ? 200 : 409, pout);
+        return;
+      }
+
       if (!threadIdOk(body.threadId)) { json(400, { error: '无效会话' }); return; }
       if (body.confirm !== true) { json(400, { error: '需要确认', code: 'no-confirm' }); return; }
 
@@ -315,7 +446,7 @@ function createLockService(base, deps) {
     });
   }
 
-  return { release, handle, probe: (id) => probe(id) };
+  return { release, releasePhone, handle, probe: (id) => probe(id) };
 }
 
 module.exports = {

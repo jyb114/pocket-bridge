@@ -3,7 +3,7 @@
 // ① 一整条消息显示成「[object Object]」（2026-09-26 截图）。
 //    服务端某个字段是对象 / {text:…} 数组时，渲染直接字符串拼接就成了它。
 // ② 正文里的 markdown 链接指向本地文件时点不动：
-//    「[验证报告、源图与生成提示词](D:/游戏/docs/evidence/…/REPORT.md)」
+//    「[验证报告](D:/Example Project/reports/REPORT.md)」
 //    在手机上就是一堆括号。而「打开/下载这个文件」的能力我们早就有
 //    （data-filecite 那套，走加密取回）——同一个按钮直接复用即可。
 'use strict';
@@ -71,10 +71,10 @@ console.log('\n[2] 渲染：消息正文不再出现 [object Object]');
 console.log('\n[3] markdown 本地链接 → 可点的文件按钮');
 {
   const box = sandbox();
-  const html = box.fmt('见 [验证报告、源图与生成提示词](D:/游戏/docs/evidence/C-2D-MOTION-20260926/R3/REPORT.md) 这份');
+  const html = box.fmt('见 [验证报告](D:/Example Project/reports/REPORT.md) 这份');
   ok('变成了按钮', /class="filecite"/.test(html), html.slice(0, 140));
-  ok('带上了路径', /data-filecite="D:\/游戏\/docs\/evidence\/C-2D-MOTION-20260926\/R3\/REPORT\.md"/.test(html));
-  ok('保留了人写的标题（不是只剩文件名）', /验证报告、源图与生成提示词/.test(html));
+  ok('带上了路径', /data-filecite="D:\/Example Project\/reports\/REPORT\.md"/.test(html));
+  ok('保留了人写的标题（不是只剩文件名）', /验证报告/.test(html));
   ok('周围的正文还在', /见 /.test(html) && /这份/.test(html));
   ok('不再露出那对括号', !/\]\(D:/.test(html));
 

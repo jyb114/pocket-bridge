@@ -27,10 +27,134 @@
 (function () {
   'use strict';
 
+  // The file can be evaluated again after a customization update. Retire the
+  // previous observers and listeners before installing this copy.
+  var previous = window.__pocketBridgeCustomOverlay;
+  if (previous && typeof previous.dispose === 'function') previous.dispose();
+  var cleanup = [];
+  var measuring = false;
+  var frame = 0;
+  var dockResize = null;
+  var domChanges = null;
+  var observedDock = null;
+  var observedComposer = null;
+  var fallbackTimer = null;
+  var mutationTimer = null;
+
+  function listen(target, name, handler, options) {
+    if (!target || !target.addEventListener) return;
+    target.addEventListener(name, handler, options);
+    cleanup.push(function () { target.removeEventListener(name, handler, options); });
+  }
+
+  function rectOf(el) {
+    if (!el || !el.getBoundingClientRect) return null;
+    var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) return null;
+    var r = el.getBoundingClientRect();
+    return r.width >= 80 && r.height >= 16 ? r : null;
+  }
+
+  function composerAround(editor, viewportHeight) {
+    var editorRect = rectOf(editor);
+    if (!editorRect || editorRect.bottom < viewportHeight * 0.45 || editorRect.top > viewportHeight) return null;
+    var chosen = editor;
+    var maxHeight = Math.max(220, Math.min(480, viewportHeight * 0.65));
+    var parent = editor.parentElement;
+    for (var depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+      if (/^(BODY|HTML|MAIN)$/.test(parent.tagName || '')) break;
+      var r = rectOf(parent);
+      if (!r || r.height > maxHeight || r.bottom > viewportHeight + 30) break;
+      if (r.top <= editorRect.top && r.bottom >= editorRect.bottom) chosen = parent;
+    }
+    return chosen;
+  }
+
+  function observeSize(dock, composer) {
+    if (!dockResize) return;
+    if (observedDock !== dock) {
+      if (observedDock) dockResize.unobserve(observedDock);
+      observedDock = dock;
+      if (dock) dockResize.observe(dock);
+    }
+    if (observedComposer !== composer) {
+      if (observedComposer) dockResize.unobserve(observedComposer);
+      observedComposer = composer;
+      if (composer && composer !== dock) dockResize.observe(composer);
+    }
+  }
+
+  function measureDockOverlap() {
+    frame = 0;
+    var dock = document.getElementById('dsh-gw-dock');
+    if (!dock) { observeSize(null, null); return; }
+    var dockRect = dock.getBoundingClientRect();
+    var viewportHeight = window.visualViewport
+      ? window.visualViewport.height + window.visualViewport.offsetTop
+      : window.innerHeight;
+    var editors = document.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""], [role="textbox"], input[type="text"]');
+    var overlap = false;
+    var composer = null;
+    for (var i = 0; i < editors.length; i++) {
+      if (dock.contains(editors[i])) continue;
+      var candidate = composerAround(editors[i], viewportHeight);
+      if (!candidate) continue;
+      var r = candidate.getBoundingClientRect();
+      if (!composer || r.bottom > composer.getBoundingClientRect().bottom) composer = candidate;
+      if (dockRect.left < r.right + 8 && dockRect.right + 8 > r.left &&
+          dockRect.top < r.bottom + 8 && dockRect.bottom + 8 > r.top) {
+        overlap = true;
+        composer = candidate;
+        break;
+      }
+    }
+    dock.classList.toggle('dsh-custom-composer-overlap', overlap);
+    observeSize(dock, composer);
+  }
+
+  function scheduleDockMeasure() {
+    if (!measuring || frame) return;
+    frame = window.requestAnimationFrame
+      ? window.requestAnimationFrame(measureDockOverlap)
+      : window.setTimeout(measureDockOverlap, 16);
+  }
+
+  function onDomChanges() {
+    // Streamed replies can add many nodes. Check at most once per 100 ms;
+    // ResizeObserver and input events still react to composer growth promptly.
+    if (mutationTimer) return;
+    mutationTimer = window.setTimeout(function () {
+      mutationTimer = null;
+      scheduleDockMeasure();
+    }, 100);
+  }
+
+  function startDockMeasure() {
+    if (measuring) { scheduleDockMeasure(); return; }
+    measuring = true;
+    if (window.ResizeObserver) dockResize = new ResizeObserver(scheduleDockMeasure);
+    else fallbackTimer = window.setInterval(scheduleDockMeasure, 700);
+    if (window.MutationObserver) {
+      domChanges = new MutationObserver(onDomChanges);
+      domChanges.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    listen(window, 'resize', scheduleDockMeasure);
+    listen(document, 'input', scheduleDockMeasure, true);
+    listen(document, 'focusin', scheduleDockMeasure, true);
+    listen(document, 'focusout', scheduleDockMeasure, true);
+    listen(document, 'scroll', scheduleDockMeasure, true);
+    if (window.visualViewport) {
+      listen(window.visualViewport, 'resize', scheduleDockMeasure);
+      listen(window.visualViewport, 'scroll', scheduleDockMeasure);
+    }
+    scheduleDockMeasure();
+  }
+
   /**
    * 每次加载/更新时调用。写成幂等的 —— 重复执行不该出现重复元素。
    */
   function apply() {
+    startDockMeasure();
     // 先清掉上一次加的东西（如果有）
     var old = document.getElementById('dsh-custom-panel');
     if (old) old.remove();
@@ -67,16 +191,16 @@
       var words;
       if (lang.indexOf('es') === 0) {
         words = isIOS
-          ? ['Añádelo a la pantalla de inicio', 'Abre esta página en <b>Safari</b> y toca <b>Compartir ↑</b> → <b>Añadir a pantalla de inicio</b> → Añadir. Después abre el icono DSH y activa las notificaciones. No necesitas instalar otra app.', 'Entendido']
-          : ['Añádelo a la pantalla de inicio', 'Abre el menú del navegador → <b>Añadir a pantalla de inicio</b> o <b>Instalar app</b>. Después abre el icono DSH y activa las notificaciones.', 'Entendido'];
+          ? ['Añade Pocket Bridge a la pantalla de inicio', 'Abre esta página en <b>Safari</b> y toca <b>Compartir ↑</b> → <b>Añadir a pantalla de inicio</b> → Añadir. Después abre el icono Pocket Bridge y activa las notificaciones. No necesitas instalar otra app.', 'Entendido']
+          : ['Añade Pocket Bridge a la pantalla de inicio', 'Abre el menú del navegador → <b>Añadir a pantalla de inicio</b> o <b>Instalar app</b>. Después abre el icono Pocket Bridge y activa las notificaciones.', 'Entendido'];
       } else if (lang.indexOf('zh') === 0) {
         words = isIOS
-          ? ['先添加到主屏幕', '请用 <b>Safari</b> 打开本页，点底部 <b>分享 ↑</b> → <b>添加到主屏幕</b> → 添加。以后从主屏的 DSH 图标进入，再点“设置系统通知”。无需下载任何 App。', '我知道了']
-          : ['先添加到主屏幕', '务必从电脑控制台复制的<b>完整加密链接</b>打开本页，再从浏览器菜单选 <b>添加到主屏幕</b> 或 <b>安装应用</b>。不要在配对页或根页面添加；完整链接末尾的密钥会随主屏入口保存。', '我知道了'];
+          ? ['先把 Pocket Bridge 添加到主屏幕', '请用 <b>Safari</b> 打开本页，点底部 <b>分享 ↑</b> → <b>添加到主屏幕</b> → 添加。以后从主屏的 Pocket Bridge 图标进入，再点“设置系统通知”。无需下载任何 App。', '我知道了']
+          : ['先把 Pocket Bridge 添加到主屏幕', '务必从电脑控制台复制的<b>完整加密链接</b>打开本页，再从浏览器菜单选 <b>添加到主屏幕</b> 或 <b>安装应用</b>。不要在配对页或根页面添加；完整链接末尾的密钥会随主屏入口保存。', '我知道了'];
       } else {
         words = isIOS
-          ? ['Add DSH to Home Screen first', 'Open this page in <b>Safari</b>, then tap <b>Share ↑</b> → <b>Add to Home Screen</b> → Add. Open the DSH icon afterwards and enable notifications. No extra app is needed.', 'Got it']
-          : ['Add DSH to Home Screen first', 'Open your browser menu → <b>Add to Home screen</b> or <b>Install app</b>. Open the DSH icon afterwards and enable notifications.', 'Got it'];
+          ? ['Add Pocket Bridge to Home Screen first', 'Open this page in <b>Safari</b>, then tap <b>Share ↑</b> → <b>Add to Home Screen</b> → Add. Open the Pocket Bridge icon afterwards and enable notifications. No extra app is needed.', 'Got it']
+          : ['Add Pocket Bridge to Home Screen first', 'Open your browser menu → <b>Add to Home screen</b> or <b>Install app</b>. Open the Pocket Bridge icon afterwards and enable notifications.', 'Got it'];
       }
       tip.innerHTML = '<strong style="display:block;font-size:15px;margin-bottom:5px">' + words[0] + '</strong>' +
         '<span style="display:block;color:#b9cbe0">' + words[1] + '</span>' +
@@ -98,16 +222,28 @@
 
   // 首次 + 每次文件更新后都会调
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply);
+    listen(document, 'DOMContentLoaded', apply);
   } else {
     apply();
   }
 
   // 网关检测到文件变了会发这个消息，收到就重跑一次
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', function (ev) {
+    listen(navigator.serviceWorker, 'message', function (ev) {
       if (ev.data && ev.data.type === 'dsh-custom-changed') apply();
     });
   }
-  window.addEventListener('dsh-custom-changed', apply);
+  listen(window, 'dsh-custom-changed', apply);
+  window.__pocketBridgeCustomOverlay = { dispose: function () {
+    measuring = false;
+    if (dockResize) dockResize.disconnect();
+    if (domChanges) domChanges.disconnect();
+    if (fallbackTimer) window.clearInterval(fallbackTimer);
+    if (mutationTimer) window.clearTimeout(mutationTimer);
+    if (frame) {
+      if (window.cancelAnimationFrame) window.cancelAnimationFrame(frame);
+      else window.clearTimeout(frame);
+    }
+    cleanup.forEach(function (stop) { stop(); });
+  } };
 })();

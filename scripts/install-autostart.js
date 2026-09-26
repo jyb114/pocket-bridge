@@ -80,7 +80,8 @@ function winInstall() {
     `$shortcut.Description = ${psLiteral('Pocket Bridge — 自动启动网关与托盘')}`,
     '$shortcut.Save()'
   ].join('; ');
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 30000 });
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+    { timeout: 30000, windowsHide: true });
   if (!fs.existsSync(target)) throw new Error('创建开机自启快捷方式失败');
   removeOwnedLegacyBat();
   return target;

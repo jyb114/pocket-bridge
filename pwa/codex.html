@@ -323,6 +323,15 @@
   .btn{display:block;width:100%;background:var(--card);border-radius:12px;
     padding:13px;text-align:center;font-weight:600;margin:0 0 9px}
   .btn.p{background:var(--accent2);color:#fff}
+/* 危险按钮：会关掉电脑上的程序的那种。
+   原来代码里一直写着 class="btn d"，但这个类没有样式 ——
+   于是「释放电脑端的锁」在手机上跟普通按钮长得一样，使用者误按了它。 */
+.btn.d{background:#3a1d1d;border:1px solid #a33;color:#ffd7d2;font-weight:600}
+.btn.d:active{background:#4a2222}
+/* 危险按钮上方的警告条：红底 + 加粗标题 */
+.warn-red{margin-top:12px;padding:10px 12px;border-radius:10px;border:1px solid #a33;
+  background:#2a1515;color:#ffd7d2;font-size:12.5px;line-height:1.7}
+.warn-red b{color:#ff9d92}
   .btn:active{opacity:.8}
   .skel{background:linear-gradient(90deg,#17171a,#202027,#17171a);background-size:200% 100%;
     animation:sh 1.3s infinite;border-radius:13px;height:70px;margin-bottom:8px}
@@ -497,6 +506,9 @@ if (window.DshI18n) window.DshI18n.register({
   "未确认加入队列，文字和附件已保留：": { en: "Could not confirm the queue entry; your text and attachments are kept: ", es: "No se pudo confirmar la entrada en la cola; tu texto y adjuntos se conservan: " },
   "排队": { en: "Queue", es: "En cola" },
   "保存到电脑队列，不打断任务": { en: "Save to the computer queue without interrupting the task", es: "Guardar en la cola de la computadora sin interrumpir la tarea" },
+  "状态未确认：发送时会先确认一次当前任务": { en: "Status unconfirmed: sending will confirm the current task first", es: "Estado sin confirmar: al enviar se comprobará antes la tarea actual" },
+  "正在确认当前任务…": { en: "Confirming the current task…", es: "Comprobando la tarea actual…" },
+  "没能确认当前任务，已按排队保存": { en: "Could not confirm the current task — saved to the queue instead", es: "No se pudo confirmar la tarea actual; se guardó en la cola" },
   "加入队列": { en: "Add to queue", es: "Añadir a la cola" },
   "先保存要求，等待接通执行端…": { en: "Save your request and wait for the executor…", es: "Guarda tu solicitud y espera al ejecutor…" },
   "输入下一项要求，完成后依次执行…": { en: "Type the next request; it runs after this one finishes…", es: "Escribe la siguiente solicitud; se ejecutará al terminar esta…" },
@@ -690,6 +702,21 @@ if (window.DshI18n) window.DshI18n.register({
   "加载更早的失败：": { en: "Could not load earlier messages: ", es: "No se pudieron cargar los mensajes anteriores: " },
   "消息未发送：会话由另一个执行服务占用": { en: "Message not sent: another executor holds this conversation", es: "Mensaje no enviado: otro ejecutor tiene esta conversación" },
   "这条会话正开在电脑上，手机发不出去。<br><br>你能做的：<br>· 点下面「释放电脑端的锁」→ 手机继续用这条会话（会关掉电脑上的 Codex，正在跑的任务可能被中断）<br>· 或者另开一条会话（不会接着当前任务的进度）<br><br>你输入的内容和附件都还在。": { en: "This conversation is open on your computer, so the phone cannot send.<br><br>What you can do:<br>· Tap “Release the lock on the computer” below → keep using this conversation on the phone (it closes Codex on the computer, so a running task may be interrupted)<br>· Or start a new conversation (it will not continue the current task)<br><br>Your text and attachments are still here.", es: "Esta conversación está abierta en el ordenador, así que el teléfono no puede enviar.<br><br>Qué puedes hacer:<br>· Pulsa «Liberar el bloqueo del ordenador» → sigue usando esta conversación en el teléfono (cierra Codex en el ordenador, así que una tarea en curso puede interrumpirse)<br>· O abre otra conversación (no continuará la tarea actual)<br><br>Tu texto y adjuntos siguen aquí." },
+  "释放手机端的锁": { en: "Release the lock on the phone", es: "Liberar el bloqueo del teléfono" },
+  "释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会动电脑上的 Codex，正在跑的任务不受影响\n· 手机下次发消息会自动重新接上\n\n确定吗？": {
+    en: "Release the lock on the phone?\n\n· Only the phone's hold on this session is released\n· Codex on your computer is not touched; running tasks are unaffected\n· The phone reconnects automatically next time you send\n\nContinue?",
+    es: "¿Liberar el bloqueo del teléfono?\n\n· Solo se libera la retención del teléfono sobre esta sesión\n· No se toca Codex en tu ordenador; las tareas en curso no se ven afectadas\n· El teléfono se reconecta solo la próxima vez que envíes\n\n¿Continuar?"
+  },
+  "正在释放手机端的锁…": { en: "Releasing the lock on the phone…", es: "Liberando el bloqueo del teléfono…" },
+  "手机端的锁已经松开（电脑上的 Codex 没被动过）。": {
+    en: "The phone's lock is released (Codex on your computer was not touched).",
+    es: "El bloqueo del teléfono está liberado (no se tocó Codex en tu ordenador)."
+  },
+  "释放手机端的锁：没成功": { en: "Release the phone-side lock: it did not work", es: "Liberar el bloqueo del teléfono: no funcionó" },
+  "只松开手机这边占的会话，不会动电脑上的 Codex，也不会打断正在跑的任务。": {
+    en: "Only releases the phone's hold on this session — Codex on your computer is not touched and running tasks are not interrupted.",
+    es: "Solo libera la retención del teléfono sobre esta sesión: no se toca Codex en tu ordenador ni se interrumpen las tareas en curso."
+  },
   "释放电脑端的锁": { en: "Release the lock on the computer", es: "Liberar el bloqueo del ordenador" },
   "电脑上的 Codex 开着这条会话时，手机发不出消息。点它让电脑端交出来（占着的是手机这端时，就是还回去）。": {
     en: "When this conversation is open in desktop Codex, the phone cannot send messages. Tap to hand it over from the computer (if the phone holds it, the lock is simply released).",
@@ -698,6 +725,22 @@ if (window.DshI18n) window.DshI18n.register({
   "会关掉电脑上的 Codex，正在跑的任务可能被中断；会话内容不会丢。": {
     en: "Desktop Codex will close and a running task may be interrupted; the conversation itself will not be lost.",
     es: "Codex en el ordenador se cerrará y una tarea en curso podría interrumpirse; la conversación no se perderá."
+  },
+  "什么是「锁」：同一条会话同时只能有一个写入者。电脑上的 Codex 开着这条会话时，它占着写权限 —— 手机能看，但一发消息就报「会话由另一个执行服务占用」。下面两颗按钮给出两条出路，代价完全不同。": {
+    en: "What the “lock” is: only one writer may hold a conversation at a time. When Codex on your computer has this conversation open, it holds the write permission — the phone can read, but sending reports “the conversation is held by another execution service”. The two buttons below are two different ways out, with very different costs.",
+    es: "Qué es el «bloqueo»: solo un escritor puede tener una conversación a la vez. Cuando Codex en tu ordenador tiene abierta esta conversación, retiene el permiso de escritura: el teléfono puede leer, pero al enviar aparece «la conversación está en uso por otro servicio de ejecución». Los dos botones de abajo son dos salidas con costes muy distintos."
+  },
+  "只松开手机这边占的会话：不动电脑上的任何程序，也不打断任何任务。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。": {
+    en: "Releases only the phone's hold on this conversation: no program on your computer is touched and no task is interrupted. It is also released **automatically** a while after the phone closes or disconnects, so you normally never need this button.",
+    es: "Libera solo la retención del teléfono sobre esta conversación: no se toca ningún programa del ordenador ni se interrumpe ninguna tarea. También se libera **automáticamente** un rato después de cerrar o desconectar el teléfono, así que normalmente no hace falta pulsarlo."
+  },
+  "⚠️ 会关掉电脑上的 Codex，正在跑的任务可能被中断": {
+    en: "⚠️ This closes Codex on your computer; a running task may be interrupted",
+    es: "⚠️ Esto cierra Codex en tu ordenador; una tarea en curso puede interrumpirse"
+  },
+  "它让**电脑端**交出写权限，代价是关掉电脑上的 Codex（会话内容不会丢，但那一轮任务会停）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。": {
+    en: "It makes the **computer side** give up the write permission; the cost is closing Codex on your computer (the conversation is not lost, but that turn stops). Use it only when the computer really has this conversation open and you must keep instructing from the phone right now. To release only the phone side, use the button above.",
+    es: "Hace que el **lado del ordenador** ceda el permiso de escritura; el coste es cerrar Codex en tu ordenador (la conversación no se pierde, pero ese turno se detiene). Úsalo solo si el ordenador tiene realmente abierta esta conversación y necesitas seguir dando instrucciones desde el teléfono ahora mismo. Para liberar solo el lado del teléfono, usa el botón de arriba."
   },
   "释放电脑端的锁？\n\n· 电脑上的 Codex 会关掉，正在跑的任务可能被中断\n· 会话内容不会丢\n· 之后手机就能接着下指令\n\n确定吗？": { en: "Release the lock on the computer?\n\n· Codex on your computer will close; a running task may be interrupted\n· The conversation itself is not lost\n· After that you can keep sending from the phone\n\nGo ahead?", es: "¿Liberar el bloqueo del ordenador?\n\n· Codex en el ordenador se cerrará; una tarea en curso puede interrumpirse\n· La conversación no se pierde\n· Después podrás seguir enviando desde el teléfono\n\n¿Continuar?" },
   "正在释放电脑端的锁…": { en: "Releasing the lock on the computer…", es: "Liberando el bloqueo del ordenador…" },
@@ -980,14 +1023,15 @@ function refreshQueue(){
     .catch(function(){})
     .finally(function(){queueFetchBusy=false;});
 }
-function enqueueDraft(text,box,attachments){
-  var deferred=queueOnly();
+function enqueueDraft(text,box,attachments,options){
+  options=options||{};
+  var deferred=queueOnly()||!!options.deferred;
   if(!deferred&&!state.turnId){toast(t('正在确认当前任务，稍后再加入队列'));refreshObservedThread();return;}
   var tid=state.thread.id,input=attachmentInput(text,attachments),signature=tid+JSON.stringify(input);
   if(!queueDraft||queueDraft.signature!==signature)queueDraft={signature:signature,id:crypto.randomUUID?crypto.randomUUID():'queue-'+Date.now()+'-'+Math.random().toString(16).slice(2)};
   state.sending=true;renderFooter();
   queueRequest({action:'enqueue',id:queueDraft.id,threadId:tid,waitForTurnId:deferred?'':state.turnId,input:input,label:attachmentLabel(text,attachments),model:state.pick.model,effort:state.pick.effort})
-    .then(function(){attachmentSent(tid,attachments);queueDraft=null;if(state.thread && state.thread.id===tid){if(box.value.trim()===text){box.value='';box.style.height='auto';}toast(t('已保存到电脑队列，尚未送达 Codex；确认连接且任务完成后才发送'));refreshQueue();}})
+    .then(function(){attachmentSent(tid,attachments);queueDraft=null;if(state.thread && state.thread.id===tid){if(box.value.trim()===text){box.value='';box.style.height='auto';}toast(options.savedNotice||t('已保存到电脑队列，尚未送达 Codex；确认连接且任务完成后才发送'));refreshQueue();}})
     .catch(function(e){toast(t('未确认加入队列，文字和附件已保留：')+e.message);})
     .finally(function(){state.sending=false;renderFooter();});
 }
@@ -2106,7 +2150,7 @@ function buildUser(item) {
 /**
  * 把「本该是字符串、实际可能是对象/数组」的字段读成人话。
  *
- * 为什么需要：实测出现过**一整条消息只显示「[object Object]」**。
+ * 为什么需要：对象字段被直接转成字符串时会显示「[object Object]」。
  * 服务端某个字段是对象或 {text:…} 数组，而渲染时直接字符串拼接。
  * 认不出来时显示 JSON（有上限）—— 让人看得出这是什么、能反馈，
  * 也比一串 [object Object] 强。
@@ -3314,6 +3358,33 @@ function showLockResult(text, t) {
  * 确认框、请求头、code→人话的映射只能有一份 —— 两份迟早会走样，
  * 而这条路的走样代价是「按了没反应」或者「代价没说清就动手」。
  */
+/**
+ * 释放**手机这边**的锁 —— 一个电脑程序都不碰。
+ *
+ * 和 askReleaseLock 的区别（使用者 2026-09-27 要的第二个按钮）：
+ *   前者找的是**电脑端**占着的锁，最后一招是关掉电脑上的 Codex（有代价）
+ *   这个只收手机自己的摊子：把我们 app-server 对这条会话的占用还回去，
+ *   再把我们自己起的那个服务停掉（桌面版不在它范围内）
+ *
+ * 代价为零，所以服务端**不要求** confirm；界面上仍然问一句，是为了让人
+ * 知道「接下来手机要重连一次」。
+ */
+function askReleasePhone(tid, done) {
+  privateFetch('/codex/lock', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-dsh-lock': '1' },
+    body: JSON.stringify({ action: 'phone', threadId: tid })
+  }).then(function (r) {
+    return r.json().then(function (j) { return j || {}; },
+      function () { throw Error('HTTP ' + r.status); });
+  }).then(function (j) {
+    if (j.ok) { done(tr('手机端的锁已经松开（电脑上的 Codex 没被动过）。'), true, j); return; }
+    done(tr('释放手机端的锁：没成功') + (j.error || j.message ? '：' + (j.error || j.message) : ''), false, j);
+  }).catch(function (e) {
+    done(tr('释放手机端的锁：没成功') + '：' + e.message, false);
+  });
+}
+
 function askReleaseLock(tid, done) {
   privateFetch('/codex/lock', {
     method: 'POST',
@@ -3395,21 +3466,24 @@ function renderFooter() {
   var uncertain = !state.ready || ['checking','unknown','offline'].indexOf(task.kind) >= 0;
   var saveOnly=queueOnly();
   $('send-mode').style.display=(state.running||saveOnly)?'':'none';
-  $('send-mode').querySelector('option[value="immediate"]').disabled=saveOnly;
-  // saveOnly（任务状态还没确认、或执行端没接通）时必须按「排队」走，
-  // 但**不能把使用者自己的选择改掉**。
-  //
-  // 原来这里写的是 if(saveOnly)$('send-mode').value='queue' ——
-  // 页面一加载 task.kind 就是 'checking'，于是每次打开都先把选择刷成
-  // 「排队发送」；等状态确认完 saveOnly 变回 false，却没有任何人还原它。
-  // 结果：使用者明明选了「立即补充」，实际一直在排队，而界面还显示排队
-  // ——他以为自己选的那个模式正在生效。选择要单独存，显示的临时状态另算。
-  $('send-mode').value = saveOnly ? 'queue' : sendModePref();
-  var queuing=saveOnly || (state.running && $('send-mode').value==='queue');
-  $('send').disabled = (uncertain&&!queuing) || !!state.sending || draftAttachments().some(function(a){return a.status!=='ready';});
+  // ★ 不再因为「状态没确认」就禁用「立即补充」，也不再把它改回「排队发送」。
+  //   原来那样做的后果（使用者实测）：任务进行中，他只能排队，而且界面上
+  //   看不出为什么；更早的一版还会把他选过的「立即补充」永久覆盖掉。
+  //   现在他选什么就是什么，真发的时候会先确认一次当前任务再决定 ——
+  //   确认到了就真插队，确认不到就按排队保存并**明确告诉他**。
+  var immOpt = $('send-mode').querySelector('option[value="immediate"]');
+  if (immOpt) {
+    immOpt.disabled = false;
+    immOpt.title = uncertain ? t('状态未确认：发送时会先确认一次当前任务') : '';
+  }
+  $('send-mode').value = sendModePref();
+  // 「排队」是按**他选的那个**算的。状态没确认时不再强制显示排队 ——
+  // 那种情况下按下去会先确认一次（见 send 与 steerTurn）。
+  var queuing=($('send-mode').value==='queue');
+  $('send').disabled = !!state.sending || draftAttachments().some(function(a){return a.status!=='ready';});
   $('send').textContent=queuing?t('排队'):'↑';
   $('send').style.fontSize=queuing?'13px':'';
-  $('send').title = queuing ? t('保存到电脑队列，不打断任务') : uncertain ? t('正在确认任务状态，请稍候') : state.running ? t('发送补充意见') : t('发送');
+  $('send').title = queuing ? t('保存到电脑队列，不打断任务') : uncertain ? t('状态未确认：发送时会先确认一次当前任务') : state.running ? t('发送补充意见') : t('发送');
   $('send').setAttribute('aria-label',queuing ? t('加入队列') : state.running ? t('发送补充意见') : t('发送'));
   $('input').placeholder = saveOnly ? t('先保存要求，等待接通执行端…') : queuing ? t('输入下一项要求，完成后依次执行…') : state.running ? t('补充要求，不会停止当前任务…') : t('说点什么…');
 
@@ -3459,6 +3533,12 @@ function send() {
   if(!text && !attachments.length)return;
   if(attachments.some(function(a){return a.status!=='ready';})){toast(t('请等待附件上传完成，或移除上传失败的附件'));return;}
   if (state.sending) { toast(t('消息正在发送')); return; }
+  // 他要「立即补充」，但此刻状态没确认：不要一句「先确认」把他挡回去 ——
+  // 先替他确认一次，能插队就插队，不能就排队保存并说清楚。
+  if (queueOnly() && $('send-mode').value === 'immediate') {
+    sendWhenUncertain(text, box, attachments);
+    return;
+  }
   if (queueOnly()) { enqueueDraft(text,box,attachments); return; }
   if (!state.ready || ['checking','unknown','offline'].indexOf(task.kind) >= 0) { toast(t('先确认任务状态，再发送消息')); refreshObservedThread(); return; }
   if (state.running) { if($('send-mode').value==='queue')enqueueDraft(text,box,attachments);else steerTurn(text,box,attachments); return; }
@@ -3572,9 +3652,48 @@ function send() {
   });
 }
 
+/**
+ * 问一次「现在有没有正在跑的那一轮」，拿到它的编号（插队必须带这个）。
+ * 拿不到就返回 null —— 调用方据此退回排队，绝不假装插队成功。
+ */
+function confirmRunningTurn(){
+  var tid=state.thread&&state.thread.id;
+  if(!tid)return Promise.resolve(null);
+  return call('thread/turns/list',{threadId:tid,limit:1,sortDirection:'desc',itemsView:'notLoaded'},8000)
+    .then(function(r){
+      var t0=r&&r.data&&r.data[0];
+      return t0&&t0.status==='inProgress'?t0.id:null;
+    },function(){return null;});
+}
+
+/**
+ * 状态还没确认、但使用者选了「立即补充」时走这里：
+ * 先确认一次；确认到正在跑的那一轮就真插队，确认不到就按排队保存并如实说明。
+ */
+function sendWhenUncertain(text,box,attachments){
+  var sendingThread=state.thread;
+  if(!sendingThread)return;
+  state.sending=true;renderFooter();
+  toast(t('正在确认当前任务…'));
+  refreshObservedThread();
+  confirmRunningTurn().then(function(turnId){
+    if(state.thread!==sendingThread||state.view!=='thread'){
+      state.sending=false;renderFooter();return;
+    }
+    if(turnId){state.turnId=turnId;steerTurn(text,box,attachments);return;}
+    enqueueDraft(text,box,attachments,{deferred:true,
+      savedNotice:t('没能确认当前任务，已按排队保存')});
+  });
+}
+
 function steerTurn(text,box,attachments) {
   attachments=attachments || [];
-  if(!state.turnId){toast(t('正在确认当前任务，请稍后发送；输入已保留'));refreshObservedThread();return;}
+  if(!state.turnId){
+    // Reuse the thread-bound confirmation path for a running turn whose ID
+    // has not yet arrived from the observer.
+    sendWhenUncertain(text,box,attachments);
+    return;
+  }
   var tid=state.thread.id, turnId=state.turnId;
   state.sending=true;
   renderFooter();
@@ -4038,7 +4157,7 @@ function openLockPanel() {
   var th = state.thread;
   var info = document.createElement('div');
   info.className = 'info';
-  info.textContent = tr('电脑上的 Codex 开着这条会话时，手机发不出消息。点它让电脑端交出来（占着的是手机这端时，就是还回去）。');
+  info.textContent = tr('什么是「锁」：同一条会话同时只能有一个写入者。电脑上的 Codex 开着这条会话时，它占着写权限 —— 手机能看，但一发消息就报「会话由另一个执行服务占用」。下面两颗按钮给出两条出路，代价完全不同。');
   inner.appendChild(info);
 
   if (th) {
@@ -4054,6 +4173,40 @@ function openLockPanel() {
       ? tr('手机现在占着它 —— 这期间电脑上可能打不开这条会话。')
       : tr('手机没占着它。如果发消息时报「会话由另一个执行服务占用」，就是电脑上的 Codex 占着。');
     inner.appendChild(st);
+
+    // ★ 先摆「没代价的那一个」：只松开手机这边占的会话，不碰电脑上的 Codex。
+    //   两个按钮的分工必须一眼看清 —— 使用者 2026-09-27 分不清，
+    //   以为「释放电脑端的锁」把电脑上的 Codex 弄坏了（那个按钮确实会关掉它，
+    //   他没看错；但「只松手机」的这个当时还不存在）。
+    var safe = document.createElement('button');
+    safe.className = 'btn';
+    safe.id = 'lock-release-phone';
+    safe.textContent = tr('释放手机端的锁');
+    safe.onclick = function () {
+      if (!confirm(tr('释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会动电脑上的 Codex，正在跑的任务不受影响\n· 手机下次发消息会自动重新接上\n\n确定吗？'))) return;
+      var safeLabel = safe.textContent;
+      safe.disabled = true;
+      safe.textContent = tr('正在释放手机端的锁…');
+      askReleasePhone(th.id, function (text, ok) {
+        safe.disabled = false;
+        safe.textContent = safeLabel;
+        toast(text);
+        if (ok) { closeSheet(); openThread(th); }
+      });
+    };
+    inner.appendChild(safe);
+
+    var safeCost = document.createElement('div');
+    safeCost.className = 'info';
+    safeCost.textContent = tr('只松开手机这边占的会话：不动电脑上的任何程序，也不打断任何任务。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。');
+    inner.appendChild(safeCost);
+
+    // ★ 危险按钮上面先摆一条红色警告 —— 它真的会关掉电脑上的 Codex。
+    var danger = document.createElement('div');
+    danger.className = 'warn-red';
+    danger.innerHTML = '<b>' + esc(tr('⚠️ 会关掉电脑上的 Codex，正在跑的任务可能被中断')) + '</b><br>' +
+      esc(tr('它让**电脑端**交出写权限，代价是关掉电脑上的 Codex（会话内容不会丢，但那一轮任务会停）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。'));
+    inner.appendChild(danger);
 
     var btn = document.createElement('button');
     btn.className = 'btn d';
@@ -4092,6 +4245,21 @@ function openLockPanel() {
 
   $('sheet').classList.add('on');
   if (window.DshI18n) window.DshI18n.apply($('sheetInner'));
+}
+
+/**
+ * 语音识别用哪个语言：跟着界面语言走。
+ *
+ * 原来两个调用点都写死 'zh-CN' —— 界面切成英文/西语了，语音还是按中文识别，
+ * 说英文出来一堆同音错字（使用者问「语音模式是只有中文吗」就是这么来的）。
+ * voice.js 本来就支持 o.lang，只是没人传。
+ */
+function voiceLang() {
+  var cur = 'zh';
+  try { if (window.DshI18n && window.DshI18n.lang) cur = window.DshI18n.lang() || 'zh'; } catch (e) { }
+  if (cur === 'en') return 'en-US';
+  if (cur === 'es') return 'es-ES';
+  return 'zh-CN';
 }
 
 function toast(msg) {
@@ -4166,6 +4334,40 @@ $('btn-attach').onclick = openAttachmentPicker;
 ['pick-images','pick-files'].forEach(function(id){$(id).onchange=function(){chooseAttachments(this.files);this.value='';};});
 $('btn-bottom').onclick = function () { stick = true; toBottom(true); updateJump(); };
 
+/**
+ * 回到前台时核对一次「这条会话还归我们吗」。
+ *
+ * 为什么要它：服务端在手机断开 60 秒后会自动把占用还回电脑（那是使用者要的
+ * 「手机端关闭后电脑端能接手」），所以手机切回来时本地那份「我占着它」可能已经过期。
+ * 不核对的话，发消息会撞上「会话未加载」，使用者看到的是要刷新 —— 而他要的是
+ * **切应用不需要刷新、换 DSH 再切回来也流畅**。
+ */
+function ensureOwnershipAfterResume() {
+  if (state.view !== 'thread' || !state.thread || !state.ready) return;
+  var tid = state.thread.id;
+  call('thread/loaded/list', {}, 6000).then(function (r) {
+    var ids = (r && (r.data || r.threadIds)) || [];
+    if (!Array.isArray(ids) || ids.indexOf(tid) >= 0) return;   // 还占着 / 问不出来 → 什么都不做
+    state.resumed = false;
+    renderFooter();
+    call('thread/resume', { threadId: tid, excludeTurns: true }, 60000).then(function () {
+      if (state.thread && state.thread.id === tid) { state.resumed = true; renderFooter(); }
+    }, function () { /* 拿不回来也不是这里的事：发消息那条路会再试一次并如实报错 */ });
+  }).catch(function () { });
+}
+
+try {
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') ensureOwnershipAfterResume();
+  });
+} catch (e) { }
+
+// Do not release the phone lock by sending a pagehide request. Encryption of
+// a request body is asynchronous, while the browser may terminate pagehide
+// work at any time. The Codex connection monitor releases all phone-owned
+// sessions after the final connection has stayed closed for 60 seconds; it
+// also avoids sending a plaintext thread ID through a relay.
+
 // 🔓 释放电脑端的锁 —— 就在语音旁边，一眼能看见。
 //
 // 为什么值得占一个常驻位置：Codex 的同一个会话同时只能有一个地方写，
@@ -4217,7 +4419,7 @@ $('btn-lock').onclick = function () {
     toast(t('在听了，说完会自动停下'));
 
     rec = window.DshVoice.start({
-      lang: 'zh-CN',
+      lang: voiceLang(),
       // 边说边填进输入框 —— 使用者能看出它在听，而不是对着屏幕干等
       onPartial: function (text) {
         window.DshVoice.setInputValue(box, base + text);

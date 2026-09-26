@@ -138,7 +138,10 @@
     el.id = 'dsh-gw-dock';
     el.style.cssText = [
       'position:fixed', 'right:10px',
-      'bottom:calc(10px + env(safe-area-inset-bottom,0px))',
+      // ★ 抬到输入框那一行**之上**（原来只有 10px，正好压在发送/麦克风/附件
+      //   那一排上），容易误触角标或 ⇄（换目标），尤其在窄屏设备上。
+      //   仍然贴右下，但不再和那一排按钮抢手指。
+      'bottom:calc(96px + env(safe-area-inset-bottom,0px))',
       'z-index:2147483000',
       'display:flex', 'align-items:center', 'gap:8px',
       'pointer-events:none'          // 容器本身不吃点击，里面每个按钮自己吃

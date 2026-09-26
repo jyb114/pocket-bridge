@@ -231,7 +231,10 @@ async function startGateway(nodeExe) {
   const child = spawn(nodeExe, [proxyJs], {
     detached: true,
     stdio: 'ignore',
-    cwd: cfg.BASE
+    cwd: cfg.BASE,
+    // ★ 确定性隐藏：别指望「detached + stdio:ignore 在 Windows 上本来就不给控制台」
+    //   这种平台细节 —— 写死 windowsHide，桌面上就一定不会闪黑窗。
+    windowsHide: true
   });
   child.unref();
 

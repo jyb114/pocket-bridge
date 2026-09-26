@@ -267,6 +267,14 @@
       dshLangHint: 'DSH 自己还有一项语言设置（设置 → 通用 → 语言），那一项会盖过这里。' +
         '界面没跟着变的话，去那里再选一次。',
       dshNoSpanish: 'DSH 本身只有中文和英文两种界面，所以它的界面显示英文。',
+      voiceHelpTitle: '语音怎么用（点一下看说明）',
+      voiceHelpAria: '语音输入使用说明',
+      voiceHintTitle: '想用语音输入？',
+      voiceHintBody: '点键盘上那个 🎤 就能说话转文字 —— 手机系统自带的，比网页里做更稳。',
+      voiceHintIos: 'iPhone 的 Safari 不开放网页语音接口，所以这里没有内置按钮；安卓 Chrome 上会有。',
+      voiceHintDismiss: '知道了', voiceHintMore: '详细步骤',
+      voiceButtonTitle: '语音输入（说完自动停下）',
+      voiceFocusFirst: '先点一下你要输入的地方，再按麦克风。',
       // ★ 下面这些是**我们自己写**的两条横幅和换版本按钮。原来全是硬编码中文 ——
       //   切换英文后目标界面已变化，但这两条仍是中文；多语言检查定位到这里。
       secTitle: '这是你的私人入口，不要分享',
@@ -301,6 +309,14 @@
       dshLangHint: 'DSH has its own language setting (Settings → General → Language) and it overrides this one. ' +
         'If the interface did not change, set it there too.',
       dshNoSpanish: 'DSH itself only ships Chinese and English, so its interface is in English.',
+      voiceHelpTitle: 'How to use voice input (tap for help)',
+      voiceHelpAria: 'Voice input instructions',
+      voiceHintTitle: 'Want to use voice input?',
+      voiceHintBody: 'Tap 🎤 on your phone keyboard to dictate text. It is built into your phone and is usually more reliable.',
+      voiceHintIos: 'iPhone Safari does not offer speech recognition to web pages, so there is no built-in microphone button here; Android Chrome may have one.',
+      voiceHintDismiss: 'Got it', voiceHintMore: 'Detailed steps',
+      voiceButtonTitle: 'Voice input (stops when you pause)',
+      voiceFocusFirst: 'Tap the text box first, then tap the microphone.',
       secTitle: 'This is your private entrance — do not share it',
       secBody: 'This address is equivalent to full control of your computer: whoever has it can see all your ' +
         'sessions, files and actions, and can give instructions on your behalf.<br>' +
@@ -334,6 +350,14 @@
       dshLangHint: 'DSH tiene su propio ajuste de idioma (Ajustes → General → Idioma) y ese manda sobre este. ' +
         'Si la interfaz no cambió, cámbialo también ahí.',
       dshNoSpanish: 'DSH solo tiene chino e inglés, así que su interfaz aparece en inglés.',
+      voiceHelpTitle: 'Cómo usar la entrada de voz (toca para ver la ayuda)',
+      voiceHelpAria: 'Instrucciones de entrada de voz',
+      voiceHintTitle: '¿Quieres usar la entrada de voz?',
+      voiceHintBody: 'Toca 🎤 en el teclado del teléfono para dictar texto. Es una función del teléfono y suele ser más fiable.',
+      voiceHintIos: 'Safari en iPhone no ofrece reconocimiento de voz a las páginas web, así que aquí no hay micrófono integrado; puede aparecer en Chrome para Android.',
+      voiceHintDismiss: 'Entendido', voiceHintMore: 'Pasos detallados',
+      voiceButtonTitle: 'Entrada de voz (se detiene al hacer una pausa)',
+      voiceFocusFirst: 'Toca primero el campo de texto y después el micrófono.',
       secTitle: 'Esta es tu entrada privada: no la compartas',
       secBody: 'Esta dirección equivale al control total de tu ordenador: quien la tenga puede ver todas tus ' +
         'sesiones, archivos y acciones, y dar instrucciones en tu nombre.<br>' +
@@ -520,8 +544,8 @@
     b.id = 'dsh-gw-voice-help';
     b.type = 'button';
     b.textContent = '🎤';
-    b.title = '语音怎么用（点一下看说明）';
-    b.setAttribute('aria-label', '语音输入使用说明');
+    b.title = T().voiceHelpTitle;
+    b.setAttribute('aria-label', T().voiceHelpAria);
     b.style.cssText = [
       'position:relative', 'flex:none',
       'width:46px', 'height:46px', 'border-radius:999px',
@@ -589,17 +613,17 @@
             'box-shadow:0 6px 24px rgba(0,0,0,.5)'
           ].join(';');
           tip.innerHTML =
-            '<b>想用语音输入？</b><br>' +
-            '点键盘上那个 <b>🎤</b> 就能说话转文字 —— 手机系统自带的，比网页里做更稳。' +
+            '<b>' + T().voiceHintTitle + '</b><br>' +
+            T().voiceHintBody +
             '<div style="color:#81858c;font-size:12.5px;margin-top:4px">' +
-            'iPhone 的 Safari 不开放网页语音接口，所以这里没有内置按钮；安卓 Chrome 上会有。' +
+            T().voiceHintIos +
             '</div>' +
             '<div style="text-align:right;margin-top:9px">' +
             '<button id="dsh-voice-hint-x" style="background:#2c2c2e;color:#eee;' +
-            'border:0;border-radius:9px;padding:8px 14px;font-size:13.5px">知道了</button>' +
+            'border:0;border-radius:9px;padding:8px 14px;font-size:13.5px">' + T().voiceHintDismiss + '</button>' +
             '<button id="dsh-voice-hint-more" style="background:#2c2c2e;color:#eee;' +
             'border:0;border-radius:9px;padding:8px 14px;font-size:13.5px;margin-left:8px">' +
-            '详细步骤</button></div>';
+            T().voiceHintMore + '</button></div>';
           document.body.appendChild(tip);
 
           var dismiss = function () {
@@ -629,7 +653,7 @@
     b.id = 'dsh-gw-voice';
     b.type = 'button';
     b.textContent = '🎤';
-    b.title = '语音输入（说完自动停下）';
+    b.title = T().voiceButtonTitle;
     b.style.cssText = [
       // 不再自己 fixed —— 塞进右下角那条停靠栏里，和角标并排。
       // 之前语音、切换、余额、通知四个各飘各的，堆了 128px 高，
@@ -651,14 +675,29 @@
       if (rec) { rec.stop(); return; }
 
       box = findInput();
-      if (!box) { alert('先点一下你要输入的地方，再按麦克风。'); return; }
+      if (!box) { alert(T().voiceFocusFirst); return; }
 
       base = box.value ? String(box.value) + ' ' : '';
       b.textContent = '⏺';
       b.style.color = '#ff6b6b';
 
+/**
+ * 语音识别用哪个语言：跟着界面语言走。
+ *
+ * 原来两个调用点都写死 'zh-CN' —— 界面切成英文/西语了，语音还是按中文识别，
+ * 英语输入会被错误地按中文识别。
+ * voice.js 本来就支持 o.lang，只是没人传。
+ */
+function voiceLang() {
+  var cur = 'zh';
+  try { if (window.DshI18n && window.DshI18n.lang) cur = window.DshI18n.lang() || 'zh'; } catch (e) { }
+  if (cur === 'en') return 'en-US';
+  if (cur === 'es') return 'es-ES';
+  return 'zh-CN';
+}
+
       rec = window.DshVoice.start({
-        lang: 'zh-CN',
+        lang: voiceLang(),
         onPartial: function (t) { window.DshVoice.setInputValue(box, base + t); },
         onFinal: function (t) { window.DshVoice.setInputValue(box, (base + t).trim()); },
         onError: function (m) { alert(m); },

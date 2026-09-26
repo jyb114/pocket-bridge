@@ -67,6 +67,11 @@ const WRITER_ERR = 'thread 019fe0dd-83db-7881-affb-77f675c36bb9 already has an a
 const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTries: 2 }, deps));
 
 (async () => {
+  if (process.argv.includes('--phone-scope-only')) {
+    await phoneScopeRegression();
+    process.exitCode = bad ? 1 : 0;
+    return;
+  }
   console.log('\n释放锁：先看它什么时候**不**许动手\n');
 
   // ① 没有确认
@@ -477,7 +482,210 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     }
   }
 
-  console.log('\n「释放电脑端的锁」得是一个**找得到**的入口（使用者说找不到）\n');
+  console.log('\n手机断开后要**自动交还**给电脑（使用者：「手机端关闭后要让电脑彻底登录上」）\n');
+{
+  const proxy = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
+  ok('有一条 Codex 手机连接计数器', /let codexPhoneClients = 0/.test(proxy));
+  ok('连上来会取消交还倒计时', /function codexPhoneAttached\(\)[\s\S]{0,300}clearTimeout\(codexReleaseTimer\)/.test(proxy));
+  ok('全断开才开始倒计时（还有别人连着就不动）',
+    /function codexPhoneDetached\(\)[\s\S]{0,160}if \(codexPhoneClients > 0 \|\| codexReleaseTimer\) return;/.test(proxy));
+  ok('到点走 releasePhone（只松开手机已加载的会话，桌面版不碰）',
+    /setTimeout\(async \(\) => \{[\s\S]{0,400}codexLock\.releasePhone\(null/.test(proxy));
+  ok('倒计时是「宽限」不是「立刻」（够一次切前后台）',
+    /CODEX_RELEASE_GRACE_MS = 60 \* 1000/.test(proxy));
+  ok('WS 接通时挂上 attached', /codexPhoneAttached\(\);/.test(proxy));
+  ok('WS 关闭时挂上 detached', /codexPhoneDetached\(\);/.test(proxy));
+
+  const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
+  ok('不在 pagehide 中把明文会话编号伪标成加密请求',
+    !/addEventListener\('pagehide'[\s\S]{0,500}fetch\('\/codex\/lock'/.test(html));
+  ok('自动交还由服务端断线宽限处理，不依赖页面结束时的网络请求',
+    /codexPhoneDetached\(\)/.test(proxy) && /CODEX_RELEASE_GRACE_MS = 60 \* 1000/.test(proxy));
+}
+
+console.log('\n危险按钮必须标红（原来 .btn.d 根本没有样式）\n');
+{
+  const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
+  ok('.btn.d 现在真的有危险样式（红底红边）',
+    /\.btn\.d\{[^}]*background:#3a1d1d[^}]*border:1px solid #a33/.test(html));
+  ok('危险按钮上方有红色警告条（.warn-red）', /\.warn-red\{/.test(html) && /className = 'warn-red'/.test(html));
+  ok('警告条写明「会关掉电脑上的 Codex，正在跑的任务可能被中断」',
+    /会关掉电脑上的 Codex，正在跑的任务可能被中断/.test(html));
+  // 使用者 2026-09-27：「释放锁的功能也要解释清楚 —— 因为电脑端占用、手机无法使用，
+  // 可以释放锁，但可能造成电脑端 Codex 关闭、任务终止」
+  ok('面板开头解释了「锁」是什么（谁占着、会怎样）',
+    /什么是「锁」：同一条会话同时只能有一个写入者/.test(html));
+  ok('安全那颗说清「代价为零 + 会自动松开」',
+    /手机关掉或断开一会儿之后会\*\*自动\*\*松开/.test(html));
+  ok('危险那颗说清代价（关掉 Codex、那一轮任务会停）',
+    /代价是关掉电脑上的 Codex/.test(html));
+  ok('警告条摆在按钮**之前**',
+    html.indexOf("className = 'warn-red'") < html.indexOf("btn.id = 'lock-release'"));
+  ok('「释放手机端的锁」不带危险样式（它没有代价）',
+    /safe\.className = 'btn';/.test(html));
+}
+
+console.log('\nCodex 代理：托管服务进程级设置；桌面版只在确认后改用户变量\n');
+{
+  const proxy = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
+  ok('状态里带 codexProxy', /codexProxy: codexProxyInfo\(\)/.test(proxy));
+  ok('读系统代理（ProxyEnable/ProxyServer，多协议写法也认）',
+    /function systemProxyUrl\(\)[\s\S]{0,600}ProxyServer/.test(proxy));
+  ok('读用户环境变量 HTTPS_PROXY（桌面版继承的就是它）',
+    /regQuery\('HKCU\\\\Environment', 'HTTPS_PROXY'\)/.test(proxy));
+  ok('显式手动动作需要服务器端确认',
+    /body\.action === 'fix-codex-proxy'[\s\S]{0,450}body\.confirm !== true/.test(proxy));
+  ok('网关启动和定期检查不再改用户级代理变量',
+    !/autoFixCodexProxy/.test(proxy) && !/自动设好 Codex 桌面版的代理/.test(proxy));
+  ok('关掉系统代理但用户变量仍有旧值时会提醒', /staleUserProxy: !system && !!userEnv/.test(proxy));
+
+  const html = fs.readFileSync(path.join(BASE, 'pwa', 'console.html'), 'utf8');
+  ok('控制台有体检那一行', /id="codex-proxy-state"/.test(html));
+  ok('手动按钮先警告影响其他程序，再向服务端发确认',
+    /if \(!confirm\(t\('要覆盖 Windows 当前用户的代理环境变量/.test(html) &&
+    /action\('fix-codex-proxy',[^\n]*\{ confirm: true \}/.test(html));
+  ok('界面不声称已自动修好桌面版',
+    !/已自动设好：Codex 桌面版会走代理/.test(html) && /不会自动改 Windows 用户变量/.test(html));
+
+  const targets = fs.readFileSync(path.join(BASE, 'scripts', 'targets.js'), 'utf8');
+  ok('自家 Codex app-server 仍用进程级代理',
+    /env: Object\.assign\(\{\}, process\.env, proxy\)/.test(targets));
+}
+
+console.log('\n「释放手机端的锁」：只收手机自己的摊子，一个电脑程序都不碰\n');
+{
+  const { createLockService } = require('./codex-lock.js');
+  const calls = [];
+  const svc = createLockService('/tmp/x', {
+    port: () => 18790,
+    // 假的 app-server：只记下我们发了什么
+    rpcFor: () => async (method, params) => {
+      calls.push({ method, params });
+      if (method === 'thread/loaded/list') return { data: ['thread-a', 'thread-b'] };
+      return {};
+    },
+    probe: () => ({ state: 'absent', detail: 'no-lock-file' }),
+    targetsFor: () => ({
+      // 我们那个 app-server 在跑（managedPid 只认我们记下 pid 的那个）
+      managedPid: () => 4242,
+      stop: async () => { calls.push({ method: 'targets.stop' }); return { ok: true, message: '已停止（我们的那个）' }; },
+      // 桌面版相关的接口：**一个都不许被调用**
+      stopDesktop: async () => { calls.push({ method: 'targets.stopDesktop！！' }); return { ok: true }; },
+      desktopStatus: () => { calls.push({ method: 'targets.desktopStatus！！' }); return { running: true, count: 3 }; }
+    }),
+    logger: () => { }
+  });
+
+  const r = await svc.releasePhone('01a098d4-f36d-75e2-ab16-0cd6ffbdd72f', {});
+  ok('松开了我们 app-server 对这条会话的占用',
+    calls.some((c) => c.method === 'thread/unsubscribe'), JSON.stringify(calls.map((c) => c.method)));
+  ok('**没有** resume（resume 是「我要写」，正好相反）',
+    !calls.some((c) => c.method === 'thread/resume'));
+  const unsubs = calls.filter((c) => c.method === 'thread/unsubscribe').map((c) => c.params.threadId);
+  // ★ 使用者 2026-09-27：「手机端关闭后电脑端能登录，**同时不影响手机端的使用**」
+  //   所以默认路径**不停服务** —— 停了手机切回来要等冷启动，那就不叫流畅切换了。
+  //   指定会话的按钮不能碰另一个手机正在使用的会话。
+  ok('只松开当前会话，不碰其他手机会话',
+    unsubs.length === 1 && unsubs[0] === '01a098d4-f36d-75e2-ab16-0cd6ffbdd72f', JSON.stringify(unsubs));
+  ok('默认**不停**我们自己那个服务（手机回来就是热的）',
+    !calls.some((c) => c.method === 'targets.stop'), JSON.stringify(calls.map((c) => c.method)));
+  ok('返回值说明服务留着、只松开指定会话',
+    r.serviceKept === true && r.unsubscribed === true && r.released.length === 0, JSON.stringify(r));
+
+  // 只有明确要求时才停服务
+  {
+    const callsStop = [];
+    const svcStop = createLockService('/tmp/x', {
+      port: () => 18790,
+      rpcFor: () => async (m) => {
+        callsStop.push(m);
+        if (m === 'thread/loaded/list') return { data: [] };
+        return {};
+      },
+      probe: () => ({ state: 'absent' }),
+      targetsFor: () => ({
+        managedPid: () => 4242,
+        stop: async () => { callsStop.push('targets.stop'); return { ok: true, message: '停了' }; }
+      }),
+      logger: () => { }
+    });
+    const rs = await svcStop.releasePhone('01a098d4-f36d-75e2-ab16-0cd6ffbdd72f', { stopService: true });
+    ok('显式要求 stopService 时才停服务',
+      callsStop.includes('targets.stop') && rs.serverStopped === true, JSON.stringify(rs));
+  }
+  ok('**绝不**去关电脑上的 Codex（stopDesktop 一次都没调）',
+    !calls.some((c) => c.method === 'targets.stopDesktop！！'), JSON.stringify(calls.map((c) => c.method)));
+  ok('也没去探桌面版状态（这个按钮跟它无关）',
+    !calls.some((c) => c.method === 'targets.desktopStatus！！'));
+  ok('返回 ok=true（手机这边确实松开了）', r.ok === true, JSON.stringify(r));
+  ok('返回值里标了 phone:true，客户端能分清是哪一个按钮的结果', r.phone === true);
+
+  // 没有会话编号时只供「所有手机都离线」的自动清理使用；空列表不能冒充成功。
+  const calls2 = [];
+  const svc2 = createLockService('/tmp/x', {
+    port: () => 18790,
+    rpcFor: () => async (m) => { calls2.push(m); return {}; },
+    probe: () => ({ state: 'absent' }),
+    targetsFor: () => ({
+      managedPid: () => 4242,
+      stop: async () => { calls2.push('targets.stop'); return { ok: true, message: 'ok' }; }
+    }),
+    logger: () => { }
+  });
+  const r2 = await svc2.releasePhone(null, {});
+  ok('没有会话编号且没有已加载会话：没有实际释放就不报成功',
+    r2.ok === false && !calls2.includes('thread/unsubscribe') && calls2.includes('thread/loaded/list'),
+    JSON.stringify(calls2));
+
+  // 「那个服务本来就不是我们的」（桌面版占着端口）也算成功 —— 手机这边没什么可放的
+  const svc3 = createLockService('/tmp/x', {
+    port: () => 18790,
+    rpcFor: () => async () => { throw Error('connection unavailable'); },
+    probe: () => ({ state: 'held' }),
+    targetsFor: () => ({
+      managedPid: () => null,   // 我们那个服务不在（端口就算被占，也是桌面版占的）
+      stop: async () => ({ ok: false, message: '端口还占着，说明是别的实例（比如桌面版），不该由我们关' })
+    }),
+    logger: () => { }
+  });
+  const r3 = await svc3.releasePhone('01a098d4-f36d-75e2-ab16-0cd6ffbdd72f', {});
+  ok('我们那个服务根本没在跑时，如实报「手机这边没占着」= ok',
+    r3.ok === true && r3.serverNotRunning === true, JSON.stringify(r3));
+
+  // ★ 这条是实测踩出来的：服务没在跑时若直接调 stop()，它会回
+  //   「Codex 远程服务没在运行」，按「停止成功」判据就变成 ok:false ——
+  //   而那恰恰就是我们要的结果（手机这边本来就没占着）。
+  {
+    const c4 = [];
+    const svc4 = createLockService('/tmp/x', {
+      port: () => 18790,
+      rpcFor: () => async (m) => { c4.push(m); return {}; },
+      probe: () => ({ state: 'absent' }),
+      targetsFor: () => ({
+        managedPid: () => null,
+        stop: async () => { c4.push('targets.stop'); return { ok: false, message: 'Codex 远程服务没在运行' }; }
+      }),
+      logger: () => { }
+    });
+    const r4 = await svc4.releasePhone('01a098d4-f36d-75e2-ab16-0cd6ffbdd72f', {});
+    ok('默认路径根本不碰 stop()（服务留着，手机是热的）',
+      r4.ok === true && !c4.includes('targets.stop'), JSON.stringify({ ok: r4.ok, calls: c4 }));
+  }
+
+  // HTTP 那一层：action=phone **不需要** confirm（它没有代价）
+  const g = fs.readFileSync(path.join(BASE, 'scripts', 'codex-lock.js'), 'utf8');
+  ok('action=phone 的分支排在 confirm 检查之前',
+    g.indexOf("body.action === 'phone'") < g.indexOf("body.confirm !== true"));
+  ok('导出里有 releasePhone', /return \{ release, releasePhone/.test(g));
+
+  // 界面：第二个按钮真的在，而且文案说清「不碰电脑上的 Codex」
+  const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
+  ok('面板里有「释放手机端的锁」按钮', /id = 'lock-release-phone'|id: 'lock-release-phone'|'lock-release-phone'/.test(html));
+  ok('调用的是 action=phone', /action: 'phone'/.test(html));
+  ok('文案说清不会动电脑上的 Codex', /不会动电脑上的 Codex/.test(html));
+}
+
+console.log('\n「释放电脑端的锁」得是一个**找得到**的入口（使用者说找不到）\n');
   {
     const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
     const dict = vm.runInNewContext(`(${extractRegisterArg(html)})`, {});
@@ -536,6 +744,74 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
   console.error(e && e.stack || e);
   process.exit(1);
 });
+
+/** Tight isolated regression for the mobile-only release branch. */
+async function phoneScopeRegression() {
+  const other = '02a098d4-f36d-75e2-ab16-0cd6ffbdd72f';
+  const make = (unsubFails, loaded) => {
+    const calls = [];
+    const s = createLockService(BASE, {
+      port: () => 18790,
+      rpcFor: () => async (method, params) => {
+        calls.push({ method, params });
+        if (method === 'thread/loaded/list') return { data: loaded };
+        if (method === 'thread/unsubscribe' &&
+          (typeof unsubFails === 'function' ? unsubFails(params.threadId) : unsubFails))
+          throw Error('unsubscribe failed');
+        return {};
+      },
+      targetsFor: () => ({
+        managedPid: () => 4242,
+        stop: async () => { calls.push({ method: 'targets.stop' }); return { ok: true }; },
+        stopDesktop: async () => { calls.push({ method: 'targets.stopDesktop' }); return { ok: true }; }
+      })
+    });
+    return { s, calls };
+  };
+  console.log('\n[phone scope] Targeted release must not touch other mobile sessions');
+  {
+    const h = make(false, [TID, other]);
+    const r = await h.s.releasePhone(TID, {});
+    const ids = h.calls.filter((c) => c.method === 'thread/unsubscribe').map((c) => c.params.threadId);
+    if (r.ok && ids.length === 1 && ids[0] === TID && !h.calls.some((c) => c.method === 'targets.stop' || c.method === 'targets.stopDesktop'))
+      ok('only requested thread is unsubscribed; no process is stopped');
+    else fail('release touched other threads or process: ' + JSON.stringify({ ok: r.ok, ids, calls: h.calls.map((c) => c.method) }));
+  }
+  {
+    const h = make(true, [TID, other]);
+    const r = await h.s.releasePhone(TID, {});
+    const ids = h.calls.filter((c) => c.method === 'thread/unsubscribe').map((c) => c.params.threadId);
+    if (!r.ok && ids.length === 1 && ids[0] === TID) ok('failed unsubscribe is reported as failure without touching another thread');
+    else fail('failed unsubscribe was reported as success or touched others: ' + JSON.stringify({ ok: r.ok, ids }));
+  }
+  console.log('\n[phone scope] No-thread automatic cleanup remains explicit and truthful');
+  {
+    const h = make(false, [TID, other]);
+    const r = await h.s.releasePhone(null, {});
+    const ids = h.calls.filter((c) => c.method === 'thread/unsubscribe').map((c) => c.params.threadId);
+    if (r.ok && ids.length === 2 && ids.includes(TID) && ids.includes(other)) ok('no-thread cleanup releases all loaded phone threads');
+    else fail('no-thread cleanup lost its all-loaded behavior: ' + JSON.stringify({ ok: r.ok, ids }));
+  }
+  {
+    const h = make(false, []);
+    const r = await h.s.releasePhone(null, {});
+    if (!r.ok && !h.calls.some((c) => c.method === 'thread/unsubscribe')) ok('empty loaded list alone does not claim a release');
+    else fail('empty loaded list falsely claims a release: ' + JSON.stringify({ ok: r.ok, calls: h.calls.map((c) => c.method) }));
+  }
+  {
+    const h = make((id) => id === other, [TID, other]);
+    const r = await h.s.releasePhone(null, {});
+    if (!r.ok && r.released.length === 1 && r.releaseErrors.length === 1)
+      ok('partial all-thread cleanup reports failure instead of claiming everything released');
+    else fail('partial cleanup falsely claims success: ' + JSON.stringify({ ok: r.ok, released: r.released, errors: r.releaseErrors }));
+  }
+  {
+    const h = make(false, [TID, other]);
+    const r = await h.s.releasePhone('../../bad', {});
+    if (!r.ok && r.code === 'bad-thread' && h.calls.length === 0) ok('invalid supplied ID cannot trigger all-thread cleanup');
+    else fail('invalid supplied ID touched the server: ' + JSON.stringify({ code: r.code, calls: h.calls }));
+  }
+}
 
 // ── 在假 DOM 里真跑一遍 codex.html 的「被占用」卡片 ───────────────────────────
 //

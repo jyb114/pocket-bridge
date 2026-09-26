@@ -15,14 +15,14 @@ You do not need to register for a Pocket Bridge account or install a Pocket Brid
 ## Current status
 
 - Windows x64 is the only packaged platform. The installer has been checked in an isolated Windows 11 environment; this is not a guarantee for every PC, target-app version, or network.
-- The Windows installer is not code-signed. Windows SmartScreen may show an unknown-publisher warning. Download only from this repository's Releases page when a release is available, and compare its published SHA-256 checksum.
+- The Windows installer is not code-signed. Windows SmartScreen may show an unknown-publisher warning. Download only from this repository's Releases page and compare its published SHA-256 checksum.
 - Linux and macOS installers are not available. Some cross-platform source paths exist but have not been validated on those systems.
 - The phone interface has been exercised on iPhone Safari. Other browsers and devices have not received equivalent real-device testing.
 
 ## Set up on Windows
 
 1. Install and sign in to DeepSeek Harness, Codex, or both on the computer.
-2. When a release is available, download the Windows x64 Setup.exe from [Releases](https://github.com/jyb114/pocket-bridge/releases) and run it.
+2. Download the Windows x64 Setup.exe from [Releases](https://github.com/jyb114/pocket-bridge/releases) and run it.
 3. Open **Pocket Bridge** from the desktop or Start menu. Its local console shows target status and the current phone addresses. A target may be started from the console if it is installed but not running.
 4. Copy the **complete** local-network or internet address from that console to your phone browser. Do not remove the access-key path or the #k= fragment. A six-digit pairing code by itself does not grant access to conversations.
 5. On the same Wi-Fi, use the local-network address. Away from home, use the current tunnel address if the tunnel is connected.
@@ -67,6 +67,8 @@ The #k= fragment is normally not sent in an HTTP request. It helps prove possess
 Optional notifications may contact web-push services, ntfy, or Bark. Optional balance checks can contact DeepSeek. Network-route detection may contact public-IP lookup services. The local console page itself does not load third-party assets. Do not rely on notifications to recover from a changed tunnel address.
 
 Codex can hold an exclusive writer lock for a conversation. The phone may be able to observe a running task, but taking over writing by releasing the desktop lock can close or interrupt the desktop Codex process. Do not use that control during work you cannot afford to interrupt. The Codex WebSocket app-server interface is experimental and can change with Codex releases; DeepSeek Harness updates can also affect compatibility.
+
+Releasing a phone-held conversation is a separate control and does not close desktop Codex. When all Codex phone connections disconnect, Pocket Bridge waits about 60 seconds before releasing its phone-side conversation holds; closing a browser tab is not an instant handback. Pocket Bridge applies a detected system proxy to the Codex service it launches, without automatically changing Windows user-wide proxy variables. The optional desktop-proxy troubleshooting action **does** change those user-wide variables and may affect other newly opened applications; read its warning before using it.
 
 ## Maintenance and disclosure
 

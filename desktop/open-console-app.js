@@ -103,6 +103,9 @@ const args = [
 ];
 
 try {
+  // windows-visible-ok：这个窗口**就是要给使用者看的**（控制台本身）。
+  // 它是 GUI 浏览器进程，本来也不会弹控制台窗口；显式写 false 并打标记，
+  // 免得守卫测试把「故意可见」当成漏了 windowsHide。
   const child = spawn(browser, args, { detached: true, stdio: 'ignore', windowsHide: false });
   child.unref();
   console.log(`已作为应用窗口打开: ${url}`);

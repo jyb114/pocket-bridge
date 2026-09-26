@@ -559,6 +559,17 @@
         <button class="ghost" id="btn-logs" data-i18n="打开日志目录">打开日志目录</button>
         <button class="ghost" id="btn-diagnostic" data-i18n="导出诊断包（已脱敏）">导出诊断包（已脱敏）</button>
       </div>
+
+      <!-- 托管服务的代理只在它自己的进程里设置；独立的桌面版由用户决定。 -->
+      <div class="subhead" data-i18n="Codex 桌面版代理">Codex 桌面版代理</div>
+      <div id="codex-proxy-state" class="hint" data-i18n="正在检查…">正在检查…</div>
+      <div class="acts">
+        <button class="ghost" id="btn-codex-proxy" data-i18n="设置 Windows 用户代理变量…" style="display:none">设置 Windows 用户代理变量…</button>
+      </div>
+      <div class="hint" style="margin-top:8px" data-i18n="Pocket Bridge 只给自己管理的 Codex 服务单独传代理，不会自动改 Windows 用户变量。上方按钮会覆盖当前用户的代理变量，影响其他新启动的程序；关闭系统代理后不会自动恢复。">
+        Pocket Bridge 只给自己管理的 Codex 服务单独传代理，不会自动改 Windows 用户变量。
+        上方按钮会覆盖当前用户的代理变量，影响其他新启动的程序；关闭系统代理后不会自动恢复。
+      </div>
       <div class="hint" style="margin-top:8px" data-i18n="要把设置分享给别人时，导出这个包。包里只有设置：没有凭据、设备信息和消息内容，检测到敏感内容就不会生成。">
         要给别人才用。包里不含访问密钥、加密密钥、推送凭据、设备指纹，也不含消息正文 ——
         生成时会拿本机真实凭据回搜一遍产物，搜到就拒绝写出。
@@ -737,6 +748,7 @@ function render(data) {
   loadBalance();
   loadCodexQuota();
   renderAdvanced(data);
+  renderCodexProxy(data.codexProxy);
   if (data.recentLog) $('logs').textContent = data.recentLog;
 
   // 动态渲染出来的文案也要跟着语言走 —— data-i18n 只在 apply() 被调用时才套上去。
@@ -844,6 +856,33 @@ function bestEntry(e) {
   return entryList(e)[0] || null;
 }
 
+/**
+ * 独立桌面版的用户级代理状态。匹配环境变量不等于能证明正在运行的客户端已继承。
+ */
+function renderCodexProxy(info) {
+  var el = $('codex-proxy-state');
+  var btn = $('btn-codex-proxy');
+  if (!el || !btn) return;
+  if (!info) { el.textContent = t('正在检查…'); btn.style.display = 'none'; return; }
+  if (!info.system) {
+    el.textContent = info.staleUserProxy
+      ? t('系统代理已关闭，但 Windows 用户代理变量仍有旧值；它可能继续影响新启动的程序，请在系统设置中检查。')
+      : t('未检测到系统代理。Pocket Bridge 不会自动修改桌面版 Codex 的网络设置。');
+    el.style.color = '#ffb454';
+    btn.style.display = 'none';
+    return;
+  }
+  if (info.ok) {
+    el.textContent = t('Windows 用户代理变量与系统代理一致（{proxy}）。这不保证正在运行的桌面版已继承；如刚改动，请完整退出后重开。', { proxy: info.system });
+    el.style.color = '';
+    btn.style.display = 'none';
+    return;
+  }
+  el.textContent = t('Windows 用户代理变量与系统代理不一致。Pocket Bridge 管理的手机端服务仍使用自己的进程级代理；如需改变桌面版，请先了解下方按钮的影响。');
+  el.style.color = '#ff8a80';
+  btn.style.display = '';
+}
+
 function renderEntries(e) {
   var box = $('entries');
   box.innerHTML = '';
@@ -927,7 +966,8 @@ function renderEntries(e) {
     pairActs.className = 'access-actions';
     addButton(pairActs, t('复制配对码'), 'primary', function () { copy(pcCode, t('配对码')); });
     // 换一张：只在**你想换**的时候换。重启网关不再换（2026-09-26 起）。
-    // 确认框必须说清「已经连上的手机不受影响」，避免误以为要重新登录。
+    // 确认框必须说清「已经连上的手机不受影响」—— 使用者第一反应就是
+    // 「换了新的我岂不是又登不上去」，那句话就是回答这个的。
     addButton(pairActs, t('换一个配对码'), '', function () {
       if (!confirm(t('换一张新的配对码？\n\n· 现在这张立刻作废\n· 已经连上的手机不受影响，不用重新登录\n· 下次有新设备要连时，用新的这 6 位'))) return;
       action('rotate-pair-code', t('换一个配对码'));
@@ -1434,6 +1474,11 @@ $('btn-rotate').onclick = function () {
 };
 $('btn-logs').onclick = function () { action('open-logs', t('打开日志目录')); };
 $('btn-diagnostic').onclick = function () { action('export-diagnostic', t('导出诊断包')); };
+$('btn-codex-proxy').onclick = function () {
+  if (!confirm(t('要覆盖 Windows 当前用户的代理环境变量吗？\n\n· 会改写 HTTPS_PROXY、HTTP_PROXY、ALL_PROXY、NO_PROXY\n· 不仅 Codex，其他之后启动的程序也可能受影响\n· 关闭系统代理后不会自动撤销；现有变量不会备份\n· 桌面版 Codex 需完整退出再打开，登录仍不保证成功\n\n继续吗？'))) return;
+  action('fix-codex-proxy', t('设置 Windows 用户代理变量…'), { confirm: true });
+};
+renderCodexProxy(state.data && state.data.codexProxy);
 // 刷新隧道地址：**不可逆**（地址一定变），所以确认框要把后果说清楚
 $('btn-refresh-tunnel').onclick = function () {
   if (!confirm(t('重建隧道、换一个新地址？\n\n· 新地址和现在这条**一定不一样**\n· 旧书签立刻失效；建好后自动推一条能直接点开的链接\n\n只是网卡了一下？等一会儿或刷新页面。\n确定要重建吗？'))) return;
@@ -1827,6 +1872,33 @@ if (window.DshI18n && window.DshI18n.register) {
     },
 
     // ── 脱敏诊断包 ───────────────────────────────────────────────────────
+    'Codex 桌面版代理': { en: 'Codex desktop proxy', es: 'Proxy de Codex de escritorio' },
+    '设置 Windows 用户代理变量…': { en: 'Set Windows user proxy variables…', es: 'Configurar variables de proxy del usuario de Windows…' },
+    '正在检查…': { en: 'Checking…', es: 'Comprobando…' },
+    '未检测到系统代理。Pocket Bridge 不会自动修改桌面版 Codex 的网络设置。': {
+      en: 'No system proxy was detected. Pocket Bridge does not automatically change Codex desktop network settings.',
+      es: 'No se detectó un proxy de sistema. Pocket Bridge no cambia automáticamente la configuración de red de Codex de escritorio.'
+    },
+    '系统代理已关闭，但 Windows 用户代理变量仍有旧值；它可能继续影响新启动的程序，请在系统设置中检查。': {
+      en: 'The system proxy is off, but Windows user proxy variables still have old values. They may affect newly launched programs; check your system settings.',
+      es: 'El proxy del sistema está desactivado, pero las variables de proxy del usuario de Windows conservan valores antiguos. Podrían afectar a programas nuevos; revísalas en la configuración del sistema.'
+    },
+    'Windows 用户代理变量与系统代理一致（{proxy}）。这不保证正在运行的桌面版已继承；如刚改动，请完整退出后重开。': {
+      en: 'Windows user proxy variables match the system proxy ({proxy}). This does not prove the running desktop app inherited them; if you just changed them, fully quit and reopen it.',
+      es: 'Las variables de proxy del usuario de Windows coinciden con el proxy del sistema ({proxy}). Esto no garantiza que la aplicación abierta las haya heredado; si acabas de cambiarlas, ciérrala por completo y vuelve a abrirla.'
+    },
+    'Pocket Bridge 只给自己管理的 Codex 服务单独传代理，不会自动改 Windows 用户变量。上方按钮会覆盖当前用户的代理变量，影响其他新启动的程序；关闭系统代理后不会自动恢复。': {
+      en: 'Pocket Bridge passes a proxy only to the Codex service it manages; it does not automatically change Windows user variables. The button above overwrites those variables and may affect other newly launched apps. They are not restored when the system proxy is turned off.',
+      es: 'Pocket Bridge pasa el proxy solo al servicio Codex que administra; no cambia automáticamente las variables del usuario de Windows. El botón anterior sobrescribe esas variables y puede afectar a otros programas nuevos. No se restauran al desactivar el proxy del sistema.'
+    },
+    'Windows 用户代理变量与系统代理不一致。Pocket Bridge 管理的手机端服务仍使用自己的进程级代理；如需改变桌面版，请先了解下方按钮的影响。': {
+      en: 'Windows user proxy variables differ from the system proxy. The phone-side service managed by Pocket Bridge still uses its own process-scoped proxy. Read the impact below before changing the desktop setup.',
+      es: 'Las variables de proxy del usuario de Windows difieren del proxy del sistema. El servicio móvil administrado por Pocket Bridge sigue usando su proxy de proceso. Lee las consecuencias antes de cambiar la configuración de escritorio.'
+    },
+    '要覆盖 Windows 当前用户的代理环境变量吗？\n\n· 会改写 HTTPS_PROXY、HTTP_PROXY、ALL_PROXY、NO_PROXY\n· 不仅 Codex，其他之后启动的程序也可能受影响\n· 关闭系统代理后不会自动撤销；现有变量不会备份\n· 桌面版 Codex 需完整退出再打开，登录仍不保证成功\n\n继续吗？': {
+      en: 'Overwrite the current Windows user proxy variables?\n\n· HTTPS_PROXY, HTTP_PROXY, ALL_PROXY and NO_PROXY will change\n· Other apps launched later may be affected, not just Codex\n· Turning off the system proxy will not undo this; existing values are not backed up\n· Fully quit and reopen Codex desktop; sign-in is not guaranteed\n\nContinue?',
+      es: '¿Sobrescribir las variables de proxy del usuario actual de Windows?\n\n· Cambiarán HTTPS_PROXY, HTTP_PROXY, ALL_PROXY y NO_PROXY\n· También pueden verse afectados otros programas que se inicien después, no solo Codex\n· Desactivar el proxy del sistema no revierte el cambio; no se guardan los valores anteriores\n· Cierra por completo y vuelve a abrir Codex de escritorio; el inicio de sesión no está garantizado\n\n¿Continuar?'
+    },
     '导出诊断包（已脱敏）': {
       en: 'Export diagnostics (scrubbed)',
       es: 'Exportar diagnóstico (sin datos sensibles)'

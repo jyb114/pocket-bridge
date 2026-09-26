@@ -65,3 +65,18 @@ body, .bub, .tool, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
 /* ============================================================================
  * 你的改动写在下面
  * ============================================================================ */
+
+/* An expanded chat composer takes priority over the floating route/voice dock. */
+#dsh-gw-dock.dsh-custom-composer-overlap {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Keep the compact switch and the overlay's dismiss button easy to tap. */
+#dsh-gw-switch { position: relative; }
+#dsh-gw-switch::after {
+  content: '';
+  position: absolute;
+  inset: -8px !important;
+}
+#dsh-home-screen-tip button { min-width: 44px; min-height: 44px; }

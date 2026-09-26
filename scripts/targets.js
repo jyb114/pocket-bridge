@@ -251,11 +251,11 @@ const dsh = {
 
     try {
       if (process.platform === 'win32') {
-        spawn('explorer.exe', [d.exe], { detached: true, stdio: 'ignore' }).unref();
+        spawn('explorer.exe', [d.exe], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
       } else if (process.platform === 'darwin') {
         spawn('open', [d.exe], { detached: true, stdio: 'ignore' }).unref();
       } else {
-        spawn(d.exe, [], { detached: true, stdio: 'ignore' }).unref();
+        spawn(d.exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
       }
     } catch (err) {
       return { ok: false, message: fill(T(lang).startFail, { msg: err.message }) };
@@ -512,6 +512,10 @@ const codex = {
         detached: true,
         stdio: ['ignore', out, out],
         cwd: os.homedir(),
+        // ★ windowsHide 不能少：app-server 是**控制台程序**，从手机点「启动 Codex」
+        //   会把它拉起来并一直开着 —— 不隐藏就会有一个黑窗一直挂在桌面上，
+        //   打断使用者正在做的事（他原话：「跳出 cmd 窗口打断电脑工作，这个真的很烦」）。
+        windowsHide: true,
         env: Object.assign({}, process.env, proxy)
       });
       child.unref();

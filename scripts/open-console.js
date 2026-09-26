@@ -47,11 +47,12 @@ function openBrowser(url) {
   try {
     if (process.platform === 'win32') {
       // start 是 cmd 内建命令；第一个空参数是窗口标题占位
-      const child = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' });
+      // cmd 只是个跳板，窗口本身要藏起来（要打开的那个程序照常出现）
+    const child = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true });
       child.unref();
     } else {
       const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-      const child = spawn(cmd, [url], { detached: true, stdio: 'ignore' });
+      const child = spawn(cmd, [url], { detached: true, stdio: 'ignore', windowsHide: true });
       child.unref();
     }
     return true;
@@ -66,7 +67,7 @@ function openBrowser(url) {
   if (!gw) {
     process.stdout.write('服务没在运行，正在启动...\n');
     const daemon = path.join(BASE, 'scripts', 'gateway-daemon.js');
-    const child = spawn(process.execPath, [daemon], { detached: true, stdio: 'ignore', cwd: BASE });
+    const child = spawn(process.execPath, [daemon], { detached: true, stdio: 'ignore', cwd: BASE, windowsHide: true });
     child.unref();
 
     for (let i = 0; i < 30; i++) {

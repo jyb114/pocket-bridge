@@ -214,14 +214,10 @@ function readDeviceToken(req) {
 // 长 URL 在手机上很难输入，所以再给一个 6 位数字入口：手机打开 /pair
 // 输入这串数字就能登记一台**还没登记过的新设备**。
 //
-// ★ 它现在**不随重启更换**了（见 scripts/pair-code.js）。
-//   原来那行注释写的是「每次中间层启动都换一个新码 —— 重启网关即作废，比长期
-//   固定的密钥更适合日常」。前半句是事实，后半句是错的判断：已经连上的手机靠
-//   自己的设备令牌（90 天滑动续期），跟配对码毫无关系，所以「重启就换」打击的
-//   不是攻击者，是使用者 —— 他在外面、手机被要求配对，而电脑上那张码已经换新了。
-//   现在的规则：启动复用文件里那张；签发满 90 天后首次读取时自动换；
-//   使用者也可以在控制台点「换一个配对码」立刻换。
-//   安全账写在 pair-code.js 顶部（保密性零影响；安全性是一处有界放宽）。
+// 配对码不随网关重启更换：已配对设备使用独立的设备令牌，重复更换配对码
+// 不会撤销那些设备，却会让需要重新配对的手机无法使用原码。
+// 启动时复用文件里的码；签发满 90 天后首次读取时更换，也可在控制台手动更换。
+// 安全边界与轮换逻辑见 pair-code.js。
 const PAIR_CODE_FILE = path.join(BASE, 'logs', 'pair-code.txt');
 const pairCode = require('./pair-code.js');
 // 用 crypto.randomInt（在 pair-code.js 里）—— 不用 Math.random：
@@ -2081,7 +2077,8 @@ async function ensureDshRunning() {
         : (argMatch[2] !== undefined ? argMatch[2] : argMatch[3]));
     }
     // detached + unref：让 DSH 不过度依附于网关进程
-    const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
+    // windowsHide：手机点「启动」时把目标程序拉起来，别在桌面上闪一个黑窗
+    const child = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true });
     child.unref();
   } catch (err) {
     log(`启动 DSH 失败: ${err.message}`);
@@ -2804,6 +2801,10 @@ async function buildConsoleStatus(lang) {
       };
     })(),
     entries,
+    // Codex 桌面版登不上时最常见的原因：Rust 程序不读系统代理，而用户环境里
+    // 没有代理变量 —— 于是登录时的「令牌交换」直连被墙，报 token_exchange_failed。
+    // 这里把状态给控制台，控制台据此显示警告 + 一键修好的按钮。
+    codexProxy: codexProxyInfo(),
     recentLog: [
       '# 中间层',
       tailFile(LOG_FILE, 12),
@@ -2909,7 +2910,7 @@ function handleConsole(req, res, u) {
         try {
           const cmd = process.platform === 'win32' ? 'explorer'
             : process.platform === 'darwin' ? 'open' : 'xdg-open';
-          const child = spawn(cmd, [LOG_DIR], { detached: true, stdio: 'ignore' });
+          const child = spawn(cmd, [LOG_DIR], { detached: true, stdio: 'ignore', windowsHide: true });
           child.unref();
           result = { ok: true, message: `已请求打开日志目录: ${LOG_DIR}` };
         } catch (err) {
@@ -3076,6 +3077,34 @@ function handleConsole(req, res, u) {
         } catch (err) {
           result = { ok: false, message: `更改地址失败: ${err.message}` };
         }
+      } else if (body.action === 'fix-codex-proxy') {
+        // 这是显式选择的用户级 Windows 设置，不是 Pocket Bridge 自己的进程设置。
+        // 会覆盖四个用户环境变量并影响其他新启动的程序；关闭系统代理也不会自动还原。
+        if (body.confirm !== true) {
+          result = { ok: false, message: '需要先确认：此操作会覆盖当前用户的代理环境变量，并影响其他新启动的程序。' };
+        } else {
+          try {
+            const proxyUrl = systemProxyUrl();
+            if (!proxyUrl) { result = { ok: false, message: '这台电脑现在没开系统代理，先开代理再点这里。' }; }
+            else {
+              const noProxy = 'localhost,127.0.0.1,::1,.trycloudflare.com,argotunnel.com,cloudflare.com,192.168.0.0/16,10.0.0.0/8';
+              // setx 修改用户级变量；它们不会随着系统代理关闭而自动恢复。
+              for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
+                require('child_process').execFileSync('setx', [name, proxyUrl], { timeout: 8000, windowsHide: true });
+              }
+              require('child_process').execFileSync('setx', ['NO_PROXY', noProxy], { timeout: 8000, windowsHide: true });
+              log(`使用者确认后把代理写进 Windows 用户环境变量（${proxyUrl}）；其他新启动的程序也会受影响`);
+              result = {
+                ok: true,
+                restartNeeded: 'codex',
+                message: `已更新 Windows 用户级代理变量（${proxyUrl}）。它会影响其他新启动的程序，` +
+                  '关闭系统代理后不会自动恢复。若要让 Codex 桌面版继承新值，请完整退出再打开；登录是否成功仍取决于网络与账号。'
+              };
+            }
+          } catch (err) {
+            result = { ok: false, message: `设置失败：${err.message}` };
+          }
+        }
       } else if (body.action === 'rotate-pair-code') {
         // 手动换一张。**只影响「下一台还没登记的新设备」** —— 已经连上的手机
         // 靠自己的设备令牌，不用重连、也不受影响（前端那句确认框就是这么写的）。
@@ -3233,7 +3262,7 @@ function handleConsole(req, res, u) {
           const dir = require('path').dirname(require('./make-cert.js').CA_CERT);
           const cmd = process.platform === 'win32' ? 'explorer'
             : process.platform === 'darwin' ? 'open' : 'xdg-open';
-          const child = spawn(cmd, [dir], { detached: true, stdio: 'ignore' });
+          const child = spawn(cmd, [dir], { detached: true, stdio: 'ignore', windowsHide: true });
           child.unref();
           result = { ok: true, message: `已请求打开证书目录: ${dir}` };
         } catch (err) {
@@ -5073,6 +5102,100 @@ function handleUpgrade(req, socket, head) {
  * 它不认）。改写在这里是安全的 —— 上游是我们自己进程里算出来的地址，
  * 不是从请求里读来的，没有被利用的余地。
  */
+
+// ── 手机断开后**自动把 Codex 交还**给电脑 ────────────────────────────────────
+//
+// 手机打开一条会话时 `thread/resume` 会占住写锁；页面关闭后，app-server
+// 仍可能保留已加载会话，阻止其他客户端取得写权限。
+//
+// 所有手机 Codex 长连接断开 60 秒后，如仍无人连回，就取消订阅托管
+// app-server 中已加载的会话。服务本身保持运行，方便手机下次快速接回；
+// 独立的桌面版进程不会被关闭。
+//
+// 这只是释放手机端占用，不停止尚在运行的服务或声称中断任务。
+let codexPhoneClients = 0;
+let codexReleaseTimer = null;
+const CODEX_RELEASE_GRACE_MS = 60 * 1000;
+
+/** 有手机连上来 → 取消「交还」倒计时 */
+function codexPhoneAttached() {
+  codexPhoneClients += 1;
+  if (codexReleaseTimer) {
+    clearTimeout(codexReleaseTimer);
+    codexReleaseTimer = null;
+    log('手机重新连上 Codex —— 取消自动交还');
+  }
+}
+
+/** 手机那条连接断了；**全**断了才开始倒计时 */
+function codexPhoneDetached() {
+  codexPhoneClients = Math.max(0, codexPhoneClients - 1);
+  if (codexPhoneClients > 0 || codexReleaseTimer) return;
+  codexReleaseTimer = setTimeout(async () => {
+    codexReleaseTimer = null;
+    if (codexPhoneClients > 0) return;                       // 有人回来了
+    try {
+      const r = await codexLock.releasePhone(null, { log });
+      log(`手机已断开 ${Math.round(CODEX_RELEASE_GRACE_MS / 1000)} 秒，把 Codex 交还给电脑：` +
+        (r.serverNotRunning ? '托管服务本来就没在运行'
+          : r.released && r.released.length ? `已取消订阅 ${r.released.length} 条会话（服务保持运行）`
+            : r.ok ? '没有需要释放的已加载会话' : '未确认释放成功'));
+    } catch (err) {
+      log(`自动交还 Codex 失败：${err.message}`);
+    }
+  }, CODEX_RELEASE_GRACE_MS);
+  if (codexReleaseTimer.unref) codexReleaseTimer.unref();
+}
+
+// ── Codex 桌面版的代理体检 ───────────────────────────────────────────────────
+//
+// 使用者实际撞到的：桌面版报
+//   「令牌交换失败：发送 URL 请求错误（https://auth.openai.com/oauth/token）」
+// Pocket Bridge 自己启动的 app-server 在 targets.js 中拿进程级代理；独立启动的
+// Codex 桌面版不归本软件管理，不能为了它在网关启动时改写全局用户变量。
+//
+// 这里只读状态。用户主动确认后，才可选择修改用户级环境变量（见 __console/action）。
+function regQuery(key, name) {
+  try {
+    const out = require('child_process').execFileSync('reg', ['query', key, '/v', name],
+      { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const m = out.match(new RegExp(name + '\\s+REG_\\w+\\s+(.+)'));
+    return m ? m[1].trim() : null;
+  } catch (err) { return null; }
+}
+
+/** 系统代理（v2rayN 那种），形如 http://127.0.0.1:10808 */
+function systemProxyUrl() {
+  if (process.platform !== 'win32') return null;
+  const KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+  if (regQuery(KEY, 'ProxyEnable') !== '0x1') return null;
+  const server = regQuery(KEY, 'ProxyServer');
+  if (!server) return null;
+  const https = /https=([^;]+)/i.exec(server);
+  const http = /http=([^;]+)/i.exec(server);
+  const one = server.includes('=') ? (https || http) : null;
+  const raw = (one ? one[1] : server).trim();
+  if (!raw) return null;
+  return /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+}
+
+/**
+ * 当前用户环境变量是否与系统代理一致？这不等于能证明已经运行的桌面版继承了它。
+ */
+function codexProxyInfo() {
+  const system = systemProxyUrl();
+  const userEnv = process.platform === 'win32' ? regQuery('HKCU\\Environment', 'HTTPS_PROXY') : null;
+  const norm = (v) => String(v || '').replace(/\/+$/, '');
+  const same = !!(system && userEnv && norm(userEnv) === norm(system));
+  return {
+    system,
+    userEnv,
+    ok: system ? same : true,   // 没开系统代理时不判它有问题
+    fixable: !!system && !same,
+    staleUserProxy: !system && !!userEnv
+  };
+}
+
 async function proxyCodexWs(req, socket, head) {
   const t = require('./targets.js');
   const port = t.codex.port();
@@ -5170,9 +5293,10 @@ async function proxyCodexWs(req, socket, head) {
     };
     upstream.on('end', () => { log('WS Codex 上游结束'); logCxStats('上游结束'); socket.end(); });
     socket.on('end', () => { log('WS Codex 客户端结束'); upstream.end(); });
-    socket.on('close', () => logCxStats('客户端关闭'));
+    socket.on('close', () => { logCxStats('客户端关闭'); codexPhoneDetached(); });
 
     log('WS → Codex app-server 已接通');
+    codexPhoneAttached();
   });
 
   upstream.on('error', async (err) => {
