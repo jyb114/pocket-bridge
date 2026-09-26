@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c">
+<!-- PWA 声明。以前这几行一个都没有：manifest.webmanifest 和图标在服务器上都有、
+     也能取到，却没有任何页面引用它们 —— 于是 manifest 形同虚设，iOS 只能自己去
+     探测 /apple-touch-icon-120x120.png，404，主屏图标是空的。 -->
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pocket Bridge">
+<title data-i18n="选择连接方式">选择连接方式</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0b0b0c; color: #eee; margin: 0; padding: 18px 16px 40px;
+    max-width: 560px; margin-inline: auto; line-height: 1.6;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: #8a8a92; font-size: 13px; margin-bottom: 18px; }
+  .advice {
+    background: #17171a; border-radius: 14px; padding: 14px 16px;
+    font-size: 14.5px; margin-bottom: 18px; border-left: 3px solid #4a8cff;
+  }
+  .advice.warn { border-left-color: #f5a623; }
+  .advice.ok { border-left-color: #3ddc84; }
+  h2 { font-size: 13px; color: #8a8a92; font-weight: 600; margin: 22px 0 8px;
+       text-transform: uppercase; letter-spacing: .04em; }
+  .cand {
+    background: #17171a; border-radius: 14px; padding: 13px 15px; margin-bottom: 9px;
+    border: 1px solid transparent;
+  }
+  .cand.cur { border-color: #4a8cff; }
+  .cand.good { border-color: #2c5c3a; }
+  .row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .name { font-size: 15px; font-weight: 600; }
+  .tag {
+    font-size: 11px; padding: 2px 7px; border-radius: 6px;
+    background: #26262b; color: #b9b9c0;
+  }
+  .tag.cur { background: #1d3a66; color: #a9c9ff; }
+  .tag.fast { background: #1e3c29; color: #8ce0a8; }
+  .tag.mid { background: #3d3418; color: #f0cf85; }
+  .tag.bad { background: #3d1f1f; color: #f0a0a0; }
+  .note { color: #8a8a92; font-size: 12.5px; margin-top: 5px; }
+  .origin { color: #6f6f78; font-size: 12px; margin-top: 5px;
+            font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  button {
+    font: inherit; font-size: 14px; padding: 9px 14px; border-radius: 10px;
+    border: 0; background: #26262b; color: #eee; cursor: pointer; margin-top: 10px;
+  }
+  button.primary { background: #2c5ce6; color: #fff; }
+  button:disabled { opacity: .5; }
+  .switching {
+    background: #14304f; border-radius: 14px; padding: 14px 16px; margin-bottom: 18px;
+    font-size: 14.5px;
+  }
+  .switching button { background: #26262b; }
+  .foot { color: #6f6f78; font-size: 12.5px; margin-top: 26px; line-height: 1.8; }
+  /* 语言切换那一行。**不能**放进 #foot 里面 —— render() 每次都会重写它的
+     innerHTML，放进去会被抹掉（console.html 里 #langBox 同样的理由）。 */
+  .langrow { display: flex; align-items: center; gap: 9px; margin-top: 16px;
+             color: #6f6f78; font-size: 12.5px; }
+  code { background: #1c1c20; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1 data-i18n="连接方式">连接方式</h1>
+<div class="sub" data-i18n="正在看这台手机现在能走哪条路到你的电脑…">正在看这台手机现在能走哪条路到你的电脑…</div>
+
+<div id="advice"></div>
+<div id="switching"></div>
+<h2 data-i18n="所有可用的路">所有可用的路</h2>
+<div id="list"><div class="cand"><div class="name" data-i18n="正在检测…">正在检测…</div></div></div>
+
+<div class="foot" id="foot"></div>
+<div class="langrow" id="langBox"></div>
+
+<script src="/i18n.js"></script>
+<script>
+'use strict';
+
+// ── 多语言 ───────────────────────────────────────────────────────────────────
+//
+// 中文原文就是 key（见 pwa/i18n.js）：翻不到就原样返回中文，所以页面永远不留空洞。
+// 万一 i18n.js 没加载（脚本 404、被拦、老浏览器），t() 退化成「原样返回」——
+// 页面照常显示中文，而不是报一堆错。
+//
+// 注意：候选路的 label / note 和 d.advice 是**服务端**（scripts/routes.js）
+// 发过来的中文，客户端没有对照表可查，只能原样显示 —— 这一部分不在翻译范围内。
+var t = (window.DshI18n && window.DshI18n.t) ? window.DshI18n.t : function (s) { return s; };
+
+if (window.DshI18n) window.DshI18n.register({
+  "选择连接方式": { en: "Choose a connection", es: "Elegir una conexión" },
+  "连接方式": { en: "Connection", es: "Conexión" },
+  "正在看这台手机现在能走哪条路到你的电脑…": { en: "Checking which route this phone can take to your computer…", es: "Comprobando por qué vía puede llegar este teléfono a tu computadora…" },
+  "所有可用的路": { en: "All available routes", es: "Todas las vías disponibles" },
+  "正在检测…": { en: "Checking…", es: "Comprobando…" },
+  "语言": { en: "Language", es: "Idioma" },
+  "判断依据：你手机的出口 IP 和电脑的出口 IP 是同一个（{ip}），说明在同一个网络里。": { en: "How we know: your phone and your computer share the same public IP ({ip}), so they are on the same network.", es: "Cómo lo sabemos: tu teléfono y tu computadora comparten la misma IP pública ({ip}), así que están en la misma red." },
+  "你现在走这条": { en: "Currently using this", es: "Usando esta ahora" },
+  "连不上": { en: "Unreachable", es: "No se puede conectar" },
+  "浏览器不让测": { en: "Browser blocks the test", es: "El navegador bloquea la prueba" },
+  "你现在是从 https 页面进来的，而这条路是 http —— 浏览器会拦截这种「混合内容」请求，页面没法自己测它。不过顶层跳转不受限制，所以下面这个按钮是可以用的。": { en: "You came in over an https page and this route is http — the browser blocks that kind of \"mixed content\" request, so the page cannot test it. A top-level navigation is not restricted, though, so the button below still works.", es: "Entraste desde una página https y esta vía es http; el navegador bloquea ese tipo de solicitud de «contenido mixto», así que la página no puede probarla. La navegación de nivel superior no está restringida, así que el botón de abajo sí funciona." },
+  "切到这条": { en: "Switch to this", es: "Cambiar a esta" },
+  "当前入口：": { en: "Current entry: ", es: "Entrada actual: " },
+  "识别为：": { en: "Detected as: ", es: "Detectado como: " },
+  "切换走一次性票据，一分钟内有效、用一次就作废 —— 不会把长期密钥写进新地址。": { en: "Switching uses a one-time ticket, valid for one minute and void after a single use — your long-term key is never written into the new address.", es: "El cambio usa un ticket de un solo uso, válido por un minuto y anulado tras usarlo; tu clave permanente nunca se escribe en la dirección nueva." },
+  "正在切换…": { en: "Switching…", es: "Cambiando…" },
+  "正在切到「{label}」…": { en: "Switching to “{label}”…", es: "Cambiando a «{label}»…" },
+  "如果十几秒还没打开，说明你们不在同一个 WiFi —— 用浏览器的「上一页」回来，选另一条即可。": { en: "If it does not open within ten seconds or so, you are not on the same WiFi — go back with the browser's Back button and pick another route.", es: "Si no se abre en unos diez segundos, no están en la misma WiFi; vuelve con el botón Atrás del navegador y elige otra vía." },
+  "申请不到票据": { en: "Could not get a ticket", es: "No se pudo obtener el ticket" },
+  "切换失败：": { en: "Switch failed: ", es: "Falló el cambio: " },
+  "你现在这条路已经连不上了，正在自动切到「{label}」…": { en: "Your current route is unreachable; switching automatically to “{label}”…", es: "Tu vía actual ya no responde; cambiando automáticamente a «{label}»…" },
+  "你在家里，却绕了 Cloudflare 一圈。<b>{n}</b> 秒后自动切到内网直连（更快、也不经过第三方）。": { en: "You are at home but the traffic loops through Cloudflare. Switching to a direct local connection in <b>{n}</b>s (faster, and no third party involved).", es: "Estás en casa pero el tráfico da una vuelta por Cloudflare. Cambiando a conexión local directa en <b>{n}</b> s (más rápida y sin terceros)." },
+  "不用，就这样": { en: "No thanks, keep it", es: "No, déjalo así" },
+  "你现在就在最好的那条路上，不用换。": { en: "You are already on the best route — no need to switch.", es: "Ya estás en la mejor vía; no hace falta cambiar." },
+  "读不到路径信息：": { en: "Cannot read route information: ", es: "No se puede leer la información de las vías: " },
+  "如果你是被跳转过来的、页面刚加载就失败，刷新一次通常就好。": { en: "If you were redirected here and it failed right after loading, a single refresh usually fixes it.", es: "Si llegaste por una redirección y falló justo al cargar, normalmente basta con recargar una vez." }
+});
+
+/** 把静态文案（data-i18n 那套）套到 DOM 上，并同步 <html lang>。 */
+function applyI18n() {
+  if (!window.DshI18n) return;
+  window.DshI18n.apply(document);
+  var code = window.DshI18n.lang();
+  document.documentElement.setAttribute('lang', code === 'zh' ? 'zh-CN' : code);
+}
+
+/** 页面底部的语言切换器。手动选过就以手动为准（i18n.js 存 localStorage）。 */
+function mountLang() {
+  var box = $('langBox');
+  if (!box || !window.DshI18n || !window.DshI18n.makeSwitcher) return;
+  var lb = document.createElement('span');
+  lb.setAttribute('data-i18n', '语言');
+  lb.textContent = '语言';
+  box.appendChild(lb);
+  box.appendChild(window.DshI18n.makeSwitcher());
+  applyI18n();
+}
+
+// 语言一变，整页按新语言重画一遍（render() 是幂等的，探测过程中本来就在反复调）。
+window.onLangChange = function () {
+  applyI18n();
+  render();
+};
+
+var state = { data: null, timing: {}, autoTimer: null, switched: false };
+
+function $(id) { return document.getElementById(id); }
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** 带上超时的 fetch —— 老 Safari 没有 AbortSignal.timeout，所以自己造。 */
+function fetchT(url, opts, ms) {
+  opts = opts || {};
+  var ctl = ('AbortController' in window) ? new AbortController() : null;
+  var timer = null;
+  if (ctl) {
+    opts.signal = ctl.signal;
+    timer = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, ms);
+  }
+  return fetch(url, opts).then(function (r) {
+    if (timer) clearTimeout(timer);
+    return r;
+  }, function (e) {
+    if (timer) clearTimeout(timer);
+    throw e;
+  });
+}
+
+/**
+ * 测一条路的延迟。
+ * 用 no-cors：我们只关心「能不能到达、要多久」，不需要读响应内容，
+ * 所以不需要对方给 CORS 头。跨域也能测。（到不了的话会 reject。）
+ */
+function probe(c, timeoutMs) {
+  var t0 = Date.now();
+  return fetchT(c.origin + '/__probe?_=' + t0, {
+    mode: 'no-cors', cache: 'no-store', credentials: 'omit', redirect: 'follow'
+  }, timeoutMs).then(function () {
+    return { id: c.id, ok: true, ms: Date.now() - t0 };
+  }, function (err) {
+    return { id: c.id, ok: false, ms: Date.now() - t0, err: String(err && err.name || err) };
+  });
+}
+
+function render() {
+  var d = state.data;
+  if (!d) return;
+
+  // 样式跟**结构化结论**走，不跟散文走。
+  //
+  // 这里原来是 `d.advice.indexOf('最快') >= 0` —— 拿中文句子做子串匹配。
+  // 两个毛病：换成英文/西班牙文永远匹配不上（服务端现在已经按语言发了），
+  // 而且句子改一个字就静默失效。服务端因此多给了一个 adviceKind。
+  var kindOk = { 'lan-best': 1, 'ipv6-best': 1 };
+  var cls = d.sameNetwork ? 'warn' : (kindOk[d.adviceKind] ? 'ok' : '');
+  $('advice').innerHTML = '<div class="advice ' + cls + '">' + esc(d.advice) +
+    (d.sameNetwork ? '<div class="note" style="margin-top:8px">' +
+      t('判断依据：你手机的出口 IP 和电脑的出口 IP 是同一个（{ip}），说明在同一个网络里。',
+        { ip: esc(d.egress && d.egress.ipv4 || '') }) + '</div>' : '') +
+    '</div>';
+
+  var blocked = {};
+  (d.mixedContentBlocked || []).forEach(function (id) { blocked[id] = true; });
+
+  var box = $('list');
+  box.innerHTML = '';
+  d.candidates.forEach(function (c) {
+    var isCur = c.authority === d.arrival.authority;
+    var tm = state.timing[c.id];
+    var el = document.createElement('div');
+    el.className = 'cand' + (isCur ? ' cur' : '') + (tm && tm.ok ? ' good' : '');
+
+    var tags = '';
+    if (isCur) tags += '<span class="tag cur">' + t('你现在走这条') + '</span>';
+    if (tm && tm.ok) {
+      var k = tm.ms < 300 ? 'fast' : (tm.ms < 1200 ? 'mid' : 'bad');
+      tags += '<span class="tag ' + k + '">' + tm.ms + ' ms</span>';
+    } else if (tm && !tm.ok) {
+      tags += '<span class="tag bad">' + t('连不上') + '</span>';
+    } else if (blocked[c.id]) {
+      tags += '<span class="tag">' + t('浏览器不让测') + '</span>';
+    }
+
+    var html = '<div class="row1"><span class="name">' + esc(c.label) + '</span>' + tags + '</div>' +
+      '<div class="note">' + esc(c.note) + '</div>' +
+      '<div class="origin">' + esc(c.origin) + '</div>';
+
+    if (blocked[c.id]) {
+      html += '<div class="note">' + t('你现在是从 https 页面进来的，而这条路是 http —— 浏览器会拦截这种「混合内容」请求，页面没法自己测它。不过顶层跳转不受限制，所以下面这个按钮是可以用的。') + '</div>';
+    }
+
+    if (!isCur) {
+      html += '<button data-switch="' + esc(c.id) + '"' +
+        (blocked[c.id] ? '' : '') + '>' + t('切到这条') + '</button>';
+    }
+    el.innerHTML = html;
+    box.appendChild(el);
+  });
+
+  $('foot').innerHTML =
+    t('当前入口：') + '<code>' + esc(d.arrival.authority || '—') + '</code><br>' +
+    t('识别为：') + esc(d.arrival.label) + '（' + esc(d.arrival.detail) + '）<br>' +
+    t('切换走一次性票据，一分钟内有效、用一次就作废 —— 不会把长期密钥写进新地址。');
+  // 列表/说明是动态拼出来的，重新套一遍（静态文案首屏那一次已经套过了）
+  if (window.DshI18n) window.DshI18n.apply(document);
+}
+
+/**
+ * 给候选排序：**能加密的一律优先**，同是加密再看是哪条路。
+ *
+ * 这张表原来写的是 `{ 'lan-https': 1, lan: 2, ipv6: 3, tunnel: 4 }` ——
+ * 把**明文内网排在了隧道前面**。而 route.js 里那张表是
+ * `{ 'lan-https': 1, tunnel: 2, ipv6: 3, lan: 4 }`，明文排最后，注释里写得很清楚：
+ * 「隧道至少是 HTTPS（传输层加密），而明文内网是整条路裸奔」。
+ *
+ * 两张表不一致的后果很实际：手机拿 go.html 这份排序自动换路时，
+ * 会在隧道还可用的情况下挑中明文内网 —— **端到端加密被悄悄换掉**，
+ * 使用者只看到角标突然写「未加密」，不知道是谁干的、为什么。
+ *
+ * 现在两边用同一套顺序。check-frontend.js 里加了一条断言盯着它们别再次分叉。
+ */
+function rank(c) {
+  return { 'lan-https': 1, tunnel: 2, ipv6: 3, lan: 4, loopback: 0 }[c.kind] || 9;
+}
+
+function pickBest() {
+  var d = state.data;
+  var alive = d.candidates.filter(function (c) {
+    var t = state.timing[c.id];
+    return t && t.ok && !c.selfTestOnly;
+  });
+  if (!alive.length) return null;
+  alive.sort(function (a, b) {
+    var ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    return state.timing[a.id].ms - state.timing[b.id].ms;
+  });
+  return alive[0];
+}
+
+function doSwitch(id, label) {
+  var c = state.data ? state.data.candidates.filter(function (x) { return x.id === id; })[0] : null;
+  var blocked = {};
+  (state.data && state.data.mixedContentBlocked || []).forEach(function (x) { blocked[x] = true; });
+  var risky = c && blocked[c.id];
+
+  var btn = document.querySelector('button[data-switch="' + id + '"]');
+  if (btn) { btn.disabled = true; btn.textContent = t('正在切换…'); }
+
+  // 切到「测不了」的那条路有风险：万一你们其实不在同一个 WiFi，这个地址根本打不开。
+  // 那就等于把人送到一个白屏上，所以切换前先把话说清楚，并给出退路。
+  if (risky) {
+    $('switching').innerHTML = '<div class="switching">' +
+      t('正在切到「{label}」…', { label: esc(label || '') }) + '<br>' +
+      '<span style="color:#9db9dd">' + t('如果十几秒还没打开，说明你们不在同一个 WiFi —— 用浏览器的「上一页」回来，选另一条即可。') + '</span></div>';
+  }
+
+  // 带上 target=dsh：换路径会换 origin，cookie 不跟着走。
+  // 不带的话，切到新地址后会被重新问一遍「你要用哪个」—— 明明人已经在这个应用里了。
+  fetchT('/__switch?target=dsh&to=' + encodeURIComponent(id), { cache: 'no-store' }, 6000)
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (!j.ok) throw new Error(j.error || t('申请不到票据'));
+      state.switched = true;
+      try {
+        localStorage.setItem('dsh-gw-last-route', JSON.stringify({
+          id: id, origin: j.kind ? null : null, at: Date.now()
+        }));
+      } catch (e) {}
+      // 带上 location.hash —— 里面是加密密钥。票据 URL 是服务器签的，
+      // 天生不带 fragment，不补上的话每次从这一页切路径都会把加密丢掉。
+      location.replace(j.url + location.hash);
+    })
+    .catch(function (err) {
+      if (btn) { btn.disabled = false; btn.textContent = t('切到这条'); }
+      $('advice').innerHTML += '<div class="advice warn">' + t('切换失败：') + esc(err.message) + '</div>';
+    });
+}
+
+function maybeAutoSwitch() {
+  var d = state.data;
+  if (!d || state.switched) return;
+
+  var curCand = d.candidates.filter(function (c) { return c.authority === d.arrival.authority; })[0];
+  var curTiming = curCand ? state.timing[curCand.id] : null;
+
+  // 情况一：现在这条路已经不通了 —— 这是明确的故障，直接换，不用问
+  var best = pickBest();
+  if (curCand && curTiming && !curTiming.ok && best && best.id !== curCand.id) {
+    $('switching').innerHTML = '<div class="switching">' +
+      t('你现在这条路已经连不上了，正在自动切到「{label}」…', { label: esc(best.label) }) + '</div>';
+    setTimeout(function () { doSwitch(best.id, best.label); }, 900);
+    return;
+  }
+
+  // 情况二：确认在同一个网络里，却在绕隧道 —— 明显有更快的路
+  //
+  // 注意这里不能用 pickBest() 的结果：从 https 页面看，明文内网那条是 http，
+  // 会被浏览器当混合内容拦掉，压根测不了，于是它永远不会出现在「最快」里。
+  // 但**顶层跳转不受这个限制**，所以只要出口 IP 证明了在同一个网络，
+  // 就可以直接把它当作目标。这条曾经漏掉，导致「你其实在家」识别出来了却不切。
+  if (d.sameNetwork && curCand && curCand.kind === 'tunnel') {
+    // 加密那条优先，但**只有探测成功才切**。
+    //
+    // 从 https 页面探测 https 不算混合内容，所以「探测成功」在这里等价于
+    //「证书是被这台手机信任的」。证书没被信任时切过去，浏览器只会甩一个
+    // 证书错误页 —— 那比不切还糟：使用者看到的是一整页红字，而不是能用的界面。
+    // 明文那条没有这个问题，跳过去就能用。
+    var httpsCand = d.candidates.filter(function (c) { return c.kind === 'lan-https'; })[0];
+    var httpsTiming = httpsCand ? state.timing[httpsCand.id] : null;
+    var httpsTrusted = !!(httpsCand && httpsTiming && httpsTiming.ok);
+
+    var lan = (httpsTrusted ? httpsCand : null) ||
+              d.candidates.filter(function (c) { return c.kind === 'lan'; })[0];
+    if (!lan) return;
+
+    var left = 5;
+    function tick() {
+      if (state.switched) return;
+      if (left <= 0) { doSwitch(lan.id, lan.label); return; }
+      $('switching').innerHTML =
+        '<div class="switching"><div>' +
+        t('你在家里，却绕了 Cloudflare 一圈。<b>{n}</b> 秒后自动切到内网直连（更快、也不经过第三方）。', { n: left }) +
+        '</div><button id="btn-cancel">' + t('不用，就这样') + '</button></div>';
+      var b = $('btn-cancel');
+      if (b) b.onclick = function () {
+        state.switched = true;
+        $('switching').innerHTML = '';
+      };
+      left--;
+      state.autoTimer = setTimeout(tick, 1000);
+    }
+    tick();
+    return;
+  }
+
+  if (best && curCand && best.id === curCand.id) {
+    $('advice').innerHTML += '<div class="note" style="margin-top:8px">' +
+      t('你现在就在最好的那条路上，不用换。') + '</div>';
+  }
+}
+
+function run() {
+  fetchT('/__routes', { cache: 'no-store' }, 12000)
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (d) {
+      state.data = d;
+      render();
+
+      var probeable = {};
+      (d.probeable || []).forEach(function (id) { probeable[id] = true; });
+      var targets = d.candidates.filter(function (c) { return probeable[c.id]; });
+
+      if (!targets.length) {
+        maybeAutoSwitch();
+        return;
+      }
+
+      // 并行探测：串行会让人等到不耐烦，而且并行才能比出真实快慢
+      var done = 0;
+      targets.forEach(function (c) {
+        probe(c, 4000).then(function (res) {
+          state.timing[c.id] = res;
+          done++;
+          render();
+          if (done === targets.length) maybeAutoSwitch();
+        });
+      });
+    })
+    .catch(function (err) {
+      $('advice').innerHTML = '<div class="advice warn">' + t('读不到路径信息：') + esc(err.message) +
+        '<div class="note" style="margin-top:6px">' + t('如果你是被跳转过来的、页面刚加载就失败，刷新一次通常就好。') + '</div></div>';
+      $('list').innerHTML = '';
+    });
+}
+
+document.addEventListener('click', function (ev) {
+  var b = ev.target.closest ? ev.target.closest('button[data-switch]') : null;
+  if (!b) return;
+  var id = b.getAttribute('data-switch');
+  var c = state.data.candidates.filter(function (x) { return x.id === id; })[0];
+  doSwitch(id, c ? c.label : '');
+});
+
+applyI18n();
+mountLang();
+run();
+</script>
+</body>
+</html>

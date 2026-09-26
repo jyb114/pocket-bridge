@@ -1,0 +1,31 @@
+# 换行符统一交给 git 管。
+#
+# 为什么这个项目特别需要它：Windows 上开发，而项目里有几处**对换行符敏感**的
+# 东西 —— 比如启动用的 .bat 明确要求 CRLF（cmd.exe 读它时用 OEM 代码页，
+# 换行不对会解析失败）。如果别人在 Linux/Mac 上 clone 下来被转成 LF，
+# 那些脚本就会莫名其妙地坏掉。
+#
+# 规则：仓库里**一律存 LF**（除非下面单独指定），检出时按平台转。
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则 cmd.exe 会解析失败
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell 脚本：CRLF 最稳（Windows PowerShell 5.1 对 LF 的 .ps1 有时会出错）
+*.ps1 text eol=crlf
+
+# 二进制文件不要动它们的换行
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.exe binary
+*.dll binary
+
+# 锁文件和大块生成物不参与 diff 统计
+package-lock.json -diff linguist-generated

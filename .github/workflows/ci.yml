@@ -1,0 +1,34 @@
+# Isolated CI covers platform-independent checks, parsing, and tests that
+# provide their own fake targets or local HTTP services. It does not verify
+# real phones, installed DSH/Codex, a live gateway, or tunnel availability.
+# A green CI result is not a complete release acceptance test.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci-subset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The secret scan checks repository history, not only the latest tree.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # This project has no third-party npm dependencies.
+
+      - name: Run isolated test suite
+        run: node scripts/run-ci-tests.js
+
+      - name: Scan files and history for secrets
+        run: node scripts/secret-scan.js --strict
