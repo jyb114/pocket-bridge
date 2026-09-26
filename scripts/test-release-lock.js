@@ -268,7 +268,7 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     });
     const r = await s.release(TID, { confirm: true });
 
-    assert.equal(r.ok, true);
+    assert.equal(r.ok, true, `app-server RPC failed: ${JSON.stringify(r)}`);
     assert.equal(r.method, 'app-server', `没走通 app-server 那条路：${JSON.stringify(r)}`);
     assert.ok(seen.some((m) => m.method === 'initialize'), '没有先 initialize 就发请求');
     const resume = seen.find((m) => m.method === 'thread/resume');

@@ -12,6 +12,8 @@
 //   node gateway-daemon.js --status   # 只报告当前状态，什么都不启动
 'use strict';
 
+require('./runtime-requirements.js').assertSupportedRuntime();
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');

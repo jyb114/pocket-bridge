@@ -33,7 +33,7 @@ The default internet route uses a temporary TryCloudflare tunnel. [Cloudflare de
 
 ## Run from source
 
-Source users need Node.js 18 or newer. For an internet tunnel, install cloudflared separately. The repository has no third-party npm dependencies, so **npm install is not needed**.
+Source users need Node.js 24 or newer. The Codex queue and lock controls use Node's global WebSocket API; this release enforces the same Node 24 baseline bundled with the Windows installer. For an internet tunnel, install cloudflared separately. The repository has no third-party npm dependencies, so **npm install is not needed**.
 
     git clone https://github.com/jyb114/pocket-bridge.git
     cd pocket-bridge

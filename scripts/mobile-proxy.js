@@ -13,6 +13,8 @@
 // 只用 Node 内置模块，不依赖任何第三方包。
 'use strict';
 
+require('./runtime-requirements.js').assertSupportedRuntime();
+
 const http = require('http');
 const net = require('net');
 const os = require('os');

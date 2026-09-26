@@ -15,7 +15,7 @@
   "license": "MIT",
   "author": "Pocket Bridge contributors",
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "main": "scripts/gateway-daemon.js",
   "bin": {

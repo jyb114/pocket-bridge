@@ -62,6 +62,12 @@ window.WebSocket = class {
     page = await browser.newPage();
     await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
     await page.send('Page.addScriptToEvaluateOnNewDocument',{source:bootstrap});
+    const forcedLanguage = process.argv.includes('--force-en') ? 'en-US'
+      : process.argv.includes('--force-es') ? 'es-ES' : null;
+    if (forcedLanguage) {
+      await page.send('Page.addScriptToEvaluateOnNewDocument',{source:
+        `Object.defineProperty(navigator,'language',{get:()=> ${JSON.stringify(forcedLanguage)}});Object.defineProperty(navigator,'languages',{get:()=> [${JSON.stringify(forcedLanguage)}]});`});
+    }
     await page.goto('http://127.0.0.1:' + server.address().port,300);
     // 像真人一样改：赋值 + 触发 change。直接写 .value 会绕过 onchange，
     // 而 onchange 里才记「使用者选的是哪个模式」—— 绕过它就测不出
@@ -78,7 +84,7 @@ window.WebSocket = class {
     await page.eval(`openThread({id:'fixture-thread',name:'手机状态验证',status:{type:'notLoaded'}})`);
     await new Promise(r=>setTimeout(r,500));
     check('opening an already running desktop turn shows running', await page.eval(`state.running === true`));
-    check('persistent task status is visible', await page.eval(`!!document.getElementById('task-status') && /执行中|思考中/.test(document.getElementById('task-status').textContent)`));
+    check('persistent task status is visible', await page.eval(`!!document.getElementById('task-status') && [t('执行中'),t('思考中')].some(x=>document.getElementById('task-status').textContent.includes(x))`));
     await page.eval(`onNotify('item/started',{threadId:'fixture-thread',item:{id:'reason-1',type:'reasoning',summary:[]}}); tidyItems(); onNotify('item/reasoning/summaryTextDelta',{threadId:'fixture-thread',itemId:'reason-1',summaryIndex:0,delta:'正在检查手机与电脑的状态同步。'});`);
     await new Promise(r=>setTimeout(r,100));
     check('summary arriving after empty placeholder cleanup is visible', await page.eval(`Array.from(document.querySelectorAll('.think')).some(x=>x.isConnected && getComputedStyle(x).display !== 'none' && x.textContent.includes('正在检查手机'))`));
@@ -87,24 +93,24 @@ window.WebSocket = class {
     if (process.argv.includes('--expanded')) {
       await page.eval(`fixture.status='completed'; if(typeof refreshObservedThread==='function') refreshObservedThread();`);
       await new Promise(r=>setTimeout(r,200));
-      check('completion while viewing is recovered without notifications', await page.eval(`!state.running && /已完成/.test(document.getElementById('task-status').textContent)`));
+      check('completion while viewing is recovered without notifications', await page.eval(`!state.running && document.getElementById('task-status').textContent.includes(t('已完成'))`));
       await page.eval(`fixture.status='failed'; refreshObservedThread();`);
       await new Promise(r=>setTimeout(r,150));
-      check('failed turn is not labelled completed', await page.eval(`/执行失败/.test(document.getElementById('task-status').textContent)`));
+      check('failed turn is not labelled completed', await page.eval(`document.getElementById('task-status').textContent.includes(t('执行失败'))`));
       await page.eval(`fixture.fail=true; refreshObservedThread();`);
       await new Promise(r=>setTimeout(r,150));
-      check('read failure shows unknown not success', await page.eval(`/无法确认|同步失败|状态未知/.test(document.getElementById('task-status').textContent)`));
+      check('read failure shows unknown not success', await page.eval(`[t('暂时无法确认任务状态'),t('同步失败，暂时无法确认是否完成；将自动重试。'),t('连接中断 · 任务状态未知')].some(x=>document.getElementById('task-status').textContent.includes(x))`));
       await page.eval(`fixture.fail=false; fixture.status='inProgress'; fixture.items=[{id:'desktop-progress',type:'agentMessage',text:'已检查连接，正在验证状态恢复。'}];`);
       await new Promise(r=>setTimeout(r,1300));
       await page.eval(`refreshObservedThread();`);
       await new Promise(r=>setTimeout(r,150));
       check('desktop progress is refreshed in timeline', await page.eval(`document.getElementById('body').textContent.includes('正在验证状态恢复')`));
       await page.eval(`onNotify('thread/status/changed',{threadId:'fixture-thread',status:{type:'active',activeFlags:['waitingOnApproval']}});`);
-      check('approval wait is explicit', await page.eval(`/等待审批/.test(document.getElementById('task-status').textContent)`));
+      check('approval wait is explicit', await page.eval(`document.getElementById('task-status').textContent.includes(t('等待审批'))`));
       await page.eval(`fixture.socket.close()`);
-      check('disconnect does not imply task finished', await page.eval(`/连接中断|无法确认/.test(document.getElementById('task-status').textContent)`));
+      check('disconnect does not imply task finished', await page.eval(`document.getElementById('task-status').textContent.includes(t('连接中断 · 任务状态未知'))`));
       await new Promise(r=>setTimeout(r,1300));
-      check('reconnect refreshes currently open thread', await page.eval(`state.ready && state.running && /执行中/.test(document.getElementById('task-status').textContent)`));
+      check('reconnect refreshes currently open thread', await page.eval(`state.ready && state.running && document.getElementById('task-status').textContent.includes(t('执行中'))`));
       check('running turn offers stop and send together',await page.eval(`!!document.querySelector('.stop') && getComputedStyle(document.getElementById('send')).display!=='none' && !document.getElementById('send').disabled`));
       await page.eval(`document.getElementById('input').value='补充验证切屏恢复'; send();`);
       await new Promise(r=>setTimeout(r,100));
@@ -124,7 +130,7 @@ window.WebSocket = class {
       check('approval resolved elsewhere is removed',await page.eval(`!document.getElementById('apprs').textContent.includes('隔离测试审批')`));
       await page.eval(`fixture.status='completed';document.dispatchEvent(new Event('visibilitychange'));`);
       await new Promise(r=>setTimeout(r,150));
-      check('returning to foreground resynchronizes immediately',await page.eval(`!state.running && /已完成/.test(document.getElementById('task-status').textContent)`));
+      check('returning to foreground resynchronizes immediately',await page.eval(`!state.running && document.getElementById('task-status').textContent.includes(t('已完成'))`));
       await page.eval(`fixture.status='inProgress';refreshObservedThread();`);
       await new Promise(r=>setTimeout(r,150));
       await page.eval(`window.dispatchEvent(new Event('pagehide'));`);
@@ -183,11 +189,11 @@ window.WebSocket = class {
         out.unreadGoneAfterSeen = !threadRow(t1).querySelector('.dot');
 
         const t2 = { id: 'fx-appr', name: '等审批', status: { type: 'active', activeFlags: ['waitingOnApproval'] } };
-        out.apprChip = /等待审批/.test(threadRow(t2).textContent);
+        out.apprChip = threadRow(t2).querySelector('.chip.appr')?.textContent === t('等待审批');
         const t4 = { id: 'fx-wait', name: '等回复', status: { type: 'active', activeFlags: ['waitingOnUserInput'] } };
-        out.waitChip = /等待你回复/.test(threadRow(t4).textContent);
+        out.waitChip = threadRow(t4).querySelector('.chip.wait')?.textContent === t('等待你回复');
         const t3 = { id: 'fx-flagless', name: '没有 flags', status: { type: 'active' } };
-        out.noFakeChip = !/等待/.test(threadRow(t3).textContent);
+        out.noFakeChip = !threadRow(t3).querySelector('.chip.appr,.chip.wait');
         const t5 = { id: 'fx-nostatus', name: '没有状态' };
         out.noCrash = !!threadRow(t5);
         return out;
@@ -210,7 +216,7 @@ window.WebSocket = class {
         await chooseAttachments([new File([bytes],'手机截图.png',{type:'image/png'}),new File(['附件测试'],'说明.txt',{type:'text/plain'})]);
       })()`);
       check('image and document upload through real handler',await page.eval(`draftAttachments().length===2 && draftAttachments().every(a=>a.status==='ready') && draftAttachments()[0].upload.kind==='image'`));
-      check('attachment cards show filename and ready status',await page.eval(`document.getElementById('attachments').textContent.includes('说明.txt') && document.getElementById('attachments').textContent.includes('已上传')`));
+      check('attachment cards show filename and ready status',await page.eval(`document.getElementById('attachments').textContent.includes('说明.txt') && document.getElementById('attachments').textContent.includes(t('已上传 · '))`));
       await page.eval(`fixture.status='inProgress';state.running=true;state.turnId='fixture-turn';task.kind='running';document.getElementById('input').value='';send();`);
       await new Promise(r=>setTimeout(r,100));
       check('attachments alone can be sent during a running turn',await page.eval(`fixture.requests.filter(x=>x.method==='turn/steer').some(x=>x.params.input.some(i=>i.type==='localImage') && x.params.input.some(i=>i.type==='text' && i.text.includes('说明.txt'))) && draftAttachments().length===0`));
@@ -238,9 +244,12 @@ window.WebSocket = class {
         const row = Array.from(document.querySelectorAll('.attachment'))
           .find(r => r.textContent.includes('取消探针.txt'));
         out.text = row ? row.textContent : '';
-        out.showsElapsed = /正在上传…\\s*\\d+s/.test(out.text);
+        const elapsed = Math.round((Date.now() - a.startedAt) / 1000);
+        const status = row && row.querySelector('[data-attach-status]');
+        out.showsElapsed = !!status && [elapsed - 1, elapsed, elapsed + 1]
+          .some(n => n >= 0 && status.textContent === t('正在上传… {n}s', { n }));
         out.noFakePercent = !/%/.test(out.text);
-        const btn = row && Array.from(row.querySelectorAll('button')).find(b => b.textContent === '取消');
+        const btn = row && Array.from(row.querySelectorAll('button')).find(b => b.textContent === t('取消'));
         out.hasCancel = !!btn;
         if (btn) btn.click();
         out.markedCanceled = a.canceled === true;
@@ -251,8 +260,8 @@ window.WebSocket = class {
         const row2 = Array.from(document.querySelectorAll('.attachment'))
           .find(r => r.textContent.includes('取消探针.txt'));
         out.keptAfterCancel = !!row2;
-        out.saysFileKept = /文件还在/.test(row2 ? row2.textContent : '');
-        out.hasRetry = !!(row2 && Array.from(row2.querySelectorAll('button')).find(b => b.textContent === '重试'));
+        out.saysFileKept = !!(row2 && row2.textContent.includes(t('已取消上传，文件还在，可以重试')));
+        out.hasRetry = !!(row2 && Array.from(row2.querySelectorAll('button')).find(b => b.textContent === t('重试')));
         // 清理，别影响后面的断言
         const list = draftAttachments(state.thread.id);
         const i = list.indexOf(a); if (i >= 0) list.splice(i, 1);

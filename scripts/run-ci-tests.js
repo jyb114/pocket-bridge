@@ -26,6 +26,7 @@ const NODE = process.execPath;
  * 回答不了的就别放进来 —— 一个在 CI 上时红时绿的清单比没有清单更糟。
  */
 const SUITE = [
+  ['test-runtime-requirements.js', [], '源码运行的 Node.js 版本门槛与 CI、安装说明一致'],
   ['check-frontend.js', [], '静态检查：脚本注入、id 引用、备选优先级表'],
   ['test-contrast.js', [], '静态检查：文字对比度是否过 AA、键盘焦点是否可见'],
   ['test-i18n.js', [], '静态检查：字典覆盖（真跑字典，不碰网络）'],

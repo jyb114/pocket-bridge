@@ -40,7 +40,7 @@ echo.
 if not defined NODE_EXE (
     echo [X] No Node runtime found.
     echo     The runtime\ folder should be inside this package.
-    echo     If you deleted it, install Node.js 18+ from nodejs.org
+    echo     If you deleted it, install Node.js 24+ from nodejs.org
     echo     and run this script again.
     echo.
     pause
@@ -53,6 +53,12 @@ echo       %NODE_EXE%
 if errorlevel 1 (
     echo [X] The Node runtime does not run. The package may be damaged.
     pause
+    exit /b 1
+)
+"%NODE_EXE%" "%BASE%scripts\runtime-requirements.js"
+if errorlevel 1 (
+    echo [X] Pocket Bridge needs Node.js 24+ with WebSocket support.
+    echo     Install a current Node.js runtime and run setup again.
     exit /b 1
 )
 echo.

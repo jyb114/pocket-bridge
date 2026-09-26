@@ -99,7 +99,7 @@ ok('README 里有非官方声明', /independent of DeepSeek, OpenAI, and Cloudfl
 // 新用户拿到仓库能不能跑起来 —— 这一条之前漏了，而它是最容易忘的：
 // 我把运行时 gitignore 掉了，却没告诉别人从哪弄到它，第一步就卡住。
 const rd0 = read('README.md') || '';
-ok('README 写了源码运行需要 Node.js', /Node\.js 18 or newer/i.test(rd0));
+ok('README 写了源码运行需要 Node.js', /Node\.js 24 or newer/i.test(rd0));
 ok('说了不需要 npm install（零依赖）', /npm install is not needed/i.test(rd0));
 ok('给了环境自检的第一步', /self-check\.js/.test(rd0));
 ok('DeepSeek Harness 需要已安装并登录的电脑客户端',
