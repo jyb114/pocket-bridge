@@ -455,10 +455,12 @@ const PAGE_TEXT = {
     launcher: {
       title: '选择要连的东西',
       heading: '要用哪个？',
-      sub: '这台电脑上有不止一个可以连的东西。选一个进去，之后会记住你的选择。',
+      sub: '选择这台电脑上可用的应用，之后会记住你的选择。',
       checking: '正在检查…',
       none: '没有找到可连的东西',
-      noneHint: '装好 DSH 或 Codex 之后刷新这个页面。',
+      noneHint: '请先在电脑上安装 DSH 或 Codex，再点「重新检查」。',
+      missing: '这台电脑上没有找到 {name}。请先安装它，或选择下面可用的应用。',
+      retry: '重新检查',
       // 「拿不到列表」和「没装东西」是两回事，必须分开说 —— 不然使用者会去
       // 检查电脑上装没装，而真正的原因在他手里那条地址上。
       needKey: '这条地址打不开目标列表。请用电脑控制台「复制链接」给的完整地址'
@@ -548,11 +550,12 @@ const PAGE_TEXT = {
     launcher: {
       title: 'Choose what to connect to',
       heading: 'What do you want to connect to?',
-      sub: 'There is more than one thing you can connect to on this computer. ' +
-        'Pick one to go in — your choice will be remembered.',
+      sub: 'Choose an available app on this computer. Your choice will be remembered.',
       checking: 'Checking…',
       none: 'Nothing to connect to',
-      noneHint: 'Install DSH or Codex, then refresh this page.',
+      noneHint: 'Install DSH or Codex on the computer, then tap Check again.',
+      missing: '{name} was not found on this computer. Install it, or choose an available app below.',
+      retry: 'Check again',
       needKey: 'This address cannot load the target list. Open the complete address '
         + 'from “Copy address” in the console on your computer again (the part after '
         + '# must not be dropped).',
@@ -658,11 +661,12 @@ const PAGE_TEXT = {
     launcher: {
       title: 'Elige a qué conectarte',
       heading: '¿A qué quieres conectarte?',
-      sub: 'En esta computadora hay más de una cosa a la que puedes conectarte. ' +
-        'Elige una para entrar; se recordará tu elección.',
+      sub: 'Elige una aplicación disponible en esta computadora. Se recordará tu elección.',
       checking: 'Comprobando…',
       none: 'No se encontró nada a lo que conectarse',
-      noneHint: 'Instala DSH o Codex y actualiza esta página.',
+      noneHint: 'Instala DSH o Codex en la computadora y pulsa Comprobar de nuevo.',
+      missing: 'No se encontró {name} en esta computadora. Instálalo o elige una aplicación disponible abajo.',
+      retry: 'Comprobar de nuevo',
       needKey: 'Esta dirección no puede cargar la lista. Vuelve a abrir la dirección '
         + 'completa de «Copiar dirección» en la consola de tu computadora (la parte '
         + 'después de # no se puede perder).',
@@ -3487,6 +3491,9 @@ function proxyRequest(req, res) {
         return;
       }
 
+      // No executable means no possible auto-start: do not send a refresh loop.
+      if (handleMissingDsh(req, res)) return;
+
       log(`DSH 未运行（${req.method} ${String(req.url).slice(0, 80)}），触发自动启动`);
       ensureDshRunning().then((ok) => {
         log(ok ? 'DSH 已就绪，刷新页面即可使用' : 'DSH 自动启动未成功');
@@ -3816,6 +3823,68 @@ function e2eeWrap(handler) {
     });
     req.resume();
   };
+}
+
+function serveLauncherPage(req, res, statusCode = 200, missingTarget = null) {
+  // Language selection can queue a cookie, so it must precede writeHead.
+  const lang = pageLanguage(req, res);
+  res.writeHead(statusCode, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  // The selector calls /__targets, which needs the same device proof as other content.
+  res.end(injectProofAssets(launcherPage(req, lang, missingTarget)));
+}
+
+function handleMissingDsh(req, res) {
+  if (findDshExe()) return false;
+  if (!res.headersSent) serveLauncherPage(req, res, 503, 'dsh');
+  else res.end();
+  return true;
+}
+
+function serveCodexPage(req, res, availabilityChecked = false) {
+  const codex = require('./targets.js').codex;
+  if (!availabilityChecked && !codex.detect().installed) {
+    // An independently started app-server remains usable even if its executable
+    // is outside the locations we search. Only a missing, stopped target is blocked.
+    codex.status(pickLang(req)).then((status) => {
+      if (status.running) serveCodexPage(req, res, true);
+      else serveLauncherPage(req, res, 503, 'codex');
+    }).catch(() => serveLauncherPage(req, res, 503, 'codex'));
+    return;
+  }
+  let html;
+  try {
+    const raw = trimHtmlToLanguage(req, res, path.join(PWA_DIR, 'codex.html'));
+    if (!raw) throw new Error('codex.html 读不到');   // 抛出去让下面的 catch 照旧回 500
+    html = Buffer.from(injectProofAssets(raw.toString('utf8')), 'utf8');
+  }
+  catch (err) {
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('codex.html 缺失');
+    return;
+  }
+  // ★ 这一页 **171,883 字节**，是手机端最重的一份（词典、样式、脚本全在里面），
+  //   而它原来既没压缩也没设 content-length —— 一行 res.end(html) 直接吐出去。
+  //   经隧道（实测延迟 3 秒）传 168KB，这就是「加载半天」最直观的那一块。
+  //   压缩后 45,219 字节（brotli）/ 56,559（gzip），省七成。
+  //   （走的是和 servePwa 一样的判断：客户端支持哪种就压哪种，太小就不压。）
+  const ae = String((req.headers && req.headers['accept-encoding']) || '');
+  let body = html, enc = null;
+  if (/\bbr\b/.test(ae)) enc = 'br';
+  else if (/\bgzip\b/.test(ae)) enc = 'gzip';
+  if (enc) {
+    try {
+      body = enc === 'br' ? zlib.brotliCompressSync(html) : zlib.gzipSync(html, { level: 6 });
+    } catch (err) { body = html; enc = null; }   // 压不了就原样发
+  }
+  const h = {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'content-length': Buffer.byteLength(body)
+  };
+  if (enc) { h['content-encoding'] = enc; h['vary'] = 'Accept-Encoding'; }
+  res.writeHead(200, h);
+  res.end(body);
+  return;
 }
 
 /**
@@ -4685,39 +4754,7 @@ function handleRequestInner(req, res, proofDeadline) {
     return;
   }
   if (u.pathname === '/codex' || u.pathname === '/codex/') {
-    let html;
-    try {
-      const raw = trimHtmlToLanguage(req, res, path.join(PWA_DIR, 'codex.html'));
-      if (!raw) throw new Error('codex.html 读不到');   // 抛出去让下面的 catch 照旧回 500
-      html = Buffer.from(injectProofAssets(raw.toString('utf8')), 'utf8');
-    }
-    catch (err) {
-      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('codex.html 缺失');
-      return;
-    }
-    // ★ 这一页 **171,883 字节**，是手机端最重的一份（词典、样式、脚本全在里面），
-    //   而它原来既没压缩也没设 content-length —— 一行 res.end(html) 直接吐出去。
-    //   经隧道（实测延迟 3 秒）传 168KB，这就是「加载半天」最直观的那一块。
-    //   压缩后 45,219 字节（brotli）/ 56,559（gzip），省七成。
-    //   （走的是和 servePwa 一样的判断：客户端支持哪种就压哪种，太小就不压。）
-    const ae = String((req.headers && req.headers['accept-encoding']) || '');
-    let body = html, enc = null;
-    if (/\bbr\b/.test(ae)) enc = 'br';
-    else if (/\bgzip\b/.test(ae)) enc = 'gzip';
-    if (enc) {
-      try {
-        body = enc === 'br' ? zlib.brotliCompressSync(html) : zlib.gzipSync(html, { level: 6 });
-      } catch (err) { body = html; enc = null; }   // 压不了就原样发
-    }
-    const h = {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-store',
-      'content-length': Buffer.byteLength(body)
-    };
-    if (enc) { h['content-encoding'] = enc; h['vary'] = 'Accept-Encoding'; }
-    res.writeHead(200, h);
-    res.end(body);
+    serveCodexPage(req, res);
     return;
   }
 
@@ -5763,21 +5800,19 @@ function targetCookie(id) {
   return `${TARGET_COOKIE}=${id}; Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`;
 }
 
-/**
- * 这个请求该不该先给一个「你要用哪个」的页面？
- *
- * 三种情况不拦：
- *   - 已经选过了（cookie 里有）
- *   - 只装了一个目标（没得选，直接进）
- *   - 一个都没装（进去看 DSH 的报错页，比看一个空选择页更有信息量）
- */
+/** Keep normal DSH entry direct; missing targets and Codex-only PCs use the selector. */
 function shouldShowLauncher(req) {
-  if (readTargetCookie(req)) return false;
-  // 自检不算「第一次来的使用者」—— 它验的是网关自己的管道通不通，
-  // 半路插一个选择页进去，会把「脚本注入」「设备登记」这些检查全带偏。
   if (isSelfCheck(req)) return false;
   if (Date.now() - targetCache.at > 30000) refreshTargets();
-  return targetCache.installedCount > 1;
+  const available = targetCache.list.filter((t) => t.installed || t.running);
+  const chosen = readTargetCookie(req);
+  if (chosen) {
+    if (chosen === 'dsh' && EXPLICIT_TARGET_PORT) return false;
+    return !available.some((t) => t.id === chosen);
+  }
+  // A manually configured upstream may run without a discoverable desktop install.
+  if (EXPLICIT_TARGET_PORT && available.length <= 1) return false;
+  return available.length !== 1 || available[0].id !== 'dsh';
 }
 
 /**
@@ -5790,9 +5825,10 @@ function shouldShowLauncher(req) {
  * `t.blurb` / `t.note` 是目标模块（targets.js）给的说明文字，不在这里翻 ——
  * 那是数据，不是这一页的文案；它们跟着目标本身走。
  */
-function launcherPage(req, lang) {
+function launcherPage(req, lang, missingTarget = null) {
   const code = normLang(lang);
   const T = PAGE_TEXT[code].launcher;
+  const sub = missingTarget ? T.missing.replace('{name}', missingTarget === 'dsh' ? 'DSH' : 'Codex') : T.sub;
   return `<!doctype html>
 <html lang="${code}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -5835,8 +5871,9 @@ function launcherPage(req, lang) {
 </style></head>
 <body>
 <h1>${T.heading}</h1>
-<div class="sub">${T.sub}</div>
+<div class="sub">${sub}</div>
 <div id="list"><div class="card"><div class="row"><span class="name">${T.checking}</span></div></div></div>
+<div class="acts"><button type="button" onclick="location.reload()">${T.retry}</button></div>
 <div class="err" id="err"></div>
 <div class="foot">
   ${T.foot}
@@ -5857,7 +5894,7 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function render(d){
   var box=document.getElementById('list');
   box.innerHTML='';
-  var shown=(d.targets||[]).filter(function(t){return t.installed});
+  var shown=(d.targets||[]).filter(function(t){return t.installed||t.running});
   if(!shown.length){
     box.innerHTML='<div class="card"><div class="name">'+L.none+'</div>'+
       '<div class="blurb">'+L.noneHint+'</div></div>';

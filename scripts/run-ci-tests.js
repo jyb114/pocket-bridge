@@ -32,6 +32,7 @@ const SUITE = [
   ['test-i18n.js', [], '静态检查：字典覆盖（真跑字典，不碰网络）'],
   ['secret-scan.js', [], '静态检查：发布前秘密扫描（需要 git）'],
   ['test-compat.js', [], '兼容层的纯函数'],
+  ['test-missing-targets.js', [], '缺少 DSH / Codex 时显示可操作提示，旧选择与独立运行服务仍可用（假目标与假连接）'],
   ['test-first-run.js', [], '隔离目录验证首次安装生成密钥、DSH 可选与升级保留'],
   ...(process.platform === 'win32'
     ? [['test-source-install.js', [], '隔离目录验证 Windows 源码安装与错误处理']]
