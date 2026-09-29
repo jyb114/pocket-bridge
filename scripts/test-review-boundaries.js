@@ -15,7 +15,7 @@ async function check(name, run) {
   const observed = html.slice(html.indexOf('function statusKind('), html.indexOf('function noteActivity('));
   for (const status of ['inProgress', 'completed', 'interrupted', 'failed']) {
     await check('unloaded history is not live control: ' + status, () => {
-      const c = { state: { resumed: true }, t: s => s, setTask(kind, detail) { this.task = { kind, detail }; } };
+      const c = { state: { resumed: true }, t: s => s, clearTimeout() {}, setTask(kind, detail) { this.task = { kind, detail }; } };
       c.setTask = (kind, detail) => { c.task = { kind, detail }; };
       vm.createContext(c); vm.runInContext(observed, c);
       c.applyObservedStatus({ status: { type: 'notLoaded' } }, { id: 'old-turn', status });

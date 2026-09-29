@@ -1,12 +1,8 @@
 // DSH 移动端网关 — 隧道管理
 //
-// 为什么要单独一层：原来所有赌注都压在 Cloudflare 一家上 ——
-// 它不可达（网络限制、服务故障、被墙）时整个外网入口就没了，
-// 而使用者只会看到「手机连不上」，完全不知道原因。
-//
-// 这一层做的事：按优先级依次尝试各个隧道方案，前一个起不来就自动降级到
-// 下一个，把每一次尝试和失败原因都写进日志。全都不可用时明确报告，
-// 此时仍然保留内网入口 —— 不是「全挂」，而是「只剩一种方式」。
+// Only Cloudflare tunnels are started here. An unrecognized relay must never
+// become an automatic fallback: the gateway security boundary depends on
+// correctly classifying public requests before exposing local control routes.
 //
 // 只依赖 Node 内置模块。
 'use strict';
@@ -88,7 +84,7 @@ function log(msg) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 从一段文本里找出公网地址。不同提供方的输出格式不一样，所以按模式逐个试。
+ * 从 Cloudflare 日志里找出公网地址。
  */
 function extractPublicUrl(text) {
   const patterns = [
@@ -102,10 +98,7 @@ function extractPublicUrl(text) {
     //   日志写「✓ 隧道就绪」，status.json 存下这个垃圾地址，「地址变更通知」
     //   还把它推送给了手机（2026-09-22 14:42 真的发生过）。
     //   使用者点开那个链接到的是 Cloudflare 的 API，不是自己的电脑。
-    /https:\/\/(?!(?:api|www|dash|developers)\.)[a-z0-9-]+\.trycloudflare\.com/i,
-    /https:\/\/[a-z0-9-]+\.ngrok(?:-free)?\.app/i,
-    /https:\/\/[a-z0-9-]+\.ngrok\.io/i,
-    /https:\/\/[a-z0-9.-]+\.ts\.net/i
+    /https:\/\/(?!(?:api|www|dash|developers)\.)[a-z0-9-]+\.trycloudflare\.com/i
   ];
   for (const re of patterns) {
     const m = text.match(re);
@@ -148,25 +141,6 @@ async function startCloudflareQuick(exe, port) {
 
   const alive = () => { try { return process.kill(child.pid, 0); } catch (err) { return false; } };
   const { url, reason } = await waitForUrl(logFile, 60000, alive);
-  return { url, pid: child.pid, reason, logFile };
-}
-
-/** ngrok：需要账号和 authtoken，但地址可以是固定的。 */
-async function startNgrok(exe, port) {
-  const token = process.env.NGROK_AUTHTOKEN;
-  if (!token) return { url: null, reason: '缺少环境变量 NGROK_AUTHTOKEN' };
-
-  const logFile = path.join(LOG_DIR, 'ngrok.log');
-  try { fs.unlinkSync(logFile); } catch (err) { }
-
-  const child = spawn(exe, ['http', String(port), '--log', 'stdout', '--authtoken', token], {
-    detached: true,
-    stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
-  });
-  child.unref();
-
-  const alive = () => { try { return process.kill(child.pid, 0); } catch (err) { return false; } };
-  const { url, reason } = await waitForUrl(logFile, 45000, alive);
   return { url, pid: child.pid, reason, logFile };
 }
 
@@ -237,12 +211,6 @@ const PROVIDERS = [
     label: 'Cloudflare 快速隧道（免账号，地址每次变）',
     available: () => cfg.detectTunnelProviders().cloudflared,
     start: startCloudflareQuick
-  },
-  {
-    id: 'ngrok',
-    label: 'ngrok（需要 NGROK_AUTHTOKEN）',
-    available: () => cfg.detectTunnelProviders().ngrok,
-    start: startNgrok
   }
 ];
 
@@ -256,9 +224,7 @@ function listProviders() {
     const exe = p.available() || null;
     // 「装了 cloudflared」不等于「命名隧道能用」—— 后者还需要自有域名与隧道凭据。
     // 不区分这两件事，自检就会把没配好的方案报成就绪。
-    const ready = !!exe &&
-      (p.id !== 'ngrok' || !!process.env.NGROK_AUTHTOKEN) &&
-      (p.id !== 'cloudflare-named' || fixedReady);
+    const ready = !!exe && (p.id !== 'cloudflare-named' || fixedReady);
 
     return {
       id: p.id,
@@ -297,6 +263,15 @@ async function startTunnel(port, preference = 'auto') {
   const attempts = [];
   const mode = cfg.loadConfig().tunnelDomainMode || 'dynamic';
   log(`域名策略: ${mode === 'fixed' ? '固定地址（自有域名）' : '动态地址（每次更换）'}`);
+
+  // Previous releases offered ngrok as an automatic fallback. It does not
+  // supply Cloudflare's headers, and public requests were misclassified as
+  // loopback. Never launch it, even when explicitly selected in old config.
+  if (preference === 'ngrok') {
+    const reason = 'ngrok 已禁用：当前版本不支持安全的公网来源识别';
+    log(reason);
+    return { provider: null, url: null, attempts: [{ provider: 'ngrok', ok: false, reason }] };
+  }
 
   let candidates = candidatesForMode(mode);
   if (preference && preference !== 'auto') {

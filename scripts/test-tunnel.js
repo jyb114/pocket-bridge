@@ -1,9 +1,9 @@
 // DSH 移动端网关 — 隧道模块自测
 //
 // 验证三件事：
-//   · 能列出本机可用的隧道方案，并标出缺依赖的那些
-//   · 能从各家五花八门的输出里正确提取公网地址
-//   · 优先方案不可用时能降级，全不可用时给出明确结论而不是静默失败
+//   · 能列出安全启用的 Cloudflare 隧道方案
+//   · 只从 Cloudflare 输出提取公网地址，拒绝其他提供方地址
+//   · 不可用时给出明确结论而不是静默失败
 'use strict';
 
 const fs = require('fs');
@@ -18,13 +18,13 @@ const out = { ranAt: new Date().toISOString() };
     // ① 提供方清单
     out.providers = tunnel.listProviders();
 
-    // ② 各种输出格式的地址提取
+    // ② 只接受 Cloudflare 地址；曾支持的 ngrok 地址不能复活
     out.extract = {
       cloudflare: tunnel.extractPublicUrl(
         'INF |  Your quick Tunnel has been created! Visit it at https://tidy-lamp-dances-early.trycloudflare.com  |'
       ),
-      ngrokFree: tunnel.extractPublicUrl('msg="started tunnel" url=https://1a2b-3c4d.ngrok-free.app'),
-      ngrokIo: tunnel.extractPublicUrl('Forwarding  https://abc123.ngrok.io -> http://localhost:8080'),
+      ngrokFreeRejected: tunnel.extractPublicUrl('msg="started tunnel" url=https://1a2b-3c4d.ngrok-free.app') === null,
+      ngrokIoRejected: tunnel.extractPublicUrl('Forwarding  https://abc123.ngrok.io -> http://localhost:8080') === null,
       nothing: tunnel.extractPublicUrl('this line has no url in it')
     };
 

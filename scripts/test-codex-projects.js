@@ -44,7 +44,7 @@ function loadList(threads, lang) {
   const store = {};
   const box = fakeEl('div');
   const sandbox = {
-    state: { threads: threads, filter: '' },
+    state: { threads: threads, searchThreads: [], searchPending: false, filter: '' },
     // getElementById('thlist') 要给回我们的假盒子 —— 页面里重画走的正是这条路
     document: { createElement: fakeEl, getElementById: (id) => (id === 'thlist' ? box : null) },
     localStorage: {
@@ -58,7 +58,7 @@ function loadList(threads, lang) {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  const names = ['fillThreadList', 'threadRow', 'readFolded', 'writeFolded', 'isUnread', 'relTime', 'baseName', 'esc'];
+  const names = ['appendUniqueThreads', 'fillThreadList', 'threadRow', 'readFolded', 'writeFolded', 'isUnread', 'timestampMs', 'relTime', 'baseName', 'esc'];
   for (const n of names) {
     const src = extractFunction(html, n);
     assert.ok(src, `codex.html 里找不到 ${n}() —— 它被改名或删了吗？`);
@@ -139,6 +139,18 @@ console.log('\n[搜索] 搜的时候必须全部展开（藏在合着的组里 =
   else ok('不匹配的项目不显示');
 }
 
+console.log('\n[跨页搜索] 已加载预览与服务端标题结果合并，重复会话只出现一次\n');
+{
+  const { box, fill, sandbox } = loadList(SAMPLE);
+  sandbox.state.searchThreads = [
+    SAMPLE[0],
+    { id: 'remote1', name: 'alpha 标题命中', cwd: 'D:\\proj\\remote', updatedAt: Date.parse('2026-09-25T10:00:00Z') }
+  ];
+  fill('alpha');
+  if (rows(box) === 2) ok('服务端标题匹配结果会显示，已加载的同一会话不会重复');
+  else fail(`搜索合并应有 2 条会话，实际 ${rows(box)}`);
+}
+
 console.log('\n[全部折叠 / 全部展开]\n');
 {
   const { box, fill } = loadList(SAMPLE);
@@ -184,6 +196,37 @@ console.log('\n[英文界面] 组名是项目名，界面词得跟着语言走\n
   const txt = box.children.map((c) => c.innerHTML || c.textContent).join(' ');
   if (/没有项目/.test(txt)) fail('英文界面下还出现了中文的「（没有项目）」');
   else ok('英文界面：无项目的那组显示 (no project)');
+}
+
+console.log('\n[新会话与时间格式] 不使用隐含默认目录\n');
+{
+  const starts = [];
+  let pickerOpens = 0;
+  const box = {
+    state: {}, t: (s) => s,
+    openNewThreadPicker: () => { pickerOpens++; },
+    setConn() {},
+    call: (method, params) => { starts.push({ method, params }); return new Promise(() => {}); },
+    Promise, Number, Date, Object, Math
+  };
+  vm.createContext(box);
+  for (const n of ['absoluteProjectPath', 'newThread', 'timestampMs', 'collectProjects']) {
+    vm.runInContext(extractFunction(html, n), box);
+  }
+  box.newThread();
+  box.newThread({ type: 'click' });
+  if (pickerOpens === 2 && starts.length === 0) ok('未选项目或误传点击事件时只打开选择器，不在默认目录创建');
+  else fail('未选项目时仍向服务端发起了创建');
+  box.newThread('D:\\work\\bridge');
+  if (starts.length === 1 && starts[0].method === 'thread/start' && starts[0].params.cwd === 'D:\\work\\bridge')
+    ok('明确选定 D 盘项目后才创建，路径原样传给服务端');
+  else fail('项目路径未正确传递');
+  const projects = box.collectProjects([
+    { cwd: 'D:\\older', updatedAt: '2026-09-20T12:00:00Z' },
+    { cwd: 'D:\\newer', updatedAt: '2026-09-29T12:00:00Z' }
+  ]);
+  if (projects[0].path === 'D:\\newer') ok('ISO 时间戳的最近项目排在前面');
+  else fail('ISO 时间戳被当成无效时间，项目排序错误');
 }
 
 console.log(bad ? `\n${bad} 处问题\n` : '\n全部通过\n');

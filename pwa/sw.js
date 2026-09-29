@@ -20,6 +20,29 @@ const BODY_CACHE = 'dsh-code-body-v1';
 const PIN_KEY = '/__dsh-code-pin';
 const KEY_EPOCH_CACHE = 'dsh-code-key-epoch-v1';
 const KEY_EPOCH_KEY = '/__dsh-access-key-epoch';
+// DSH 自己的静态模块（构建产物 + 插件）单独一个缓存桶。
+// 它们不属于「我们的代码」，不该和指纹缓存混在一起。
+const DSH_STATIC_CACHE = 'dsh-static-modules-v1';
+const LITE_PIN_REQUIRED = ['/e2ee.js', '/i18n.js', '/dsh-lite-lang.js',
+  '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js',
+  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js'];
+const PIN_HASH = /^[a-f0-9]{64}$/i;
+
+function isCacheableDshStaticModule(url) {
+  const pathname = url.pathname;
+  if (pathname.indexOf('/assets/') === 0) {
+    // Keep the same content-hash boundary as the gateway's cache headers.
+    const match = pathname.match(/-([A-Za-z0-9_-]{8,})\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|gif|svg|webp|ico|map)$/i);
+    return !!(match && /[A-Z0-9]/.test(match[1]));
+  }
+  if (pathname.indexOf('/plugins/') === 0) {
+    // HMR events are a stream, never a static module. Unversioned plugin URLs
+    // must go to the network so an upgraded DSH cannot reuse old code.
+    if (pathname === '/plugins/events' || pathname.indexOf('/plugins/events/') === 0) return false;
+    return /[?&]rev=[0-9a-f]{8,}(?:&|$)/i.test(url.search);
+  }
+  return false;
+}
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -53,21 +76,69 @@ async function sha256Hex(buf) {
     .map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function readCachedBody(url) {
+function bodyCacheKey(url, hash) {
+  // The old worker stored bodies by pathname alone. A request from that worker
+  // may finish after an update, so a path-only cache can mix two releases.
+  return url + '?__dsh_code_sha256=' + hash;
+}
+
+async function readCachedBody(url, hash) {
+  if (!PIN_HASH.test(hash || '')) return null;
   try {
     const c = await caches.open(BODY_CACHE);
-    const r = await c.match(url);
-    return r || null;
+    const key = bodyCacheKey(url, hash);
+    const pinned = await c.match(key);
+    if (pinned) {
+      if (await sha256Hex(await pinned.clone().arrayBuffer()) === hash) return pinned;
+      await c.delete(key);
+    }
+    // One-time migration for verified bodies left by the previous worker.
+    // Never trust the path-only entry without hashing it against this pin.
+    const legacy = await c.match(url);
+    if (!legacy || await sha256Hex(await legacy.clone().arrayBuffer()) !== hash) return null;
+    await c.put(key, legacy.clone());
+    return legacy;
   } catch (err) { return null; }
 }
 
-async function writeCachedBody(url, body) {
+async function writeCachedBody(url, hash, body) {
   try {
     const c = await caches.open(BODY_CACHE);
-    await c.put(url, new Response(body, {
+    await c.put(bodyCacheKey(url, hash), new Response(body, {
       headers: { 'content-type': 'application/javascript; charset=utf-8' }
     }));
   } catch (err) { /* 存不下不影响本次 */ }
+}
+
+async function stageVerifiedPin(manifest) {
+  const files = manifest && manifest.files;
+  if (!files || typeof files !== 'object' || Array.isArray(files) ||
+      LITE_PIN_REQUIRED.some((path) => !PIN_HASH.test(files[path] || ''))) {
+    throw new Error('code manifest is incomplete');
+  }
+  const paths = Object.keys(files);
+  if (!paths.length || paths.length > 64) throw new Error('code manifest has too many entries');
+  const staged = [];
+  for (const path of paths) {
+    const hash = files[path];
+    if (!/^\/[a-z0-9][a-z0-9-]*\.js$/i.test(path) || !PIN_HASH.test(hash || ''))
+      throw new Error('code manifest contains an invalid script');
+    // A worker's own fetch bypasses its fetch event. Avoid the browser HTTP
+    // cache so the bytes we hash are the same release the gateway now serves.
+    const response = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
+    if (!response.ok) throw new Error('updated script unavailable');
+    const body = await response.arrayBuffer();
+    if (await sha256Hex(body) !== hash) throw new Error('updated script hash mismatch');
+    staged.push({ path, hash, body });
+  }
+  // Write every new body under its hash before changing the active pin. If a
+  // write fails, the old pin and its old-hash cache entries remain untouched.
+  const cache = await caches.open(BODY_CACHE);
+  for (const item of staged) {
+    await cache.put(bodyCacheKey(item.path, item.hash), new Response(item.body, {
+      headers: { 'content-type': 'application/javascript; charset=utf-8' }
+    }));
+  }
 }
 
 /**
@@ -109,6 +180,57 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (event.request.method !== 'GET') return;
 
+  // ── DSH 自己的静态模块：缓存优先 ──────────────────────────────────────────
+  //
+  // 实测首屏需要 65 个插件模块和 4 个构建资源，gzip 合计 5,973,985 B。
+  // 首次访问或隧道域名变化时仍须下载；同源的后续访问可复用成功的响应。
+  // 模块请求失败可能阻止页面完成加载，但不是所有转圈的唯一原因。
+  //
+  // Cache Storage 让同源后续访问能复用这些资源；浏览器存储清理、容量压力
+  // 或域名变化仍可能使缓存失效，不能把它视作永久副本。
+  //
+  // 只缓存可识别的内容哈希 URL：
+  //     /assets/index-Q6zc2uHV.js
+  //     /plugins/??@deepseek-ai/xxx/client.js&rev=dc9411e52426
+  // 正常构建升级会换 URL；未带版本的资源仍走网络。DSH 模块不在桥自身
+  // 的代码指纹名单里，故静态缓存与桥脚本的指纹缓存分桶。
+  if (isCacheableDshStaticModule(url)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(DSH_STATIC_CACHE);
+      const hit = await cache.match(event.request);
+      if (hit) return hit;
+
+      // 缓存未命中时，对临时网络失败进行有限重试。
+      //
+      //   ES 模块链中的一次 5xx 或连接中断就可能令这次加载失败；Service Worker
+      //   在这些 GET 上重试。403 等 4xx 属于明确拒绝，不能靠重试解决。
+      //
+      //   退避 300ms → 900ms → 2000ms，加上首次一共试 4 次。隧道单次抖动
+      //   可能恢复；只对带版本的静态 GET 使用这个退避序列。
+      let res = null;
+      let lastErr = null;
+      for (const waitMs of [0, 300, 900, 2000]) {
+        if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
+        try {
+          res = await fetch(event.request);
+          // 5xx 是上游/隧道侧的临时故障，值得重试；4xx 是确定的答复，不要重试
+          if (res && res.ok) break;
+          if (res && res.status < 500) break;
+        } catch (err) {
+          lastErr = err;      // 网络层失败（隧道被掐断）—— 继续重试
+          res = null;
+        }
+      }
+      if (!res) throw lastErr || new Error('module fetch failed');
+
+      if (res.ok) {
+        try { await cache.put(event.request, res.clone()); } catch (err) { /* 存不下不影响本次 */ }
+      }
+      return res;
+    })());
+    return;
+  }
+
   event.respondWith((async () => {
     const pin = await readPin();
     const want = pin && pin.files && pin.files[url.pathname];
@@ -127,18 +249,21 @@ self.addEventListener('fetch', (event) => {
       res = await fetch(event.request);
     } catch (err) {
       // 网络不通就用缓存 —— 顺带让「在外面断网」也能用
-      const cached = await readCachedBody(url.pathname);
+      const cached = await readCachedBody(url.pathname, want);
       if (cached) return cached;
       throw err;
     }
     await acceptAccessKeyEpoch(res);
-    if (!res.ok) return res;
+    if (!res.ok) {
+      const cached = await readCachedBody(url.pathname, want);
+      return cached || res;
+    }
 
     const body = await res.clone().arrayBuffer();
     const got = await sha256Hex(body);
 
     if (got === want) {
-      await writeCachedBody(url.pathname, body);     // 指纹对，更新缓存
+      await writeCachedBody(url.pathname, want, body);     // 指纹对，更新缓存
       return res;
     }
 
@@ -165,7 +290,7 @@ self.addEventListener('fetch', (event) => {
       } catch (e) { }
     };
 
-    const cached = await readCachedBody(url.pathname);
+    const cached = await readCachedBody(url.pathname, want);
     if (cached) {
       console.warn('[DSH] 代码指纹对不上，改用缓存版本：' + url.pathname);
       await notify();
@@ -256,6 +381,16 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('message', (event) => {
   const data = event.data || {};
 
+  // A page may still be controlled by an older worker after the gateway has
+  // shipped a new update UI. Prove this worker understands staged repins
+  // before the page sends a manifest; never fall back to an unsafe old repin.
+  if (data.type === 'dsh-verified-update-capability') {
+    event.source && event.source.postMessage({
+      type: 'dsh-verified-update-ready', requestId: data.requestId
+    });
+    return;
+  }
+
   // 页面侧让 SW 自己弹一条本地通知，用于验证链路是否打通
   if (data.type === 'dsh-test-notification') {
     self.registration.showNotification(data.title || 'DSH 测试通知', {
@@ -299,19 +434,28 @@ self.addEventListener('message', (event) => {
   //   · 只有页面在「使用者点了『我刚更新过，信任新版本』」之后发来的才认。
   // 攻击者要是能改页面代码，他本来就能干任何事 —— 但那种情况下
   // 这一层已经不是防线了（它防的是**局部**改动，不是整个页面被重写）。
-  if (data.type === 'dsh-repin-code' && data.manifest && data.manifest.files) {
+  if ((data.type === 'dsh-repin-code' || data.type === 'dsh-repin-code-verified') &&
+      data.manifest && data.manifest.files) {
     event.waitUntil((async () => {
       const before = await readPin();
-      await writePin(data.manifest);
-      const after = await readPin();
-      // 换了指纹，旧缓存里的代码就跟不上了 —— 清掉，让它按新的重新取一遍
-      try { await clearCachedBodies(); } catch (e) { }
-      event.source && event.source.postMessage({
-        type: 'dsh-repin-result', ok: !!after,
-        wasPinned: !!before,
-        before: before ? Object.keys(before.files || {}).length : 0,
-        files: after ? Object.keys(after.files || {}).length : 0
-      });
+      const resultType = data.type === 'dsh-repin-code-verified' ?
+        'dsh-repin-verified-result' : 'dsh-repin-result';
+      try {
+        await stageVerifiedPin(data.manifest);
+        await writePin(data.manifest);
+        event.source && event.source.postMessage({
+          type: resultType, requestId: data.requestId, ok: true,
+          wasPinned: !!before,
+          before: before ? Object.keys(before.files || {}).length : 0,
+          files: Object.keys(data.manifest.files).length
+        });
+      } catch (err) {
+        // Failed staging must not install a pin whose scripts are unavailable.
+        event.source && event.source.postMessage({
+          type: resultType, requestId: data.requestId, ok: false,
+          reason: '新版本文件未能完整下载并验证；旧版本仍可用。'
+        });
+      }
     })());
     return;
   }
@@ -324,7 +468,11 @@ self.addEventListener('message', (event) => {
         type: 'dsh-pin-status-result',
         pinned: !!pin,
         at: pin ? pin.at : null,
-        files: pin ? Object.keys(pin.files || {}).length : 0
+        files: pin ? Object.keys(pin.files || {}).length : 0,
+        // A page can warn about newly added scripts without silently
+        // replacing a user's existing pin. These names are public assets;
+        // the stored hashes and update decision stay in the Service Worker.
+        paths: pin ? Object.keys(pin.files || {}) : []
       });
     })());
   }

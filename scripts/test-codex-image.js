@@ -36,10 +36,21 @@ console.log('\n[1] 静态：图片必须走加密那条路');
 {
   const fn = extractFunction(SRC, 'buildImageView');
   assert.ok(fn && fn.length > 200, '抠不出 buildImageView');
-  ok('用 privateFetch 取图（不是裸 <img src>）', /privateFetch\(fileUrl\(p, 900\)/.test(fn));
-  ok('有钥匙时不留明文 src', /var secret = window\.__dshE2eeSecret/.test(fn));
+  ok('用文件请求取图（不是裸 <img src>）', /fileRequest\(p, 900\)/.test(fn));
+  // ★ 钥匙必须是「**调用时现取**」，不能在渲染这条消息时存成一个快照。
+  //
+  //   2026-09-29 改（原来这条断言要求源码里出现 `var secret = window.__dshE2eeSecret`，
+  //   那是在锁定实现细节，而不是锁住意图）：
+  //
+  //   存快照的写法在页面早期（密钥还没解析出来 / 这一页渲染得早）会存到空值，
+  //   于是这张图**永远**走明文那条路；而网关对内容通道是「拒绝明文、不降级」的 ——
+  //   稳定 403，界面上就是「这张图没取回来」。使用者报的正是这个。
+  //   所以这里反过来断言：**不许**再出现那种快照写法。
+  ok('不把密钥存成渲染期的快照（那是 403 的来源）',
+    !/var secret = window\.__dshE2eeSecret/.test(fn));
+  ok('钥匙有「现取」的入口', /function e2eeSecret|secretFromUrl\(|secretSource\(\)/.test(fn));
   ok('失败给「重试」而不是一句死话', /imgretry/.test(fn));
-  ok('点开原图也走 privateFetch', /function openFull[\s\S]{0,400}privateFetch\(fileUrl\(p\)/.test(fn));
+  ok('点开原图也走文件请求', /function openFull[\s\S]{0,400}fileRequest\(p\)/.test(fn));
 }
 
 /** 只做 buildImageView 用到的那几件事的假 DOM */
@@ -85,6 +96,7 @@ function run(opts) {
     document: { createElement: mkEl, body: mkEl('body') },
     window: {
       __dshE2eeSecret: opts.secret ? 'S'.repeat(24) : null,
+      location: { hostname: opts.remote ? 'relay.example.test' : '192.168.1.3' },
       open: (...args) => { opened.push(args); return {}; }
     },
     fileUrl: (p, w) => '/codex/file?path=' + encodeURIComponent(p) + (w ? '&w=' + w : ''),
@@ -104,16 +116,20 @@ function run(opts) {
     },
     imageBlobRecords: [],
     imageBlobObserver: null,
-    privateFetch: (url) => {
-      requested.push(url);
+    privateFetch: (url, init) => {
+      requested.push({ url, init });
       if (opts.defer) return new Promise((resolve) => { resolveFetch = resolve; });
       if (opts.fail) return Promise.resolve({ ok: false, status: 403 });
-      return Promise.resolve({ ok: true, blob: () => Promise.resolve({ size: 10 }) });
+      return Promise.resolve({ ok: true,
+        headers: { get: (name) => name === 'x-dsh-e2ee-decrypted' && opts.secret && !opts.unmarked ? '1' : null },
+        blob: () => Promise.resolve({ size: 10 }) });
     },
     Promise, Object, String, RegExp, Number, Array, JSON, Error
   };
   box.window.DshE2EE = { secretSource: () => (opts.secret ? 'stored' : null) };
   vm.createContext(box);
+  vm.runInContext(extractFunction(SRC, 'plainLocalOrigin'), box);
+  vm.runInContext(extractFunction(SRC, 'fileRequest'), box);
   vm.runInContext(extractFunction(SRC, 'releaseImageBlob'), box);
   vm.runInContext(extractFunction(SRC, 'watchImageBlob'), box);
   vm.runInContext(extractFunction(SRC, 'buildImageView'), box);
@@ -130,8 +146,11 @@ console.log('\n[2] 行为：谁在什么时候被请求');
   ok('有钥匙时：HTML 里没有明文 src（否则那次请求必被网关拒）',
     !/src="/.test(enc.el.innerHTML), enc.el.innerHTML.slice(0, 80));
   await tick();
-  ok('有钥匙时：请求走 privateFetch（/codex/file?path=…）',
-    enc.requested.length === 1 && /^\/codex\/file\?path=/.test(enc.requested[0]),
+  ok('有钥匙时：文件路径只在加密 POST 请求体内，不在 URL 中',
+    enc.requested.length === 1 && enc.requested[0].url === '/codex/file' &&
+    enc.requested[0].init.method === 'POST' &&
+    JSON.parse(enc.requested[0].init.body).path === 'C:/x/y.png' &&
+    JSON.parse(enc.requested[0].init.body).w === 900,
     JSON.stringify(enc.requested));
   {
     const wrap = enc.el.querySelector('.imgwrap');
@@ -181,15 +200,67 @@ console.log('\n[2] 行为：谁在什么时候被请求');
   ok('请求回来前图片卡片已移除时，不创建 blob 地址',
     removedBeforeFetch.created.length === 0, JSON.stringify(removedBeforeFetch.created));
 
-  // 没钥匙（内网明文模式）：照旧直接用地址，不能因为没钥匙就不显示
+  // 没钥匙（内网明文模式）：通过 fetch/blob 使用旧 GET，绝不直接导航到路径 URL。
   const plain = run({ secret: false });
+  await tick();
   {
     const wrap = plain.el.querySelector('.imgwrap');
-    const html = wrap ? wrap.innerHTML : '';
-    ok('没钥匙时：直接用明文地址（内网明文模式照旧能用）',
-      /<img[^>]+src="\/codex\/file\?path=/.test(html), html.slice(0, 100));
-    ok('没钥匙时：不去调 privateFetch（本来就没有密可加）', plain.requested.length === 0);
+    const img = wrap && wrap.querySelector('img');
+    ok('没钥匙的内网模式照旧能显示图片，但用本地 blob 而非直接 URL',
+      img && /^blob:/.test(img.src) && !/src="\/codex\/file/.test(wrap.innerHTML));
+    ok('没钥匙的内网模式只请求本地旧 GET',
+      plain.requested.length === 1 && /^\/codex\/file\?path=/.test(plain.requested[0].url));
   }
+
+  const remoteWithoutKey = run({ secret: false, remote: true });
+  const remoteHtml = remoteWithoutKey.el.querySelector('.imgwrap').innerHTML;
+  ok('隧道地址缺密钥时不发出含电脑路径的图片请求',
+    !/<img|href="\/codex\/file/.test(remoteHtml) && remoteWithoutKey.requested.length === 0,
+    remoteHtml.slice(0, 120));
+  ok('隧道地址缺密钥时明确提示重新打开完整地址', /#k=/.test(remoteHtml));
+
+  const unmarked = run({ secret: true, unmarked: true });
+  await tick();
+  const unmarkedHtml = unmarked.el.querySelector('.imgwrap').innerHTML;
+  ok('密钥存在但文件响应未获解密证明时拒绝渲染',
+    unmarked.created.length === 0 && !/<img/.test(unmarkedHtml) && /加密校验/.test(unmarkedHtml),
+    unmarkedHtml.slice(0, 140));
+
+  const cardBox = { document: { createElement: mkEl }, fileUrl: () => '/codex/file',
+    fileIcon: () => '📄', shortPath: (p) => p.split('/').pop(),
+    esc: (x) => String(x), t: (x) => x };
+  vm.createContext(cardBox);
+  vm.runInContext(extractFunction(SRC, 'buildFileCard'), cardBox);
+  const card = cardBox.buildFileCard('D:/Project/private report.md');
+  ok('文件变更卡走加密下载按钮，不再直接打开明文链接',
+    card.tagName === 'BUTTON' && card.attrs['data-filecite'] === 'D:/Project/private report.md' && !card.href);
+
+  const sent = [];
+  const guarded = {
+    window: { location: { hostname: 'relay.example.test' }, __dshE2eeSecret: null },
+    fetch: (...args) => { sent.push(args); return Promise.resolve({ ok: true }); },
+    t: (x) => x, Promise, Number, String, RegExp, Error, Object
+  };
+  vm.createContext(guarded);
+  vm.runInContext(extractFunction(SRC, 'plainLocalOrigin'), guarded);
+  vm.runInContext(extractFunction(SRC, 'privateFetch'), guarded);
+  await guarded.privateFetch('/codex/queue', { method: 'POST', body: 'secret message' }).then(
+    () => ok('缺密钥的隧道消息绝不降级为明文', false),
+    () => ok('缺密钥的隧道消息绝不降级为明文', sent.length === 0));
+  guarded.window.__dshE2eeSecret = 'S'.repeat(24);
+  await guarded.privateFetch('/codex/queue', { method: 'POST', body: 'secret message' }).then(
+    () => ok('加密模块缺失时绝不明文发送', false),
+    () => ok('加密模块缺失时绝不明文发送', sent.length === 0));
+  let sockets = 0;
+  const socketGuard = {
+    window: { __dshE2eeSecret: null }, plainLocalOrigin: () => false,
+    setConn() {}, toast() {}, t: (x) => x,
+    WebSocket: function () { sockets++; }, location: { protocol: 'https:', host: 'relay.example.test' }
+  };
+  vm.createContext(socketGuard);
+  vm.runInContext(extractFunction(SRC, 'connect'), socketGuard);
+  socketGuard.connect();
+  ok('缺密钥的隧道页不建立明文 Codex WebSocket', sockets === 0);
 
   // 取不回来：给「重试」，并且不许把「还没验证完」说成「图坏了」
   const bad = run({ secret: true, fail: true });

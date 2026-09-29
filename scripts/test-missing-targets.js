@@ -60,6 +60,7 @@ function environment(options = {}) {
     },
     ensureDshRunning: async () => { starts++; return true; },
     buildUpstreamHeaders: (req) => req.headers,
+    dshLazyImageStore: { originalModuleUrl: () => null },
     markActivity() {}, log() {},
     http: { request: () => upstream }
   };
@@ -127,7 +128,7 @@ function browserRender(html, list) {
   });
   for (const lang of ['zh', 'en', 'es']) {
     const h = environment({ lang }); const res = response();
-    h.box.proxyRequest(h.req, res);
+    h.box.proxyRequest(h.req, res, true);
     h.upstream.emit('error', Object.assign(new Error('missing'), { code: 'ECONNREFUSED' }));
     check('missing DSH gives a stable localized page: ' + lang, () => {
       assert.equal(res.status, 503);
@@ -144,7 +145,7 @@ function browserRender(html, list) {
   }
   check('installed DSH still auto-starts with the existing refresh page', () => {
     const h = environment({ dshInstalled: true }); const res = response();
-    h.box.proxyRequest(h.req, res);
+    h.box.proxyRequest(h.req, res, true);
     h.upstream.emit('error', Object.assign(new Error('stopped'), { code: 'ECONNREFUSED' }));
     assert.equal(h.counts().starts, 1);
     assert.equal(res.status, 503);
@@ -152,7 +153,7 @@ function browserRender(html, list) {
   });
   check('DSH port changes still retry the same URL before missing-install handling', () => {
     const h = environment({ movedPort: 58348 }); const res = response();
-    h.box.proxyRequest(h.req, res);
+    h.box.proxyRequest(h.req, res, true);
     h.upstream.emit('error', Object.assign(new Error('moved'), { code: 'ECONNREFUSED' }));
     assert.equal(res.status, 307); assert.equal(res.headers.location, '/');
     assert.equal(h.counts().starts, 0);
@@ -183,6 +184,17 @@ function browserRender(html, list) {
     const open = box.children[0].children[0].children[0];
     assert.equal(open.href, '/k/test-access?target=codex#k=test-fragment');
   });
+  {
+    const h = environment(); const res = response();
+    h.box.serveCodexPage(h.req, res); await flush();
+    check('missing Codex leaves the page usable and offers installed DSH', () => {
+      assert.equal(h.counts().codexReads, 0);
+      assert.ok(res.body.includes('Codex was not found'));
+      const box = browserRender(res.body, [target('codex', false, false), target('dsh', true, true)]);
+      assert.equal(box.children.length, 1);
+      assert.equal(box.children[0].children[0].children[0].href, '/k/test-access?target=dsh#k=test-fragment');
+    });
+  }
   // Check the public entry points use the functions tested above, not a dead helper.
   check('actual routes are wired to the availability checks', () => {
     assert.match(src, /if \(u\.pathname === '\/codex' \|\| u\.pathname === '\/codex\/'\) \{\s*serveCodexPage\(req, res\)/);

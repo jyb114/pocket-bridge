@@ -110,7 +110,9 @@ function runRenderEntries(targets, opts) {
     console
   };
   sandbox.window = sandbox;
+  sandbox.URL = URL;
   vm.createContext(sandbox);
+  vm.runInContext(extractFunction(html, 'dshLiteAddress'), sandbox, { filename: 'dshLiteAddress' });
   vm.runInContext(extractFunction(html, 'renderEntries'), sandbox, { filename: 'renderEntries' });
   sandbox.renderEntries(entries);
   const find = (id) => box.children.find((c) => c.id === id) || null;

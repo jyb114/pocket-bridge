@@ -42,6 +42,12 @@ const { pick, fill } = require('./server-lang.js');
 const TEXT = {
   zh: {
     dshRunning: '正在运行（端口 {port}）',
+    dshRunningVersion: '{edition} {version}，正在运行（端口 {port}）',
+    dshIpc: '此 DSH 桌面版本仅提供内部连接；请运行 DSH Web 版后连接桥。Web 版不共享桌面中正在执行的任务。',
+    dshWebNotOurs: '此 DSH Web 版不是桥启动的，请在启动它的终端中停止',
+    dshUnknownVersion: '版本未知',
+    dshDesktopEdition: '桌面版',
+    dshWebEdition: 'Web 版',
     dshInstalled: '已安装，当前没在运行',
     dshMissing: '没找到 DSH',
     dshNoExe: '没找到 DSH 装在哪，请在 config.json 里填 dshExecutable',
@@ -76,6 +82,12 @@ const TEXT = {
   },
   en: {
     dshRunning: 'Running (port {port})',
+    dshRunningVersion: '{edition} {version}, running (port {port})',
+    dshIpc: 'This DSH desktop build only exposes an internal connection. Run DSH Web to connect the bridge; it does not share tasks currently running in the desktop app.',
+    dshWebNotOurs: 'This DSH Web process was not started by the bridge. Stop it in its original terminal.',
+    dshUnknownVersion: 'unknown version',
+    dshDesktopEdition: 'Desktop',
+    dshWebEdition: 'Web',
     dshInstalled: 'Installed, not running right now',
     dshMissing: 'DSH not found',
     dshNoExe: 'Could not find where DSH is installed — set dshExecutable in config.json',
@@ -110,6 +122,12 @@ const TEXT = {
   },
   es: {
     dshRunning: 'En marcha (puerto {port})',
+    dshRunningVersion: '{edition} {version}, en marcha (puerto {port})',
+    dshIpc: 'Esta versión de escritorio de DSH solo ofrece una conexión interna. Ejecuta DSH Web para conectar el puente; no comparte las tareas activas de la aplicación de escritorio.',
+    dshWebNotOurs: 'El puente no inició este proceso DSH Web. Deténlo en su terminal original.',
+    dshUnknownVersion: 'versión desconocida',
+    dshDesktopEdition: 'Escritorio',
+    dshWebEdition: 'Web',
     dshInstalled: 'Instalado, ahora mismo no está en marcha',
     dshMissing: 'No se encontró DSH',
     dshNoExe: 'No se encontró dónde está instalado DSH: rellena dshExecutable en config.json',
@@ -214,56 +232,64 @@ const dsh = {
   ui: '/',                       // 界面就在根路径（反代过去）
 
   detect() {
-    const found = cfg.findDshExecutable();
-    return { installed: !!found.path, exe: found.path, source: found.source };
+    const detected = require('./dsh-runtime.js').detectInstallation(cfg.loadConfig());
+    return { ...detected, exe: detected.launch ? detected.launch.exe : null,
+      canStart: Boolean(detected.launch) };
   },
 
   async status(lang) {
+    const runtimeApi = require('./dsh-runtime.js');
+    const runtime = await runtimeApi.resolveRuntime(cfg.loadConfig());
     const d = dsh.detect();
-    // DSH 每次启动换端口，所以要问启动器/日志
-    const { discoverDshPort } = require('./discover.js');
-    const port = await discoverDshPort();
-    const running = port ? await portOpen(port) : false;
+    const running = Boolean(runtime.running && runtime.port);
+    const ipcOnly = !running && d.profile === 'desktop-ipc';
+    const key = running ? 'dshRunningVersion' : ipcOnly ? 'dshIpc'
+      : d.installed ? 'dshInstalled' : 'dshMissing';
+    const noteArgs = running ? { port: runtime.port,
+      version: runtime.version || T(lang).dshUnknownVersion,
+      edition: runtime.kind === 'cli' ? T(lang).dshWebEdition : T(lang).dshDesktopEdition } : {};
     return {
-      installed: d.installed,
-      running,
-      port: running ? port : null,
-      exe: d.exe,
-      source: d.source,
-      note: running ? fill(T(lang).dshRunning, { port })
-        : (d.installed ? T(lang).dshInstalled : T(lang).dshMissing),
-      // key + 实参也一并给出来：后台缓存那份拿不到语言，要靠这两个在响应时重组
-      noteKey: running ? 'dshRunning' : (d.installed ? 'dshInstalled' : 'dshMissing'),
-      noteArgs: running ? { port } : {}
+      installed: Boolean(runtime.installed || d.installed), running,
+      port: running ? runtime.port : null, exe: d.exe,
+      source: runtime.source || d.source, canStart: d.canStart,
+      version: runtime.version || d.version || null, kind: runtime.kind || d.kind,
+      profile: runtime.profile || d.profile, runtime: runtimeApi.serializeRuntime(runtime),
+      note: fill(T(lang)[key], noteArgs), noteKey: key, noteArgs
     };
   },
 
-  /**
-   * 启动 DSH。用 explorer.exe 转一道手是为了让它脱离本进程树 ——
-   * 否则网关一退出，DSH 也跟着没了。
-   */
   async start(lang) {
-    const d = dsh.detect();
-    if (!d.installed) return { ok: false, message: T(lang).dshNoExe };
-
+    const runtimeApi = require('./dsh-runtime.js');
     const st = await dsh.status(lang);
     if (st.running) return { ok: true, message: T(lang).dshAlready, already: true };
-
+    const d = dsh.detect();
+    if (!d.launch) return { ok: false, message: d.profile === 'desktop-ipc' ? T(lang).dshIpc : T(lang).dshNoExe };
+    const launch = d.launch;
     try {
-      if (process.platform === 'win32') {
-        spawn('explorer.exe', [d.exe], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      if (launch.kind === 'cli') {
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+        const fd = fs.openSync(path.join(LOG_DIR, 'dsh-web.log'), 'a');
+        let child;
+        try { child = spawn(launch.exe, launch.args || [], {
+          cwd: launch.cwd || BASE, detached: true, stdio: ['ignore', fd, fd], windowsHide: true
+        }); } finally { fs.closeSync(fd); }
+        child.on('error', (err) => log(`DSH Web start failed: ${err.message}`));
+        if (child.pid) writePid('dsh-web', child.pid);
+        child.unref();
+      } else if (process.platform === 'win32') {
+        spawn('explorer.exe', [launch.exe], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
       } else if (process.platform === 'darwin') {
-        spawn('open', [d.exe], { detached: true, stdio: 'ignore' }).unref();
+        spawn('open', [launch.exe], { detached: true, stdio: 'ignore' }).unref();
       } else {
-        spawn(d.exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+        spawn(launch.exe, launch.args || [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
       }
     } catch (err) {
       return { ok: false, message: fill(T(lang).startFail, { msg: err.message }) };
     }
-
-    // 等它就绪（首次启动可能要十几秒）
+    runtimeApi.invalidateRuntime();
     for (let i = 0; i < 40; i++) {
       await sleep(1500);
+      runtimeApi.invalidateRuntime();
       const s = await dsh.status(lang);
       if (s.running) return { ok: true, message: fill(T(lang).dshStarted, { port: s.port }), port: s.port };
     }
@@ -271,6 +297,21 @@ const dsh = {
   },
 
   async stop(lang) {
+    const runtimeApi = require('./dsh-runtime.js');
+    const st = await runtimeApi.resolveRuntime(cfg.loadConfig());
+    if ((st.kind || dsh.detect().kind) === 'cli') {
+      if (!st.running) return { ok: false, message: T(lang).dshNoRunning };
+      const pid = readPid('dsh-web');
+      const ours = pid && (!st.pid || st.pid === pid) && runtimeApi.scanProcesses().some(p => Number(p.pid) === pid && p.kind === 'cli');
+      if (!ours) return { ok: false, message: T(lang).dshWebNotOurs };
+      try {
+        if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: 8000, windowsHide: true });
+        else process.kill(pid, 'SIGTERM');
+        clearPid('dsh-web'); runtimeApi.invalidateRuntime();
+        return { ok: true, message: T(lang).dshStopped };
+      } catch (_) { return { ok: false, message: T(lang).dshNoRunning }; }
+    }
+    if (st.running && st.kind !== 'desktop') return { ok: false, message: T(lang).dshWebNotOurs };
     // 只关我们自己启动的那些 DSH 进程时最容易出错（可能把用户手动开的也关掉），
     // 所以这里按进程名找，并且明确告诉使用者「这会关掉 DSH 本体」。
     let n = 0;
@@ -679,7 +720,14 @@ function localize(list, lang) {
   return (list || []).map((t) => {
     const out = Object.assign({}, t);
     if (t.blurbKey && M[t.blurbKey]) out.blurb = M[t.blurbKey];
-    if (t.noteKey && M[t.noteKey]) out.note = fill(M[t.noteKey], t.noteArgs || {});
+    if (t.noteKey && M[t.noteKey]) {
+      const args = { ...(t.noteArgs || {}) };
+      if (t.noteKey === 'dshRunningVersion') {
+        args.version = t.version || M.dshUnknownVersion;
+        args.edition = t.kind === 'cli' ? M.dshWebEdition : M.dshDesktopEdition;
+      }
+      out.note = fill(M[t.noteKey], args);
+    }
     return out;
   });
 }
@@ -719,7 +767,7 @@ function get(id) { return ALL.find((t) => t.id === id) || null; }
 /** 实际可用的目标（装了且能连）—— 只有一个时界面就不该再问「你要用哪个」 */
 async function available() {
   const l = await list();
-  return l.filter((t) => t.installed && t.running);
+  return l.filter((t) => t.running);
 }
 
 module.exports = { list, localize, get, available, ALL, dsh, codex };

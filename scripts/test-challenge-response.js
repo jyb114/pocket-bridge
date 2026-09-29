@@ -113,7 +113,9 @@ const v3 = verifyResponse(n3, wrong, SECRET);
 ok('密钥差一个字符也过不去', v3.ok === false, v3.reason);
 
 const n4 = issueNonce();
-const v4 = verifyResponse(n4, respond(n4, SECRET).slice(0, -2) + 'zz', SECRET);
+const changedResponse = Buffer.from(respond(n4, SECRET), 'base64url');
+changedResponse[0] ^= 1; // Always change a decoded byte; a random response could already end in "zz".
+const v4 = verifyResponse(n4, changedResponse.toString('base64url'), SECRET);
 ok('应答被改过也过不去', v4.ok === false, v4.reason);
 
 // ── ④ nonce 一次性：录下来重放没用 ──────────────────────────────────────────

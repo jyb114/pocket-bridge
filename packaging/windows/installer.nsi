@@ -4,6 +4,9 @@ Unicode true
 !ifndef PRODUCT_VERSION
   !error "PRODUCT_VERSION is required"
 !endif
+!ifndef NUMERIC_VERSION
+  !error "NUMERIC_VERSION is required"
+!endif
 !ifndef PAYLOAD_DIR
   !error "PAYLOAD_DIR is required"
 !endif
@@ -23,7 +26,7 @@ SetOverwrite on
 BrandingText "Pocket Bridge"
 Icon "${PAYLOAD_DIR}\desktop\icons\app.ico"
 UninstallIcon "${PAYLOAD_DIR}\desktop\icons\app.ico"
-VIProductVersion "${PRODUCT_VERSION}.0"
+VIProductVersion "${NUMERIC_VERSION}.0"
 VIAddVersionKey "ProductName" "Pocket Bridge"
 VIAddVersionKey "FileDescription" "Pocket Bridge installer"
 VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"

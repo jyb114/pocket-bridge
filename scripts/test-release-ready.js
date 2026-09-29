@@ -102,10 +102,22 @@ const rd0 = read('README.md') || '';
 ok('README 写了源码运行需要 Node.js', /Node\.js 24 or newer/i.test(rd0));
 ok('说了不需要 npm install（零依赖）', /npm install is not needed/i.test(rd0));
 ok('给了环境自检的第一步', /self-check\.js/.test(rd0));
-ok('DeepSeek Harness 需要已安装并登录的电脑客户端',
-  /DeepSeek Harness desktop application, installed and signed in/i.test(rd0));
-ok('Codex 需要已安装并登录的电脑客户端或兼容 CLI',
-  /signed-in OpenAI Codex desktop installation or compatible Codex CLI executable/i.test(rd0));
+// Release claims must track products actually operated, not adapters that exist
+// only in code or fixtures. Requiring npm Web / legacy DSH / Codex CLI here would
+// push the public README toward an unsupported compatibility promise.
+const rdPlain = rd0.replace(/\*\*/g, '');
+const dshScope = rdPlain.split('## Tested DSH desktop scope')[1]?.split('## Codex phone view')[0] || '';
+const codexScope = rdPlain.split('## Codex phone view')[1]?.split(/\n## /)[0] || '';
+ok('README names the operated, signed-in DSH desktop build',
+  /DSH 0\.1\.7-rc\.2 desktop build installed on the test PC/i.test(dshScope) &&
+  /DeepSeek Harness[^\n|]*desktop build[^\n|]*installed and signed in/i.test(rdPlain));
+ok('README says npm Web and older DSH were not verified or claimed supported',
+  /`npx @deepseek-ai\/dsh web`[^\n]*not been operated end to end[^\n]*not claimed as supported/i.test(dshScope) &&
+  /older DSH protocols[^\n]*not exercised as running products[^\n]*remains unverified/i.test(dshScope));
+ok('README scopes Codex to the operated desktop installation',
+  /current OpenAI Codex desktop installation tested for this preview, signed in/i.test(rdPlain) &&
+  /Codex phone interface was exercised[^.\n]*Codex installation on the test PC/i.test(codexScope) &&
+  /does not establish compatibility with every Codex release/i.test(codexScope));
 ok('明确不是安装两个产品才可使用，也不随安装包提供它们',
   /do not have to install both products/i.test(rd0) &&
   /does not include DeepSeek Harness, Codex/i.test(rd0));

@@ -47,8 +47,8 @@ console.log('[1] 注入接线');
   // 原来是 2 处（codex.html / go.html）。2026-09-26 加了第 3 处：**选目标页**
   // —— 它才是新设备第一眼看到的那一页，而它自己要用 /__targets（要证明）。
   ok('三处注入（codex.html / go.html / 选目标页）', calls === 2, `实际 ${calls}`);
-  ok('选目标页也注入了', /res\.end\(injectProofAssets\(launcherPage\(req, lang\)\)\)/.test(SRC));
-  ok('/prove.js 在放行名单里（证明之前必须能取到）', SRC.indexOf("  '/prove.js',\n") > 0);
+  ok('选目标页也注入了', /res\.end\(injectProofAssets\(launcherPage\(req, lang[,)]/.test(SRC));
+  ok('/prove.js 在放行名单里（证明之前必须能取到）', /['\"]\/prove\.js['\"]/.test(SRC.slice(SRC.indexOf('const BOOTSTRAP_PATHS'), SRC.indexOf('function isBootstrapRequest'))));
   ok('/prove.js 进了指纹名单（它拿着进门凭证做 HMAC，必须钉住）',
     /const files = \[[\s\S]*?'\/prove\.js'\]/.test(SRC));
   ok('/prove.js 有独立路由', /'\/prove\.js': \{ file: 'prove\.js'/.test(SRC));

@@ -735,6 +735,10 @@ function render(data) {
     } else if (best) {
       acts.appendChild(mkBtn(best.plain ? t('复制手机地址（明文）') : t('复制手机地址'),
         'primary', function () { copy(best.url, t('手机地址')); }));
+      var lite = dshLiteAddress(best.url);
+      if (lite && targets.some(function (target) { return target.id === 'dsh' && target.installed; })) {
+        acts.appendChild(mkBtn(t('复制 DSH 轻量版地址'), '', function () { copy(lite, t('DSH 轻量版地址')); }));
+      }
     }
   }
 
@@ -856,6 +860,15 @@ function bestEntry(e) {
   return entryList(e)[0] || null;
 }
 
+function dshLiteAddress(url) {
+  try {
+    var parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !parsed.hash.includes('k=')) return '';
+    parsed.searchParams.set('target', 'lite');
+    return parsed.toString();
+  } catch (e) { return ''; }
+}
+
 /**
  * 独立桌面版的用户级代理状态。匹配环境变量不等于能证明正在运行的客户端已继承。
  */
@@ -917,6 +930,8 @@ function renderEntries(e) {
     lan ? (lan.plain ? t('同一 Wi-Fi 内速度最快。需要更高保护时，开启 HTTPS。') : t('同一 Wi-Fi 内的加密连接。首次访问可能需确认本机证书。')) : t('先确认本机服务已启动。'));
   var lanActs = document.createElement('div'); lanActs.className = 'access-actions';
   if (lanUrl) addButton(lanActs, t('复制链接'), 'primary', function () { copy(lanUrl, t('内网连接')); });
+  var lanLite = dshLiteAddress(lanUrl);
+  if (lanLite) addButton(lanActs, t('复制 DSH 轻量版地址'), '', function () { copy(lanLite, t('DSH 轻量版地址')); });
   addButton(lanActs, t('刷新当前地址'), '', function () { homeOperation(t('正在刷新当前内网地址…')); load(); });
   if (lan && lan.plain) addButton(lanActs, t('开启 HTTPS'), '', function () { $('btn-lanhttps-on').click(); });
   lanCard.appendChild(lanActs); box.appendChild(lanCard);
@@ -930,6 +945,8 @@ function renderEntries(e) {
   wanCard.appendChild(notice);
   var wanActs = document.createElement('div'); wanActs.className = 'access-actions';
   if (wanUrl) addButton(wanActs, t('复制链接'), 'primary', function () { copy(wanUrl, t('外网临时通道')); });
+  var wanLite = dshLiteAddress(wanUrl);
+  if (wanLite) addButton(wanActs, t('复制 DSH 轻量版地址'), '', function () { copy(wanLite, t('DSH 轻量版地址')); });
   addButton(wanActs, t('刷新当前地址'), '', function () { homeOperation(t('正在刷新当前外网地址…')); load(); });
   addButton(wanActs, t('更换密钥'), '', function () { homeMutate('key'); });
   addButton(wanActs, t('换新地址和密钥'), '', function () { homeMutate('renew'); });
@@ -1919,6 +1936,8 @@ if (window.DshI18n && window.DshI18n.register) {
     '已刷新': { en: 'Refreshed', es: 'Actualizado' },
     '复制手机地址（明文）': { en: 'Copy phone address (plain HTTP)', es: 'Copiar la dirección del teléfono (sin cifrar)' },
     '复制手机地址': { en: 'Copy phone address', es: 'Copiar la dirección del teléfono' },
+    '复制 DSH 轻量版地址': { en: 'Copy DSH Lite address', es: 'Copiar dirección DSH ligera' },
+    'DSH 轻量版地址': { en: 'DSH Lite address', es: 'Dirección DSH ligera' },
     // 轮换之后到新地址生效之间那段空窗期（服务端异步重建隧道，约 15~20 秒）。
     '正在更换地址，请稍候…': { en: 'Changing the address, please wait…', es: 'Cambiando la dirección, espera…' },
     '地址正在更换，请等新地址出现后再复制。': { en: 'The address is being changed — wait until the new one shows up before copying.', es: 'Se está cambiando la dirección: espera a que aparezca la nueva antes de copiar.' },

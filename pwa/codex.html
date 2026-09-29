@@ -67,12 +67,20 @@
   .ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
     background:var(--card);flex:none;font-size:16px;line-height:1}
   .ico:active{background:var(--card2)}
+  .lock-help{flex:none;padding:9px 14px;text-align:left;font-size:12.5px;color:var(--accent);background:var(--card);border-bottom:1px solid var(--line)}
+  .lock-advanced{margin-top:20px;border-top:1px solid var(--line);padding-top:12px}
+  .lock-advanced summary{cursor:pointer;color:var(--warn);font-size:13px;padding:10px 2px}
   .conn{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dim);flex:none}
   .conn .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
   .conn.ok .dot{background:var(--ok)} .conn.bad .dot{background:var(--bad)}
   .conn.wait .dot{background:var(--warn);animation:pulse 1.2s infinite}
   @keyframes pulse{50%{opacity:.3}}
-  #task-status{flex:none;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--card)}
+  #task-status{flex:none;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--card);
+    /* C19：状态区**占高封顶**。使用者截图里它吃了屏幕四分之一 —— 那是长文本
+       （"正在同步历史记录，不代表电脑任务已停止…"那种整段话）把它撑开的。
+       封顶之后无论里面写了什么，对话区都不会被挤没了。 */
+    max-height:18vh;overflow:hidden}
+  #task-status.expanded{max-height:min(60vh,440px);overflow-y:auto}
   #task-status[hidden]{display:none}
   #task-status .task-top{display:flex;align-items:center;gap:8px;font-size:14px}
   #task-status .task-dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
@@ -80,8 +88,18 @@
   #task-status[data-kind="completed"] .task-dot{background:var(--ok)}
   #task-status[data-kind="waitingApproval"] .task-dot,#task-status[data-kind="waitingInput"] .task-dot{background:var(--warn)}
   #task-status[data-kind="failed"] .task-dot,#task-status[data-kind="offline"] .task-dot{background:var(--bad)}
-  #task-detail{font-size:12px;color:var(--dim2);margin-top:3px;overflow-wrap:anywhere}
-  #task-activity{font-size:13px;color:var(--dim2);margin-top:5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+  #task-detail{font-size:13px;color:var(--dim2);margin-top:3px;overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;
+    max-height:1.5em}
+  #task-status.expanded #task-detail{display:block;max-height:none;overflow:visible}
+  /* C19：状态区**不允许**被长文本撑开。它只负责"一眼看出在不在跑"，
+     正文归对话流。展开看全文由「详情」按钮负责。 */
+  #task-more{font-size:12px;color:var(--accent);background:none;border:0;padding:2px 0;cursor:pointer}
+  #task-more[hidden]{display:none}
+  #task-activity{font-size:13px;color:var(--dim2);margin-top:3px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+  #task-activity[hidden]{display:none}
+  #task-status.expanded #task-activity{display:block;overflow:visible}
+  #task-status.expanded #task-activity[hidden]{display:none}
   #task-refresh{margin-left:auto;font-size:12px;color:var(--accent);padding:14px 10px;flex:none}
   button:disabled{opacity:.45;cursor:default}
   #attachments{display:flex;gap:7px;overflow-x:auto;max-height:112px;padding:4px 0 8px}
@@ -94,6 +112,8 @@
   #send-mode{min-height:44px;background:var(--card2);color:var(--fg);border:1px solid var(--line);border-radius:8px;max-width:112px;font:inherit;font-size:12px;padding:5px}
   #queued-messages{max-height:130px;overflow:auto;font-size:12px;margin-bottom:5px}
   #queued-messages:empty{display:none}
+  #queue-connect{display:block;margin:6px 0;padding:7px 10px;border:1px solid var(--line2);
+    border-radius:8px;background:var(--card);color:var(--accent);font-size:12px;text-align:left}
   .queued-row{display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid var(--line)}
   .queued-row span{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
   .queued-row button{color:var(--dim2);font-size:12px;flex:none}
@@ -196,8 +216,8 @@
   /* 图片产出：直接显示出来 */
   .imgbox{margin-bottom:11px}
   .imgbox a{display:block;text-decoration:none}
-  .imgbox img{width:100%;border-radius:12px;border:1px solid var(--line);
-    background:#0e0e11;display:block;min-height:40px}
+  .imgbox img{width:auto;max-width:100%;max-height:260px;border-radius:12px;border:1px solid var(--line);
+    background:#0e0e11;display:block;min-width:40px;min-height:40px;object-fit:contain}
   .imgcap{font-size:11.5px;color:var(--dim);margin-top:5px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -243,6 +263,11 @@
     font-size:12px;color:#b0b0bb;white-space:pre-wrap;word-break:break-all;
     max-height:340px;overflow:auto;border-top:1px solid var(--line);padding-top:10px}
   .tool .out:empty{display:none}
+  /* Historical tool calls are frequent. Keep the full detail behind the row. */
+  .tool.trace{margin-bottom:3px;background:transparent;border-color:var(--line);border-radius:8px}
+  .tool.trace summary{padding:5px 9px;min-height:32px;gap:6px}
+  .tool.trace .kind{min-width:28px}
+  .tool.trace .head{font-size:12px}
   .files{list-style:none;margin:0;padding:0 13px 11px;border-top:1px solid var(--line);
     padding-top:9px}
   .files li{font-size:12.5px;font-family:ui-monospace,Menlo,monospace;color:#c9c9d4;
@@ -310,9 +335,13 @@
   .ibtn::after, .send::after, .ico::after{
     content:'';position:absolute;inset:-5px;border-radius:inherit}
   .send{
-    width:34px;height:34px;border-radius:50%;background:var(--accent2);flex:none;
+    width:34px;height:34px;padding:0;border-radius:50%;background:var(--accent2);flex:none;
     display:grid;place-items:center;color:#fff;font-size:17px;
   }
+  /* A two-character queue label cannot fit in the 34px icon circle once the
+     button's default padding is counted. Give text its own single-line pill. */
+  .send.queue{width:64px;height:36px;padding:0 8px;border-radius:18px;
+    white-space:nowrap;line-height:1}
   .send:disabled{background:var(--card2);color:var(--dim)}
   .stop{background:var(--bad);color:#fff;font-size:13.5px;padding:0 15px;
     height:34px;border-radius:17px;flex:none;font-weight:600}
@@ -383,6 +412,14 @@
   .sclose{display:block;width:100%;text-align:center;padding:14px;
     color:var(--dim);font-size:15px;margin-top:6px}
   .sheet .info{padding:4px 10px 12px;font-size:12.5px;color:var(--dim);line-height:1.7}
+  @media(max-width:420px){
+    /* Four tools, a mode picker and Stop cannot fit on a narrow phone in one row. */
+    .iconrow{gap:6px;flex-wrap:wrap}
+    .iconrow .ibtn{width:30px}
+    .iconrow .sp{min-width:0}
+    .iconrow #send-mode{order:-1;width:100%;max-width:none}
+    .iconrow .stop{padding:0 10px}
+  }
 </style>
 
 <!-- 这四个必须在这里加载，而且必须在内联脚本之前。
@@ -413,8 +450,11 @@
 <section id="task-status" role="status" aria-live="polite" hidden>
   <div class="task-top"><span class="task-dot"></span><strong id="task-label" data-i18n="正在确认任务状态…">正在确认任务状态…</strong><button id="task-refresh" type="button" data-i18n="刷新状态">刷新状态</button></div>
   <div id="task-detail"></div>
+  <button id="task-more" type="button" hidden data-i18n="详情">详情</button>
   <div id="task-activity"></div>
 </section>
+
+<button class="lock-help" id="btn-lock-help" type="button" data-i18n="会话权限 · 查看不占锁，手机可独立续聊">会话权限 · 查看不占锁，手机可独立续聊</button>
 
 <main id="main">
   <div class="pad" id="body"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
@@ -435,12 +475,6 @@
       <button class="ibtn" id="btn-attach" aria-label="添加图片或文件" title="添加图片或文件" data-i18n-aria="添加图片或文件" data-i18n-title="添加图片或文件">＋</button>
       <button class="ibtn" id="btn-bottom" aria-label="回到最新" title="跳到最新" data-i18n-aria="回到最新" data-i18n-title="跳到最新">⇣</button>
       <button class="ibtn" id="btn-voice" aria-label="语音输入" title="语音输入" data-i18n-aria="语音输入">🎤</button>
-      <!-- ★ 「释放电脑端的锁」放在语音旁边，提高入口可发现性。
-           它原来只在「被占用」那张错误卡片上（= 撞上冲突才看得到），
-           那不叫入口。这里是输入区，只要开着会话就在眼前。
-           点它直接走释放流程（确认框仍然会先把代价说清）。 -->
-      <button class="ibtn" id="btn-lock" aria-label="释放电脑端的锁" title="释放电脑端的锁：电脑上的 Codex 占着这条会话、手机上发不出消息时用它"
-        data-i18n-aria="释放电脑端的锁" data-i18n-title="释放电脑端的锁：电脑上的 Codex 占着这条会话、手机上发不出消息时用它">🔓</button>
       <span class="sp"></span>
       <select id="send-mode" aria-label="执行中发送方式" data-i18n-aria="执行中发送方式"><option value="queue" data-i18n="排队发送">排队发送</option><option value="immediate" data-i18n="立即补充">立即补充</option></select>
       <button class="send" id="send" aria-label="发送">↑</button>
@@ -491,6 +525,61 @@ var t = (window.DshI18n && window.DshI18n.t) ? window.DshI18n.t : function (s) {
 var tr = t;
 
 if (window.DshI18n) window.DshI18n.register({
+  "会话权限 · 查看不占锁，手机可独立续聊": {en:"Conversation access · Read without a lock, or continue separately on your phone",es:"Acceso a la conversación · Leer sin bloqueo o continuar por separado en el teléfono"},
+  "已保存 {n} 条 · 尚未发送；电脑任务结束也不会自动发送": {en:"{n} saved · Not sent; finishing the desktop task will not send them",es:"{n} guardados · No enviados; terminar la tarea del ordenador no los enviará"},
+  "尝试连接并发送已存内容（不关闭电脑 Codex）": {en:"Try connecting to send saved messages (keeps desktop Codex open)",es:"Intentar conectar para enviar los mensajes guardados (sin cerrar Codex)"},
+  "已连接，正在确认任务状态；只有桥持有此会话且当前任务正常结束才会发送。": {en:"Connected. Saved messages can send only while Bridge owns this conversation and the current task ends normally.",es:"Conectado. Los mensajes guardados solo pueden enviarse si Bridge controla la conversación y la tarea actual termina normalmente."},
+  "已保存在电脑，尚未送达。电脑端完成任务不等于自动发送；需由桥连接此会话。": {en:"Saved on your computer, not delivered. Finishing the desktop task does not send it; Bridge must connect to this conversation.",es:"Guardado en el ordenador, no entregado. Terminar la tarea no lo envía; Bridge debe conectarse a esta conversación."},
+  "正在创建独立会话…": {en:"Creating a separate conversation…",es:"Creando una conversación independiente…"},
+  "服务端没返回新的会话 id": {en:"The service did not return a new conversation ID",es:"El servicio no devolvió un ID de conversación nuevo"},
+  "独立会话已创建，请在会话列表中打开。": {en:"Separate conversation created. Open it from the conversation list.",es:"Conversación independiente creada. Ábrela desde la lista."},
+  "独立会话": {en:"Separate conversation",es:"Conversación independiente"},
+  "已创建独立会话。电脑上的原会话继续运行；请检查输入后再发送。": {en:"Separate conversation created. The desktop conversation keeps running; review your draft before sending.",es:"Conversación independiente creada. La del ordenador sigue activa; revisa el borrador antes de enviarlo."},
+  "原会话已保存的待办仍留在原会话，尚未执行。": {en:"Saved messages remain in the original conversation and have not run.",es:"Los mensajes guardados permanecen en la conversación original y no se han ejecutado."},
+  "创建期间新增的文字或附件仍留在原会话。": {en:"Text or attachments added while creating the copy remain in the original conversation.",es:"El texto o los archivos añadidos mientras se creaba la copia permanecen en la conversación original."},
+  "创建独立会话失败；原会话和输入未改变：": {en:"Could not create a separate conversation. The original conversation and draft are unchanged: ",es:"No se pudo crear una conversación independiente. La original y el borrador no han cambiado: "},
+  "这条会话目前只能查看，刚才的消息没有发送。可以复制已保存的上下文，在手机开独立会话继续；电脑上的原会话照常运行。正在执行的步骤不会完整复制，两边改同一项目文件也可能冲突。输入和附件仍在。": {en:"This conversation is view-only here; your message was not sent. You can copy saved context into a separate phone conversation while the desktop conversation keeps running. An in-progress step may be incomplete in the copy, and simultaneous edits to the same project files can conflict. Your draft and attachments remain.",es:"Esta conversación es de solo lectura aquí; tu mensaje no se envió. Puedes copiar el contexto guardado a otra conversación en el teléfono mientras la del ordenador sigue activa. Un paso en curso puede quedar incompleto y los cambios simultáneos en los mismos archivos pueden entrar en conflicto. El borrador y los adjuntos se conservan."},
+  "复制上下文，在手机独立续聊": {en:"Copy context and continue separately on phone",es:"Copiar contexto y seguir por separado en el teléfono"},
+  "同项目新会话（不复制对话）": {en:"New conversation in same project (no history copied)",es:"Nueva conversación en el mismo proyecto (sin copiar historial)"},
+  "继续查看": {en:"Keep viewing",es:"Seguir leyendo"},
+  "接管原会话…（会关闭整个电脑 Codex）": {en:"Take over original… (closes all desktop Codex)",es:"Tomar control de la original… (cierra Codex de escritorio)"},
+  "保存待办": {en:"Save",es:"Guardar"},
+  "仅保存到电脑，尚未执行": {en:"Save on your computer only; not executed",es:"Guardar solo en el ordenador; no se ejecuta"},
+  "此会话只读；可以保存待办，或复制上下文到手机独立续聊…": {en:"View-only here. Save a message, or copy context to continue separately on your phone…",es:"Solo lectura aquí. Guarda un mensaje o copia el contexto para continuar por separado en el teléfono…"},
+  "尚未连接到此会话，只保存了待办，没有发送。": {en:"Not connected to this conversation. The message was saved, not sent.",es:"Sin conexión con esta conversación. El mensaje se guardó, no se envió."},
+  "同一条会话同时只能有一个地方发送。查看不会占锁；若电脑正在使用原会话，手机可以创建独立副本继续。已保存的待办尚未执行。": {en:"Only one place can send to a conversation at a time. Viewing does not take the lock. If desktop Codex is using the original, create a separate copy to continue on the phone. Saved messages have not run.",es:"Solo un lugar puede enviar a una conversación a la vez. Leer no toma el bloqueo. Si Codex de escritorio usa la original, crea una copia independiente para seguir en el teléfono. Los mensajes guardados no se han ejecutado."},
+  "电脑原会话继续运行。副本只包含已保存的上下文；正在执行的步骤可能不完整。同一项目目录的并行文件修改可能冲突。": {en:"The original desktop conversation keeps running. The copy contains saved context; an in-progress step may be incomplete. Simultaneous edits in the same project folder can conflict.",es:"La conversación original del ordenador sigue activa. La copia contiene el contexto guardado; un paso en curso puede quedar incompleto. Las ediciones simultáneas en la misma carpeta pueden entrar en conflicto."},
+  "紧急接管原会话（关闭整个电脑 Codex）": {en:"Emergency takeover of original (closes all desktop Codex)",es:"Toma de control de emergencia (cierra Codex de escritorio)"},
+  "关闭电脑 Codex 并接管原会话": {en:"Close desktop Codex and take over original",es:"Cerrar Codex de escritorio y tomar control"},
+  "电脑端任务的授权、选择和提问仍需在电脑端处理；当前连接只能同步其记录。手机接管后发起的新任务，可以在这里处理请求。": {"en": "Desktop task approvals, choices and questions must be handled on the computer; this connection only syncs their records. Requests from new tasks started after phone takeover can be answered here.", "es": "Las autorizaciones, opciones y preguntas de tareas del ordenador deben resolverse allí; esta conexión solo sincroniza sus registros. Las solicitudes de tareas nuevas iniciadas tras tomar el control desde el teléfono pueden responderse aquí."},
+  "选择一个选项": {"en": "Choose an option", "es": "Elige una opción"},
+  "其他回答": {"en": "Other answer", "es": "Otra respuesta"},
+  "请回答所有问题后提交": {"en": "Answer every question before submitting", "es": "Responde todas las preguntas antes de enviar"},
+  "网络访问": {"en": "Network access", "es": "Acceso a la red"},
+  "请求网络访问": {"en": "Network access requested", "es": "Solicitud de acceso a la red"},
+  "请求的额外权限：": {"en": "Additional permissions requested:", "es": "Permisos adicionales solicitados:"},
+  "批准并保存命令规则": {"en": "Approve and save the command rule", "es": "Autorizar y guardar la regla de comandos"},
+  "保存网络允许规则": {"en": "Save a network allow rule", "es": "Guardar una regla de acceso a la red"},
+  "保存网络拒绝规则": {"en": "Save a network deny rule", "es": "Guardar una regla de denegación de red"},
+  "已提交规则决定": {"en": "Rule decision sent", "es": "Decisión de regla enviada"},
+  "会话：": {"en": "Conversation:", "es": "Conversación:"},
+  "工具请求确认": {"en": "Tool confirmation requested", "es": "Confirmación solicitada por una herramienta"},
+  "打开授权链接": {"en": "Open the authorization link", "es": "Abrir el enlace de autorización"},
+  "完成后确认": {"en": "Confirm after completing", "es": "Confirmar tras completar"},
+  "手机暂不支持此表单，请在原客户端处理，或明确选择拒绝或取消。": {"en": "This form is not supported on the phone. Handle it in the original client, or explicitly decline or cancel.", "es": "Este formulario no se admite en el teléfono. Resuélvelo en el cliente original o rechaza o cancela explícitamente."},
+  "请检查必填内容和输入格式": {"en": "Check required fields and input formats", "es": "Revisa los campos obligatorios y los formatos"},
+  "已提交，等待任务继续。": {"en": "Submitted; waiting for the task to continue.", "es": "Enviado; esperando a que continúe la tarea."},
+  "授权链接无效，请在原客户端处理。": {"en": "The authorization link is invalid. Handle it in the original client.", "es": "El enlace de autorización no es válido. Resuélvelo en el cliente original."},
+  "释放电脑端的锁：电脑 Codex 占用时，会关闭整个电脑端 Codex，并终止它正在执行的任务。成功释放后，手机可以发送新指令；被终止的任务不会因此自动恢复。": {
+    en: "Release the computer-side lock: if desktop Codex holds it, the entire desktop app closes and its running tasks terminate. After successful release, the phone can send new instructions; terminated tasks do not resume automatically.",
+    es: "Liberar el bloqueo del ordenador: si Codex lo tiene, se cierra toda la aplicación y se detienen sus tareas en curso. Tras liberarlo, el teléfono puede enviar nuevas instrucciones; las tareas detenidas no se reanudan solas."
+  },
+  "释放手机端的锁：只交还手机对当前会话的占用，不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机任务仍在运行时，请先等它结束。": {
+    en: "Release the phone-side lock: only the phone’s hold on this conversation is released. Desktop Codex stays open and no stop-task command is sent. Wait for a running phone task to finish first.",
+    es: "Liberar el bloqueo del teléfono: solo cede la retención del teléfono sobre esta conversación. Codex del ordenador sigue abierto y no se envía una orden de detener tareas. Espera primero a que termine la tarea del teléfono."
+  },
+  "Codex 手机端使用说明": { en: "Using Codex from your phone", es: "Usar Codex desde el teléfono" },
+  "锁与授权说明 · 电脑占用时手机仅可查看": { en: "Lock & approvals · View only while desktop holds the conversation", es: "Bloqueo y permisos · Solo lectura mientras el ordenador ocupa la conversación" },
   "待发送 {n} 条 · 保存在电脑端": { en: "{n} to send · saved on your computer", es: "{n} por enviar · guardado en tu computadora" },
   "连接并启用队列（不关闭电脑 Codex）": { en: "Connect and enable the queue (keeps desktop Codex open)", es: "Conectar y activar la cola (sin cerrar Codex en la computadora)" },
   "已暂停：": { en: "Paused: ", es: "En pausa: " },
@@ -559,6 +648,8 @@ if (window.DshI18n) window.DshI18n.register({
   "连接中断 · 任务状态未知": { en: "Disconnected · task status unknown", es: "Sin conexión · estado de la tarea desconocido" },
   "正在重连。手机断线不代表电脑任务已结束。": { en: "Reconnecting. Losing the phone connection does not mean the task on your computer has ended.", es: "Reconectando. Que el teléfono se desconecte no significa que la tarea en tu computadora haya terminado." },
   "上次同步 ": { en: "Last sync ", es: "Última sincronización " },
+  "详情": { en: "Details", es: "Detalles" },
+  "收起": { en: "Collapse", es: "Contraer" },
   "刷新状态": { en: "Refresh status", es: "Actualizar estado" },
   "实时连接暂未恢复，仍在自动同步任务记录。": { en: "The live connection is not back yet; still syncing the task log automatically.", es: "La conexión en vivo aún no volvió; seguimos sincronizando el registro de la tarea automáticamente." },
   "正在同步历史记录，不代表电脑任务已停止。可先保存排队；未接通执行端时不会自动执行，也不会抢锁或关闭电脑 Codex。": { en: "Syncing history. This does not mean the task on your computer has stopped. You can queue your message; with no executor connected nothing runs automatically, and it will not grab the lock or close desktop Codex.", es: "Sincronizando el historial. Esto no significa que la tarea en tu computadora se haya detenido. Puedes guardarla en cola; sin el ejecutor conectado nada se ejecuta automáticamente, y no tomará el bloqueo ni cerrará Codex en la computadora." },
@@ -597,6 +688,7 @@ if (window.DshI18n) window.DshI18n.register({
   "连不上": { en: "Cannot connect", es: "No se puede conectar" },
   "握手中": { en: "Handshaking", es: "Negociando" },
   "已连接": { en: "Connected", es: "Conectado" },
+  "桥已连接": { en: "Bridge connected", es: "Puente conectado" },
   "握手失败": { en: "Handshake failed", es: "Falló la negociación" },
   "初始化失败：": { en: "Initialization failed: ", es: "Falló la inicialización: " },
   "已断开": { en: "Disconnected", es: "Desconectado" },
@@ -666,6 +758,20 @@ if (window.DshI18n) window.DshI18n.register({
   "打不开这张图：": { en: "Cannot open this image: ", es: "No se puede abrir esta imagen: " },
   "正在取图：": { en: "Loading image: ", es: "Cargando imagen: " },
   "这张图没取回来：": { en: "Could not fetch this image: ", es: "No se pudo obtener esta imagen: " },
+  "这台设备的地址里没有加密密钥，所以取不到图 —— 请用带 #k= 的完整地址重新打开。": {
+    en: "This device's address has no encryption key, so images cannot be fetched — reopen the full link that contains #k=.",
+    es: "La dirección de este dispositivo no tiene clave de cifrado, así que no se pueden obtener imágenes: vuelve a abrir el enlace completo con #k=." },
+  "隧道地址缺少加密密钥，请用完整的手机地址重新打开。": {
+    en: "This tunnel link has no encryption key. Reopen the complete phone link.",
+    es: "Este enlace del túnel no tiene clave de cifrado. Vuelve a abrir el enlace completo del teléfono." },
+  "加密模块未就绪，请刷新后重试。": {
+    en: "Encryption is not ready. Refresh and try again.",
+    es: "El cifrado no está listo. Actualiza la página y vuelve a intentarlo." },
+  "文件响应未通过加密校验，请刷新桥页面后重试。": {
+    en: "The file response failed encryption verification. Refresh Bridge and try again.",
+    es: "La respuesta del archivo no superó la verificación de cifrado. Actualiza Bridge y vuelve a intentarlo." },
+  "正在取图：": { en: "Fetching image: ", es: "Obteniendo imagen: " },
+  "打不开这张图：": { en: "Cannot open this image: ", es: "No se puede abrir esta imagen: " },
   "原图没取回来，稍后再试": { en: "Could not fetch the full image — try again shortly", es: "No se pudo obtener la imagen completa; inténtalo más tarde" },
   "打开": { en: "Open", es: "Abrir" },
   "搜索": { en: "Search", es: "Búsqueda" },
@@ -682,6 +788,19 @@ if (window.DshI18n) window.DshI18n.register({
   "列表没能刷新：": { en: "Could not refresh the list: ", es: "No se pudo actualizar la lista: " },
   "读不到会话列表：": { en: "Cannot load the conversation list: ", es: "No se puede cargar la lista de conversaciones: " },
   "搜会话": { en: "Search conversations", es: "Buscar conversaciones" },
+  "搜索所有会话标题；已加载会话的预览也会匹配": { en: "Search all conversation titles; also match previews in loaded conversations", es: "Buscar en todos los títulos; también en las vistas previas ya cargadas" },
+  "正在搜索所有会话标题…": { en: "Searching all conversation titles…", es: "Buscando en todos los títulos…" },
+  "已搜索所有会话标题；预览仅搜索已加载的 {n} 条": { en: "Searched all conversation titles; previews searched in {n} loaded conversations only", es: "Títulos buscados en todas las conversaciones; vistas previas solo en {n} cargadas" },
+  "搜索标题失败；当前仅搜索已加载的 {n} 条": { en: "Title search failed; currently searching {n} loaded conversations only", es: "Falló la búsqueda de títulos; ahora solo se buscan {n} conversaciones cargadas" },
+  "重试搜索": { en: "Retry search", es: "Reintentar búsqueda" },
+  "正在检查更早的会话…": { en: "Checking for older conversations…", es: "Buscando conversaciones anteriores…" },
+  "已加载 {n} 条会话；还有更早的会话": { en: "{n} conversations loaded; older conversations are available", es: "{n} conversaciones cargadas; hay conversaciones anteriores" },
+  "已加载全部 {n} 条会话": { en: "All {n} conversations loaded", es: "Se cargaron las {n} conversaciones" },
+  "暂时无法检查更早的会话": { en: "Could not check for older conversations", es: "No se pudieron consultar conversaciones anteriores" },
+  "加载更早的会话": { en: "Load older conversations", es: "Cargar conversaciones anteriores" },
+  "加载更多标题匹配": { en: "Load more matching titles", es: "Cargar más títulos coincidentes" },
+  "正在加载…": { en: "Loading…", es: "Cargando…" },
+  "加载更早的会话失败：": { en: "Could not load older conversations: ", es: "No se pudieron cargar conversaciones anteriores: " },
   "＋ 开一个新会话": { en: "+ New conversation", es: "+ Nueva conversación" },
   "没有匹配的会话": { en: "No matching conversations", es: "No hay conversaciones coincidentes" },
   "还没有会话": { en: "No conversations yet", es: "Aún no hay conversaciones" },
@@ -691,6 +810,12 @@ if (window.DshI18n) window.DshI18n.register({
   "重试": { en: "Retry", es: "Reintentar" },
   "服务端没返回会话 id": { en: "The server did not return a conversation id", es: "El servidor no devolvió un id de conversación" },
   "新会话": { en: "New conversation", es: "Nueva conversación" },
+  "先选择电脑上的项目文件夹，再创建会话。不会使用未知的默认目录。": { en: "Choose a project folder on your computer before creating a conversation. No unknown default folder will be used.", es: "Elige una carpeta de proyecto del ordenador antes de crear la conversación. No se usará una carpeta predeterminada desconocida." },
+  "最近的项目": { en: "Recent projects", es: "Proyectos recientes" },
+  "或输入电脑上的绝对路径": { en: "Or enter an absolute path on your computer", es: "O escribe una ruta absoluta del ordenador" },
+  "项目路径，例如 D:\\work\\project": { en: "Project path, for example D:\\work\\project", es: "Ruta del proyecto, por ejemplo D:\\work\\project" },
+  "使用此文件夹新建": { en: "Create in this folder", es: "Crear en esta carpeta" },
+  "请填写电脑上的绝对路径": { en: "Enter an absolute path on your computer", es: "Introduce una ruta absoluta del ordenador" },
   "开新会话失败：": { en: "Could not start a new conversation: ", es: "No se pudo iniciar una conversación nueva: " },
   "正在读取最近一轮任务的状态。": { en: "Reading the status of the latest turn.", es: "Leyendo el estado del último turno." },
   "会话": { en: "Conversation", es: "Conversación" },
@@ -701,7 +826,7 @@ if (window.DshI18n) window.DshI18n.register({
   "正在加载更早的…": { en: "Loading earlier messages…", es: "Cargando mensajes anteriores…" },
   "加载更早的失败：": { en: "Could not load earlier messages: ", es: "No se pudieron cargar los mensajes anteriores: " },
   "消息未发送：会话由另一个执行服务占用": { en: "Message not sent: another executor holds this conversation", es: "Mensaje no enviado: otro ejecutor tiene esta conversación" },
-  "这条会话正开在电脑上，手机发不出去。<br><br>你能做的：<br>· 点下面「释放电脑端的锁」→ 手机继续用这条会话（会关掉电脑上的 Codex，正在跑的任务可能被中断）<br>· 或者另开一条会话（不会接着当前任务的进度）<br><br>你输入的内容和附件都还在。": { en: "This conversation is open on your computer, so the phone cannot send.<br><br>What you can do:<br>· Tap “Release the lock on the computer” below → keep using this conversation on the phone (it closes Codex on the computer, so a running task may be interrupted)<br>· Or start a new conversation (it will not continue the current task)<br><br>Your text and attachments are still here.", es: "Esta conversación está abierta en el ordenador, así que el teléfono no puede enviar.<br><br>Qué puedes hacer:<br>· Pulsa «Liberar el bloqueo del ordenador» → sigue usando esta conversación en el teléfono (cierra Codex en el ordenador, así que una tarea en curso puede interrumpirse)<br>· O abre otra conversación (no continuará la tarea actual)<br><br>Tu texto y adjuntos siguen aquí." },
+  "这条会话由另一个执行服务占用，手机只能查看，不能发送指令。<br><br>你能做的：<br>· 若由电脑 Codex 占用，可点下面「释放电脑端的锁」：会关闭电脑上的 Codex、终止它正在执行的任务。成功释放后，手机可以发送新指令<br>· 或者另开一条会话（不会接着当前任务的进度）<br><br>你输入的内容和附件都还在。": { en: "Another execution service holds this conversation. The phone can view it, but cannot send instructions.<br><br>What you can do:<br>· If desktop Codex holds it, tap “Release the lock on the computer” below. This closes desktop Codex and terminates its running tasks. After successful release, the phone can send new instructions<br>· Or start a new conversation (it will not continue the current task)<br><br>Your text and attachments are still here.", es: "Otro servicio de ejecución tiene esta conversación. El teléfono puede verla, pero no enviar instrucciones.<br><br>Qué puedes hacer:<br>· Si la tiene Codex del ordenador, pulsa «Liberar el bloqueo del ordenador». Se cierra Codex y se detienen sus tareas en curso. Tras liberarlo, el teléfono puede enviar nuevas instrucciones<br>· O abre otra conversación (no continuará la tarea actual)<br><br>Tu texto y adjuntos siguen aquí." },
   "释放手机端的锁": { en: "Release the lock on the phone", es: "Liberar el bloqueo del teléfono" },
   "释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会关闭电脑上的 Codex，也不会主动发送停止任务命令\n· 若手机任务仍在运行，建议等它结束后再操作\n· 手机下次发消息会自动重新接上\n\n确定吗？": {
     en: "Release the lock on the phone?\n\n· Only the phone's hold on this session is released\n· Desktop Codex is not closed and no stop-task command is sent\n· If a phone task is still running, consider waiting until it finishes\n· The phone reconnects automatically next time you send\n\nContinue?",
@@ -718,31 +843,31 @@ if (window.DshI18n) window.DshI18n.register({
     en: "When this conversation is open in desktop Codex, the phone cannot send messages. Tap to hand it over from the computer (if the phone holds it, the lock is simply released).",
     es: "Si esta conversación está abierta en Codex del ordenador, el teléfono no puede enviar mensajes. Toca para cederla desde el ordenador (si la tiene el teléfono, solo se libera el bloqueo)."
   },
-  "会关掉电脑上的 Codex，正在跑的任务可能被中断；会话内容不会丢。": {
-    en: "Desktop Codex will close and a running task may be interrupted; the conversation itself will not be lost.",
-    es: "Codex en el ordenador se cerrará y una tarea en curso podría interrumpirse; la conversación no se perderá."
+  "会关掉电脑上的 Codex，正在执行的电脑端任务会被终止；已保存的会话记录会保留。": {
+    en: "Desktop Codex will close and its running tasks will be terminated; saved conversation history is kept.",
+    es: "Codex en el ordenador se cerrará y sus tareas en curso se detendrán; se conserva el historial guardado de la conversación."
   },
-  "什么是「锁」：同一条会话同时只能有一个写入者。电脑上的 Codex 开着这条会话时，它占着写权限 —— 手机能看，但一发消息就报「会话由另一个执行服务占用」。下面两颗按钮给出两条出路，代价完全不同。": {
-    en: "What the “lock” is: only one writer may hold a conversation at a time. When Codex on your computer has this conversation open, it holds the write permission — the phone can read, but sending reports “the conversation is held by another execution service”. The two buttons below are two different ways out, with very different costs.",
-    es: "Qué es el «bloqueo»: solo un escritor puede tener una conversación a la vez. Cuando Codex en tu ordenador tiene abierta esta conversación, retiene el permiso de escritura: el teléfono puede leer, pero al enviar aparece «la conversación está en uso por otro servicio de ejecución». Los dos botones de abajo son dos salidas con costes muy distintos."
+  "什么是「锁」：同一条会话同时只能有一个写入者。电脑上的 Codex 占着当前会话的锁时，手机只能查看，不能发送指令。保存到排队列表的内容还没有执行。下面可以分别释放电脑端或手机端的锁。": {
+    en: "Only one writer can hold a conversation at a time. While desktop Codex holds this conversation’s lock, the phone can view it but cannot send instructions. Messages saved to the queue have not run. You can release the computer-side or phone-side lock below.",
+    es: "Solo un escritor puede tener una conversación a la vez. Mientras Codex del ordenador tiene su bloqueo, el teléfono puede verla pero no enviar instrucciones. Los mensajes guardados en cola aún no se han ejecutado. Abajo puedes liberar el bloqueo del ordenador o del teléfono."
   },
-  "只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。": {
-    en: "Releases only the phone's hold on this conversation: desktop Codex is not closed, and no stop-task command is sent. It is also released **automatically** a while after the phone closes or disconnects, so you normally never need this button.",
-    es: "Libera solo la retención del teléfono sobre esta conversación: no se cierra Codex de escritorio ni se envía ninguna orden de detener la tarea. También se libera **automáticamente** un rato después de cerrar o desconectar el teléfono, así que normalmente no hace falta pulsarlo."
+  "只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会自动松开，所以通常不用点它。": {
+    en: "Releases only the phone's hold on this conversation: desktop Codex is not closed, and no stop-task command is sent. It is also released automatically a while after the phone closes or disconnects, so you normally never need this button.",
+    es: "Libera solo la retención del teléfono sobre esta conversación: no se cierra Codex de escritorio ni se envía ninguna orden de detener la tarea. También se libera automáticamente un rato después de cerrar o desconectar el teléfono, así que normalmente no hace falta pulsarlo."
   },
-  "⚠️ 会关掉电脑上的 Codex，正在跑的任务可能被中断": {
-    en: "⚠️ This closes Codex on your computer; a running task may be interrupted",
-    es: "⚠️ Esto cierra Codex en tu ordenador; una tarea en curso puede interrumpirse"
+  "⚠️ 会关掉电脑上的 Codex，正在执行的电脑端任务会被终止": {
+    en: "⚠️ This closes Codex on your computer; its running tasks will be terminated",
+    es: "⚠️ Esto cierra Codex en tu ordenador; sus tareas en curso se detendrán"
   },
-  "它让**电脑端**交出写权限，代价是关掉电脑上的 Codex（会话内容不会丢，但那一轮任务会停）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。": {
-    en: "It makes the **computer side** give up the write permission; the cost is closing Codex on your computer (the conversation is not lost, but that turn stops). Use it only when the computer really has this conversation open and you must keep instructing from the phone right now. To release only the phone side, use the button above.",
-    es: "Hace que el **lado del ordenador** ceda el permiso de escritura; el coste es cerrar Codex en tu ordenador (la conversación no se pierde, pero ese turno se detiene). Úsalo solo si el ordenador tiene realmente abierta esta conversación y necesitas seguir dando instrucciones desde el teléfono ahora mismo. Para liberar solo el lado del teléfono, usa el botón de arriba."
+  "它让电脑端交出写权限，代价是关掉电脑上的 Codex（已保存的会话记录会保留，但电脑端正在执行的任务会终止）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。": {
+    en: "It makes the computer side give up the write permission; the cost is closing Codex on your computer (saved conversation history is kept, but its running tasks terminate). Use it only when the computer really has this conversation open and you must keep instructing from the phone right now. To release only the phone side, use the button above.",
+    es: "Hace que el lado del ordenador ceda el permiso de escritura; el coste es cerrar Codex en tu ordenador (se conserva el historial guardado de la conversación, pero sus tareas en curso se detienen). Úsalo solo si el ordenador tiene realmente abierta esta conversación y necesitas seguir dando instrucciones desde el teléfono ahora mismo. Para liberar solo el lado del teléfono, usa el botón de arriba."
   },
-  "释放电脑端的锁？\n\n· 电脑上的 Codex 会关掉，正在跑的任务可能被中断\n· 会话内容不会丢\n· 之后手机就能接着下指令\n\n确定吗？": { en: "Release the lock on the computer?\n\n· Codex on your computer will close; a running task may be interrupted\n· The conversation itself is not lost\n· After that you can keep sending from the phone\n\nGo ahead?", es: "¿Liberar el bloqueo del ordenador?\n\n· Codex en el ordenador se cerrará; una tarea en curso puede interrumpirse\n· La conversación no se pierde\n· Después podrás seguir enviando desde el teléfono\n\n¿Continuar?" },
+  "释放电脑端的锁？\n\n· 如果这条会话由电脑端占用，将关闭电脑上的 Codex，正在执行的电脑端任务会被终止\n· 已保存的会话记录会保留\n· 锁释放成功后，手机可以发送新指令\n\n确定吗？": { en: "Release the lock on the computer?\n\n· If desktop Codex holds this session, it will close; its running tasks will be terminated\n· Saved conversation history is kept\n· After the lock is released successfully, you can send new instructions from the phone\n\nGo ahead?", es: "¿Liberar el bloqueo del ordenador?\n\n· Si Codex del ordenador tiene esta sesión, se cerrará; sus tareas en curso se detendrán\n· Se conserva el historial guardado de la conversación\n· Después de liberar el bloqueo, podrás enviar nuevas instrucciones desde el teléfono\n\n¿Continuar?" },
   "正在释放电脑端的锁…": { en: "Releasing the lock on the computer…", es: "Liberando el bloqueo del ordenador…" },
   "手机这边之前占着这条会话，锁已经松开。正在重试…": { en: "The phone was holding this conversation; the lock is now free. Retrying…", es: "El teléfono tenía esta conversación; el bloqueo ya está libre. Reintentando…" },
   "这条会话的锁本来就是空的。正在重试…": { en: "This conversation was not locked at all. Retrying…", es: "Esta conversación no estaba bloqueada. Reintentando…" },
-  "已经让电脑端交出这条会话（电脑上的 Codex 可能已被关闭）。正在重试…": { en: "The computer side has handed this conversation over (desktop Codex may have been closed). Retrying…", es: "El ordenador ya cedió esta conversación (puede que se haya cerrado Codex en el ordenador). Reintentando…" },
+  "电脑端占用已解除。正在重新连接，连接成功后可以从手机发送新指令…": { en: "The computer-side lock is released. Reconnecting; you can send new instructions from the phone once connected…", es: "Se ha liberado el bloqueo del ordenador. Reconectando; podrás enviar nuevas instrucciones desde el teléfono al conectar…" },
   "锁还是没松开：会话被占着，但电脑上的 Codex 没开着。请稍等再试一次。": { en: "The lock is still held: the conversation is taken, but desktop Codex is not running. Wait a moment and try again.", es: "El bloqueo sigue activo: la conversación está tomada, pero Codex no está abierto en el ordenador. Espera un momento e inténtalo de nuevo." },
   "电脑上的 Codex 已经关掉，但这条会话的锁还是没松开。请稍等再试，或重启电脑端的 Codex。": { en: "Desktop Codex was closed, but this conversation is still locked. Try again in a moment, or restart Codex on the computer.", es: "Codex se cerró en el ordenador, pero esta conversación sigue bloqueada. Inténtalo de nuevo en un momento o reinicia Codex en el ordenador." },
   "没能关掉电脑上的 Codex —— 锁没释放。": { en: "Could not close desktop Codex — the lock was not released.", es: "No se pudo cerrar Codex en el ordenador; el bloqueo no se liberó." },
@@ -789,15 +914,15 @@ if (window.DshI18n) window.DshI18n.register({
     en: "The phone is holding it right now — desktop Codex may be unable to open this conversation in the meantime.",
     es: "Ahora mismo la tiene el teléfono; mientras tanto, puede que Codex en el ordenador no pueda abrirla."
   },
-  "手机没占着它。如果发消息时报「会话由另一个执行服务占用」，就是电脑上的 Codex 占着。": {
-    en: "The phone is not holding it. If sending reports “another executor holds this conversation”, desktop Codex is the one holding it.",
-    es: "El teléfono no la tiene. Si al enviar aparece «otro ejecutor tiene esta conversación», la tiene Codex en el ordenador."
+  "手机没有占用这条会话。若发送时报「会话由另一个执行服务占用」，请检查是否由电脑 Codex 或其他执行服务占用。": {
+    en: "The phone is not holding this conversation. If sending reports “another executor holds this conversation”, check whether desktop Codex or another execution service holds it.",
+    es: "El teléfono no tiene esta conversación. Si al enviar aparece «otro ejecutor tiene esta conversación», comprueba si la tiene Codex del ordenador u otro servicio de ejecución."
   },
   "代价写在确认框里：必要时会关掉电脑上的 Codex，那边正在跑的任务可能会被终止；会话内容本身已经存盘，不会丢。": {
     en: "The cost is spelled out in the confirmation: desktop Codex may be closed, and a task running there may be terminated — the conversation itself is saved and will not be lost.",
     es: "El coste se explica en la confirmación: puede que se cierre Codex en el ordenador y que una tarea en curso se cancele; la conversación queda guardada y no se pierde."
   },
-  "先打开一条会话，再回到这里 —— 锁是**按会话**算的，得先知道是哪一条。": {
+  "先打开一条会话，再回到这里 —— 锁是按会话算的，得先知道是哪一条。": {
     en: "Open a conversation first, then come back here — the lock is per conversation, so we need to know which one.",
     es: "Abre antes una conversación y vuelve aquí: el bloqueo es por conversación, hay que saber cuál."
   },
@@ -872,16 +997,26 @@ if (window.DshI18n) window.DshI18n.register({
   "模型": { en: "Model", es: "Modelo" },
   "（会话默认）": { en: "(conversation default)", es: "(predeterminado de la conversación)" },
   "（用会话自己的）": { en: "(use the conversation setting)", es: "(usar el de la conversación)" },
+  "所选模型默认档位": { en: "Selected model's default effort", es: "Intensidad predeterminada del modelo elegido" },
   "选择模型": { en: "Choose a model", es: "Elegir un modelo" },
   "思考强度": { en: "Reasoning effort", es: "Intensidad de razonamiento" },
   "选择思考强度": { en: "Choose reasoning effort", es: "Elegir la intensidad de razonamiento" },
   "操作": { en: "Actions", es: "Acciones" },
   "重命名这个会话": { en: "Rename this conversation", es: "Renombrar esta conversación" },
   "新名字": { en: "New name", es: "Nuevo nombre" },
+  "当前名称": { en: "Current name", es: "Nombre actual" },
+  "请输入会话名称": { en: "Enter a conversation name", es: "Escribe un nombre para la conversación" },
+  "保存名称": { en: "Save name", es: "Guardar nombre" },
+  "正在保存…": { en: "Saving…", es: "Guardando…" },
   "已改名": { en: "Renamed", es: "Renombrado" },
   "改名失败：": { en: "Rename failed: ", es: "Falló el cambio de nombre: " },
   "归档这个会话": { en: "Archive this conversation", es: "Archivar esta conversación" },
   "归档之后它会从列表里消失（不会删除）。": { en: "Archiving removes it from the list (it is not deleted).", es: "Al archivarla desaparece de la lista (no se elimina)." },
+  "确认归档": { en: "Archive conversation", es: "Archivar conversación" },
+  "正在归档…": { en: "Archiving…", es: "Archivando…" },
+  "其他文件夹（手输绝对路径）": { en: "Other folder (enter full path)", es: "Otra carpeta (escribir ruta completa)" },
+  "会话操作（不是附件）": { en: "Conversation action — not an attachment", es: "Acción de conversación, no un adjunto" },
+  "新建会话会打开项目选择，不会添加附件。": { en: "Starting a new conversation opens the project chooser. It will not attach a file.", es: "Iniciar una conversación abre el selector de proyectos. No adjunta archivos." },
   "已归档": { en: "Archived", es: "Archivada" },
   "归档失败：": { en: "Archive failed: ", es: "Falló el archivado: " },
   "回到会话列表": { en: "Back to the conversation list", es: "Volver a la lista de conversaciones" },
@@ -916,7 +1051,10 @@ var state = {
   ws: null, ready: false, nextId: 1, pending: {},
   view: 'list',
   threads: [], filter: '',
-  thread: null, threadInfo: null, resumed: false,
+  listCursor: null, listReady: false, listPending: false, listError: '', listMorePending: false,
+  searchThreads: [], searchCursor: null, searchPending: false, searchReady: false,
+  searchError: '', searchMorePending: false,
+  thread: null, threadInfo: null, resumed: false, forking: false,
   items: {}, order: [],      // itemId → {el, item, acc}
   running: false, turnId: null,
   retry: 0,
@@ -929,7 +1067,32 @@ var state = {
 var observerEpoch = 0, observerTimer = null, observerBusy = false, activityVersion = 0;
 var resumeSubscription = null;
 var task = { kind: 'checking', detail: '', activity: '', syncedAt: 0 };
+var taskStatusExpanded = false;
+var detachedHandbacks=Object.create(null);
 var attachmentDrafts = {};
+// Model and reasoning overrides belong to one conversation. Keeping a single
+// shared pick silently sends a choice made in A with the next message in B.
+var threadPicks = Object.create(null);
+// A draft belongs to its conversation. The composer DOM is shared by all
+// conversations, so leaving text in it can otherwise send A's message to B.
+var textDrafts = Object.create(null);
+function rememberTextDraft() {
+  if (state.thread && state.thread.id) textDrafts[state.thread.id] = $('input').value;
+}
+function restoreTextDraft(thread) {
+  var box = $('input');
+  box.value = thread && thread.id ? (textDrafts[thread.id] || '') : '';
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight, 140) + 'px';
+}
+function clearSubmittedTextDraft(tid, text) {
+  if (Object.prototype.hasOwnProperty.call(textDrafts, tid) && textDrafts[tid].trim() === text)
+    delete textDrafts[tid];
+  if (state.thread && state.thread.id === tid) {
+    var box = $('input');
+    if (box.value.trim() === text) { box.value = ''; box.style.height = 'auto'; }
+  }
+}
 var queueEntries=[],queueFetchBusy=false,queueDraft=null;
 function queueOnly(){return !state.ready || ['checking','unlinked','unknown','offline'].indexOf(task.kind)>=0;}
 // 使用者自己选的「排队发送 / 立即补充」。和界面当前的显示值是两件事：
@@ -950,9 +1113,11 @@ function setSendModePref(v){
 function renderQueue(){
   var box=$('queued-messages');box.innerHTML='';
   if(!queueEntries.length)return;
-  var title=document.createElement('div');title.textContent=t('待发送 {n} 条 · 保存在电脑端', {n: queueEntries.length});box.appendChild(title);
+  var title=document.createElement('div');title.textContent=task.kind==='unlinked'
+    ?t('已保存 {n} 条 · 尚未发送；电脑任务结束也不会自动发送', {n:queueEntries.length})
+    :t('待发送 {n} 条 · 保存在电脑端', {n:queueEntries.length});box.appendChild(title);
   if(task.kind==='unlinked'){
-    var connect=document.createElement('button');connect.id='queue-connect';connect.textContent=t('连接并启用队列（不关闭电脑 Codex）');
+    var connect=document.createElement('button');connect.id='queue-connect';connect.textContent=t('尝试连接并发送已存内容（不关闭电脑 Codex）');
     connect.disabled=!state.ready||state.resuming;connect.onclick=connectQueuedThread;box.appendChild(connect);
   }
   queueEntries.forEach(function(e){
@@ -969,7 +1134,7 @@ function connectQueuedThread(){
   var thread=state.thread;state.resuming=true;renderFooter();
   call('thread/resume',{threadId:thread.id,excludeTurns:true},15000).then(function(){
     if(state.thread!==thread)return;
-    state.resumed=true;setTask('checking',t('已连接，正在确认任务状态；队列只会在任务正常结束后发送。'));
+    state.resumed=true;scheduleRelease();setTask('checking',t('已连接，正在确认任务状态；只有桥持有此会话且当前任务正常结束才会发送。'));
   }).catch(function(e){
     if(state.thread!==thread)return;
     if(/active writer/i.test(e.message))showWriterConflict(thread, e.message);
@@ -1001,11 +1166,22 @@ document.addEventListener('click', function (ev) {
 function privateFetch(url, init) {
   var secret = window.__dshE2eeSecret;
   var E = window.DshE2EE;
-  if (!secret || !E || !E.encryptedFetch) return fetch(url, init || {});
+  if (!secret) {
+    if (!plainLocalOrigin()) return Promise.reject(new Error(t('隧道地址缺少加密密钥，请用完整的手机地址重新打开。')));
+    return fetch(url, init || {});
+  }
+  if (!E || !E.encryptedFetch) return Promise.reject(new Error(t('加密模块未就绪，请刷新后重试。')));
   if (init && init.body != null) return E.encryptedFetch(secret, url, init);
   var h = Object.assign({}, (init && init.headers) || {});
   h['x-dsh-e2ee'] = '1';
   return fetch(url, Object.assign({}, init || {}, { headers: h }));
+}
+
+function plainLocalOrigin() {
+  var host = String((window.location && window.location.hostname) || '').toLowerCase();
+  if (/^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2}|\[?::1\]?|[a-z0-9.-]+\.local)$/.test(host)) return true;
+  var lan172 = /^172\.(\d{1,2})\./.exec(host);
+  return !!(lan172 && Number(lan172[1]) >= 16 && Number(lan172[1]) <= 31);
 }
 
 function queueRequest(body){return privateFetch('/codex/queue',{method:'POST',headers:{'content-type':'application/json','x-dsh-queue':'1'},body:JSON.stringify(body)})
@@ -1027,7 +1203,7 @@ function enqueueDraft(text,box,attachments,options){
   if(!queueDraft||queueDraft.signature!==signature)queueDraft={signature:signature,id:crypto.randomUUID?crypto.randomUUID():'queue-'+Date.now()+'-'+Math.random().toString(16).slice(2)};
   state.sending=true;renderFooter();
   queueRequest({action:'enqueue',id:queueDraft.id,threadId:tid,waitForTurnId:deferred?'':state.turnId,input:input,label:attachmentLabel(text,attachments),model:state.pick.model,effort:state.pick.effort})
-    .then(function(){attachmentSent(tid,attachments);queueDraft=null;if(state.thread && state.thread.id===tid){if(box.value.trim()===text){box.value='';box.style.height='auto';}toast(options.savedNotice||t('已保存到电脑队列，尚未送达 Codex；确认连接且任务完成后才发送'));refreshQueue();}})
+    .then(function(){attachmentSent(tid,attachments);queueDraft=null;clearSubmittedTextDraft(tid,text);if(state.thread && state.thread.id===tid){toast(options.savedNotice||t('已保存在电脑，尚未送达。电脑端完成任务不等于自动发送；需由桥连接此会话。'));refreshQueue();}})
     .catch(function(e){toast(t('未确认加入队列，文字和附件已保留：')+e.message);})
     .finally(function(){state.sending=false;renderFooter();});
 }
@@ -1134,10 +1310,15 @@ function attachmentSent(tid,attachments) {
 }
 function attachmentLabel(text,attachments) { return text+(attachments.length?'\n\n' + t('附件：')+attachments.map(function(a){return a.name;}).join('、'):''); }
 function openAttachmentPicker() {
-  $('sheetInner').innerHTML='<h2>'+t('添加附件')+'</h2><p style="color:var(--dim);font-size:13px">'+t('每条最多 5 个，每个不超过 20 MB')+'</p><button class="btn" id="choose-image">🖼 '+t('图片或照片')+'</button><button class="btn" id="choose-file">📄 '+t('选择文件')+'</button><button class="btn" id="choose-new">'+t('＋ 开一个新会话')+'</button>';
+  $('sheetInner').innerHTML='<h2>'+t('添加附件')+'</h2><p style="color:var(--dim);font-size:13px">'+t('每条最多 5 个，每个不超过 20 MB')+'</p><button class="btn" id="choose-image">🖼 '+t('图片或照片')+'</button><button class="btn" id="choose-file">📄 '+t('选择文件')+'</button>'+
+    '<div class="stitle" id="new-thread-separator">'+t('会话操作（不是附件）')+'</div>'+
+    '<p class="info">'+t('新建会话会打开项目选择，不会添加附件。')+'</p>'+
+    '<button class="btn" id="choose-new">'+t('＋ 开一个新会话')+'</button>'+
+    '<button class="sclose" id="cancel-attachment">'+t('取消')+'</button>';
   $('choose-image').onclick=function(){$('pick-images').click();closeSheet();};
   $('choose-file').onclick=function(){$('pick-files').click();closeSheet();};
   $('choose-new').onclick=function(){closeSheet();newThread();};
+  $('cancel-attachment').onclick=closeSheet;
   $('sheet').classList.add('on');
   if (window.DshI18n) window.DshI18n.apply($('sheetInner'));
 }
@@ -1153,8 +1334,34 @@ function renderTaskStatus() {
   $('task-label').textContent = labels[kind] || labels.unknown;
   var detail = kind === 'offline' ? t('正在重连。手机断线不代表电脑任务已结束。') : task.detail;
   if (task.syncedAt) detail += (detail ? ' · ' : '') + t('上次同步 ') + new Date(task.syncedAt).toLocaleTimeString();
-  $('task-detail').textContent = detail;
-  $('task-activity').textContent = task.activity;
+  // ── C19：状态区只留一行 ────────────────────────────────────────────────────
+  //
+  // 使用者截图里的问题：那块状态区**把模型的整段话都铺进去了**，占了屏幕
+  // 四分之一，把对话挤下去。状态区的本分是"一眼看出在不在跑"，不是念正文 ——
+  // 正文本来就该在对话流里。
+  //
+  // 做法：超过一行的就折起来，只留开头一小段；要看全文就点「详情」展开。
+  // 这样默认状态区高度是固定的，长文本再也不会把它撑开。
+  var statusLimit = 42;
+  var statusFull = String(detail || '');
+  var statusShort = statusFull.length > statusLimit ? statusFull.slice(0, statusLimit) + '…' : statusFull;
+  if (statusFull.length <= statusLimit) taskStatusExpanded = false;
+  panel.classList.toggle('expanded', taskStatusExpanded);
+  $('task-detail').textContent = taskStatusExpanded ? statusFull : statusShort;
+  var more = $('task-more');
+  if (more) {
+    more.hidden = statusFull.length <= statusLimit;
+    more.onclick = function () {
+      taskStatusExpanded = !taskStatusExpanded;
+      renderTaskStatus();
+    };
+    more.textContent = taskStatusExpanded ? t('收起') : t('详情');
+  }
+  var activity = $('task-activity');
+  // The finished reply is already in the conversation. Repeating it above the
+  // transcript used valuable phone space without adding status information.
+  activity.hidden = ['completed','idle','unlinked'].indexOf(kind) >= 0 || !task.activity;
+  activity.textContent = activity.hidden ? '' : task.activity;
   $('task-refresh').disabled = !state.ready;
 }
 function setTask(kind, detail) {
@@ -1177,6 +1384,9 @@ function subscribeIfAlreadyLoaded(ids, tid, epoch) {
   call('thread/resume',{threadId:tid,excludeTurns:true},10000).then(function() {
     if (epoch !== observerEpoch || !state.thread || state.thread.id !== tid) return;
     state.resumed = true;
+    // This thread was already loaded by the bridge. Return old ownership
+    // after idle, even if the page was reopened without a new phone turn.
+    scheduleRelease();
     renderFooter();
   }).catch(function() {
     if (epoch === observerEpoch) { task.detail = t('实时连接暂未恢复，仍在自动同步任务记录。'); renderTaskStatus(); }
@@ -1191,7 +1401,9 @@ function applyObservedStatus(thread, turn) {
     // A persisted turn describes history, not the current desktop writer.
     // Keep it visible as history without enabling live steering or resume.
     state.resumed = false;
+    clearTimeout(state.releaseTimer);state.releaseTimer=null;
     var detail = t('正在同步历史记录，不代表电脑任务已停止。可先保存排队；未接通执行端时不会自动执行，也不会抢锁或关闭电脑 Codex。');
+    detail += ' ' + t('电脑端任务的授权、选择和提问仍需在电脑端处理；当前连接只能同步其记录。手机接管后发起的新任务，可以在这里处理请求。');
     if (turn && turn.status === 'completed') detail += ' ' + t('最近一轮任务已完成。');
     else if (turn && turn.status === 'interrupted') detail += ' ' + t('最近一轮任务已停止。');
     else if (turn && turn.status === 'failed') detail += ' ' + t('最近一轮任务执行失败。');
@@ -1209,6 +1421,7 @@ function applyObservedStatus(thread, turn) {
   else if (turn && turn.status === 'failed') setTask('failed',t('最近一轮任务执行失败。'));
   else if (!turn && st === 'idle') setTask('idle',t('可以发送消息开始任务。'));
   else setTask('unknown',t('尚未获得明确的任务结束或运行状态，稍后自动重试。'));
+  if(state.resumed && !state.running && !state.releaseTimer)scheduleRelease();
 }
 function noteActivity(item) {
   if (!item) return;
@@ -1314,7 +1527,7 @@ function citationButtonHtml(path, purpose, title) {
 function downloadDeliverable(path) {
   var name = baseName(path);
   toast(t('正在取文件…'));
-  return privateFetch('/codex/file?path=' + encodeURIComponent(path), { cache: 'no-store' })
+  return fileRequest(path)
     .then(function (r) {
       if (!r.ok) {
         throw new Error(r.status === 403 ? t('这台设备还没通过验证，稍后再试') : t('取不到这个文件'));
@@ -1450,10 +1663,16 @@ function fmt(text) {
   return out;
 }
 
+function timestampMs(v) {
+  if (!v) return 0;
+  var n = Number(v);
+  var t = Number.isFinite(n) ? n : Date.parse(v);
+  if (!Number.isFinite(t)) return 0;
+  return t < 1e12 ? t * 1000 : t;
+}
 function relTime(v) {
-  if (!v) return '';
-  var t = Number(v);
-  if (t < 1e12) t *= 1000;
+  var t = timestampMs(v);
+  if (!t) return '';
   var d = Math.floor((Date.now() - t) / 1000);
   if (d < 60) return tr('刚刚');
   if (d < 3600) return Math.floor(d / 60) + tr(' 分钟前');
@@ -1560,6 +1779,11 @@ function initScrollWatch() {
 
 // ── WebSocket ────────────────────────────────────────────────────────────────
 function connect() {
+  if (!window.__dshE2eeSecret && !plainLocalOrigin()) {
+    setConn('bad', '连不上');
+    toast(t('隧道地址缺少加密密钥，请用完整的手机地址重新打开。'));
+    return;
+  }
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var ws;
   try { ws = new WebSocket(proto + '//' + location.host + '/codex/ws'); }
@@ -1572,8 +1796,9 @@ function connect() {
     state.retry = 0;
     call('initialize', { clientInfo: { name: 'pocket-bridge-gw', version: '1.1.0' }, capabilities: { experimentalApi: true } })
       .then(function () {
+        ws.send(JSON.stringify({jsonrpc:'2.0',method:'initialized',params:{}}));
         state.ready = true;
-        setConn('ok', '已连接');
+        setConn('ok', '桥已连接');
         loadModels();
         loadAccount();
         if (state.view === 'list') loadThreads();
@@ -1653,8 +1878,8 @@ function reply(id, result, error) {
   var msg = { jsonrpc: '2.0', id: id };
   if (error) msg.error = { code: -32603, message: String(error) };
   else msg.result = result;
-  state.ws.send(JSON.stringify(msg));
-  return true;
+  try { state.ws.send(JSON.stringify(msg)); return true; }
+  catch (e) { toast(t('连接已断开，请等重连后再处理')); return false; }
 }
 
 // ── 服务端请求：审批 ─────────────────────────────────────────────────────────
@@ -1662,7 +1887,7 @@ function onServerRequest(m) {
   var p = m.params || {};
   if (state.thread && (p.threadId || p.conversationId) === state.thread.id) {
     activityVersion++;
-    if (/requestUserInput/.test(m.method)) setTask('waitingInput',t('请回答下面的问题。'));
+    if (/requestUserInput|elicitation/.test(m.method)) setTask('waitingInput',t('请回答下面的问题。'));
     else if (/Approval/.test(m.method)) setTask('waitingApproval',t('请处理下面的审批请求。'));
   }
 
@@ -1673,7 +1898,9 @@ function onServerRequest(m) {
       kind: m.method.indexOf('fileChange') >= 0 ? t('文件改动') : t('执行命令'),
       // v2 的两个接口要的是 accept / acceptForSession / decline / cancel
       style: 'v2',
-      title: m.method.indexOf('fileChange') >= 0 ? t('要改文件') : t('要执行命令'),
+      title: p.networkApprovalContext ? t('请求网络访问') : m.method.indexOf('fileChange') >= 0 ? t('要改文件') : t('要执行命令'),
+      availableDecisions: p.availableDecisions, network: p.networkApprovalContext,
+      additionalPermissions: p.additionalPermissions,
       command: p.command || '',
       cwd: p.cwd || (p.grantRoot ? t('写入目录：') + p.grantRoot : ''),
       reason: p.reason || (p.grantRoot ? t('请求写入权限：') + p.grantRoot : ''),
@@ -1714,6 +1941,8 @@ function onServerRequest(m) {
     return;
   }
 
+  if (m.method === 'mcpServer/elicitation/request') { showElicitation(m.id,p); return; }
+
   // 不认识的：如实告诉使用者，并且回一个错误，别让对面干等
   console.log('[codex] 没处理的服务端请求:', m.method, p);
   reply(m.id, null, t('手机端暂不支持这个请求：') + m.method);
@@ -1725,9 +1954,12 @@ function showApproval(o) {
 
   var el = document.createElement('div');
   el.className = 'appr';
-  state.approvals[o.id] = {el:el,threadId:o.threadId};
+  state.approvals[o.id] = {el:el,threadId:o.threadId || (state.thread && state.thread.id)};
   el.innerHTML =
     '<div class="h">Codex ' + esc(o.title) + '</div>' +
+    (o.threadId ? '<div class="w">' + esc(t('会话：') + ' ' + o.threadId) + '</div>' : '') +
+    (o.network ? '<div class="c">' + esc(o.network.protocol + '://' + o.network.host) + '</div>' : '') +
+    (o.additionalPermissions ? '<div class="c">' + esc(t('请求的额外权限：') + '\n' + JSON.stringify(o.additionalPermissions,null,2)) + '</div>' : '') +
     (o.command ? '<div class="c">' + esc(o.command) + '</div>' : '') +
     (o.cwd ? '<div class="w">' + esc(o.cwd) + '</div>' : '') +
     (o.reason ? '<div class="w">' + esc(o.reason) + '</div>' : '') +
@@ -1744,6 +1976,23 @@ function showApproval(o) {
     : [[t('批准'), 'accept', 'p', t('已批准')], [t('本次会话都批准'), 'acceptForSession', '', t('本会话已批准')],
        [t('拒绝'), 'decline', 'd', t('已拒绝')], [t('拒绝并中止'), 'cancel', 'd', t('已拒绝并中止')]];
 
+  if(o.style==='perm')choices=choices.slice(0,3);
+  if(o.style==='v2' && Array.isArray(o.availableDecisions)){
+    choices=choices.filter(function(c){return o.availableDecisions.indexOf(c[1])>=0;});
+    o.availableDecisions.forEach(function(decision){
+      if(!decision || typeof decision!=='object')return;
+      var label;
+      if(decision.acceptWithExecpolicyAmendment)label=t('批准并保存命令规则');
+      else if(decision.applyNetworkPolicyAmendment){
+        var rule=decision.applyNetworkPolicyAmendment.network_policy_amendment;
+        if(!rule || ['allow','deny'].indexOf(rule.action)<0)return;
+        label=rule.action==='allow'?t('保存网络允许规则'):t('保存网络拒绝规则');
+      }else return;
+      choices.push([label,decision,'',t('已提交规则决定')]);
+      var detail=document.createElement('div');detail.className='c';
+      detail.textContent=label+'\n'+JSON.stringify(decision,null,2);el.insertBefore(detail,btns);
+    });
+  }
   var done = false;
   choices.forEach(function (c) {
     var b = document.createElement('button');
@@ -1752,10 +2001,6 @@ function showApproval(o) {
     b.onclick = function () {
       if (done) return;
       if(!state.ready){toast(t('连接已断开，请等重连后再处理'));return;}
-      done = true;
-      Array.prototype.forEach.call(btns.querySelectorAll('button'), function (x) { x.disabled = true; });
-      b.textContent = c[3] || c[0];
-
       var decision = c[1];
       var payload;
       if (decision === 'legacy-deny') {
@@ -1766,7 +2011,10 @@ function showApproval(o) {
       } else {
         payload = { decision: decision };
       }
-      if(!reply(o.id, payload)){done=false;return;}
+      if(!reply(o.id,payload))return;
+      done=true;
+      Array.prototype.forEach.call(btns.querySelectorAll('button'),function(x){x.disabled=true;});
+      b.textContent=c[3]||c[0];
       delete state.approvals[o.id];
       if(state.thread && state.thread.id===o.threadId) { setTask('running',t('已提交审批，等待任务继续。')); refreshObservedThread(); }
       // 把这张卡留下来当作记录，但改成已完成的样子
@@ -1779,67 +2027,127 @@ function showApproval(o) {
 
   // 挂到独立容器：切会话/返回列表时 #body 会被清空，混在一起的话这张卡会被抹掉，
   // 而 Codex 那边还在等你答复 —— 那就变成一个「说不清的卡住」。
-  $('apprs').appendChild(el);
+  renderPendingApprovals();
   scrollDown(true);
   toast(t('Codex 需要你确认'));
 }
 
-function showQuestions(id, p) {
+function promptInputStyle(input){
+  input.style.cssText='width:100%;padding:9px;border-radius:9px;background:#111;color:#eee;border:1px solid #555;font:inherit';
+}
+function finishPrompt(id,p,el,result){
+  if(!state.ready || !reply(id,result)){toast(t('连接已断开，请等重连后再处理'));return false;}
+  delete state.approvals[id];el.remove();
+  if(state.thread && state.thread.id===p.threadId){activityVersion++;setTask('running',t('已提交，等待任务继续。'));refreshObservedThread();}
+  return true;
+}
+function renderPendingApprovals() {
+  var host = $('apprs');
+  var loading = state.view === 'thread' && state.resuming ? document.getElementById('resume-note') : null;
+  host.innerHTML = '';
+  if (loading) host.appendChild(loading);
+  if (state.view !== 'thread' || !state.thread) return;
+  Object.keys(state.approvals).forEach(function(id) {
+    var request = state.approvals[id];
+    if (request && request.el && request.threadId === state.thread.id) host.appendChild(request.el);
+  });
+}
+function showQuestions(id,p){
   if(state.approvals[id])return;
-  var qs = p.questions || [];
-  var el = document.createElement('div');
-  el.className = 'appr';
-  state.approvals[id]={el:el,threadId:p.threadId};
-  el.innerHTML = '<div class="h">' + t('Codex 想问你') + '</div>';
-  var inputs = [];
-  qs.forEach(function (q) {
-    var d = document.createElement('div');
-    d.style.marginBottom = '10px';
-    d.innerHTML = '<div style="font-size:13.5px;margin-bottom:5px">' + esc(q.question || q.text || '') + '</div>';
-    if (q.options && q.options.length) {
-      var sel = document.createElement('select');
-      sel.style.cssText = 'width:100%;padding:9px;border-radius:9px;background:#111;' +
-        'color:#eee;border:1px solid #333;font:inherit';
-      q.options.forEach(function (op) {
-        var o = document.createElement('option');
-        o.value = typeof op === 'string' ? op : (op.value || op.label || '');
-        o.textContent = typeof op === 'string' ? op : (op.label || op.value || '');
-        sel.appendChild(o);
-      });
-      d.appendChild(sel);
-      inputs.push({ q: q, get: function () { return sel.value; } });
-    } else {
-      var inp = document.createElement('input');
-      inp.style.cssText = 'width:100%;padding:9px;border-radius:9px;background:#111;' +
-        'color:#eee;border:1px solid #333;font:inherit';
-      d.appendChild(inp);
-      inputs.push({ q: q, get: function () { return inp.value; } });
-    }
+  var qs=p.questions||[],el=document.createElement('div');el.className='appr';
+  state.approvals[id]={el:el,threadId:p.threadId || (state.thread && state.thread.id)};
+  el.innerHTML='<div class="h">'+esc(t('Codex 想问你'))+'</div>'+(p.threadId?'<div class="w">'+esc(t('会话：')+' '+p.threadId)+'</div>':'');
+  var inputs=[];
+  qs.forEach(function(q){
+    var d=document.createElement('div');d.style.marginBottom='10px';
+    d.innerHTML=(q.header?'<div class="h">'+esc(q.header)+'</div>':'')+'<div style="font-size:13.5px;margin-bottom:5px">'+esc(q.question||q.text||'')+'</div>';
+    if(q.options && q.options.length){
+      var sel=document.createElement('select');promptInputStyle(sel);
+      var blank=document.createElement('option');blank.value='';blank.textContent=t('选择一个选项');sel.appendChild(blank);
+      q.options.forEach(function(op){
+        var option=document.createElement('option');option.value=typeof op==='string'?op:(op.label||op.value||'');
+        option.textContent=option.value;sel.appendChild(option);
+        if(op.description){var desc=document.createElement('div');desc.className='w';desc.textContent=option.value+': '+op.description;d.appendChild(desc);}
+      });d.appendChild(sel);
+      var other=null,marker='__pocket_bridge_other__';
+      if(q.isOther){var opt=document.createElement('option');opt.value=marker;opt.textContent=t('其他回答');sel.appendChild(opt);
+        other=document.createElement('input');other.type=q.isSecret?'password':'text';other.autocomplete='off';promptInputStyle(other);other.placeholder=t('其他回答');other.hidden=true;d.appendChild(other);
+        sel.onchange=function(){other.hidden=sel.value!==marker;};}
+      inputs.push({q:q,get:function(){return sel.value===marker && other?other.value:sel.value;}});
+    }else{var inp=document.createElement('input');inp.type=q.isSecret?'password':'text';inp.autocomplete='off';promptInputStyle(inp);d.appendChild(inp);inputs.push({q:q,get:function(){return inp.value;}});}
     el.appendChild(d);
   });
-
-  var b = document.createElement('button');
-  b.className = 'p';
-  b.textContent = t('提交');
-  b.style.cssText = 'padding:9px 16px;border-radius:9px;background:#2f7d4f;color:#fff;font-weight:600';
-  b.onclick = function () {
-    var answers = {};
-    inputs.forEach(function (x) { answers[x.q.id || x.q.question] = {answers:[x.get()]}; });
-    if(!reply(id, { answers: answers }))return;
-    delete state.approvals[id];
-    el.remove();
+  var row=document.createElement('div');row.className='btns';
+  var button=document.createElement('button');button.className='p';button.textContent=t('提交');
+  button.onclick=function(){
+    var answers={},valid=inputs.length>0;
+    inputs.forEach(function(x){var answer=x.get();if(!answer || !answer.trim())valid=false;Object.defineProperty(answers,x.q.id||x.q.question,{value:{answers:[answer]},enumerable:true});});
+    if(!valid){toast(t('请回答所有问题后提交'));return;}
+    finishPrompt(id,p,el,{answers:answers});
   };
-  var row = document.createElement('div');
-  row.className = 'btns';
-  row.appendChild(b);
-  el.appendChild(row);
-
-  $('apprs').appendChild(el);
-  scrollDown(true);
+  row.appendChild(button);el.appendChild(row);renderPendingApprovals();scrollDown(true);toast(t('Codex 想问你'));
+}
+function showElicitation(id,p){
+  if(state.approvals[id])return;
+  var el=document.createElement('div');el.className='appr';state.approvals[id]={el:el,threadId:p.threadId || (state.thread && state.thread.id)};
+  el.innerHTML='<div class="h">'+esc(t('工具请求确认'))+'</div><div class="w">'+esc(p.serverName||'')+'</div><div class="c">'+esc(p.message||p.description||'')+'</div>';
+  var fields=[],supported=true,schema=p.requestedSchema||{};
+  if(p.mode==='url'){
+    var url;
+    try{url=new URL(p.url);if(['http:','https:'].indexOf(url.protocol)<0)throw new Error('url');}catch(e){supported=false;}
+    var link=document.createElement(supported?'a':'div');link.className='w';
+    if(supported){link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.textContent=t('打开授权链接')+' · '+url.host;}
+    else link.textContent=t('授权链接无效，请在原客户端处理。');el.appendChild(link);
+  }else if(p.mode==='form'){
+    var properties=schema.properties,required=schema.required||[];
+    supported=schema.type==='object' && properties && typeof properties==='object' && !Array.isArray(properties) && Array.isArray(required);
+    if(supported)Object.keys(properties).forEach(function(key){
+      var f=properties[key],type=f && f.type;
+      if(!f || ['string','number','integer','boolean'].indexOf(type)<0 || f.oneOf || f.anyOf || f.$ref || f.pattern){supported=false;return;}
+      if(f.enum && (!Array.isArray(f.enum)||f.enum.some(function(v){return typeof v!=='string';}))){supported=false;return;}
+      var d=document.createElement('div'),label=document.createElement('label');label.textContent=(f.title||key)+(required.indexOf(key)>=0?' *':'');
+      var input;
+      if(type==='boolean'||f.enum){
+        input=document.createElement('select');var blank=document.createElement('option');blank.value='';blank.textContent=t('选择一个选项');input.appendChild(blank);
+        (type==='boolean'?['true','false']:f.enum).forEach(function(value,i){var op=document.createElement('option');op.value=value;op.textContent=f.enumNames && f.enumNames[i] || value;input.appendChild(op);});
+      }else{input=document.createElement('input');input.type=type==='string'?(f.format==='email'?'email':f.format==='uri'?'url':'text'):'number';
+        if(type!=='string'){input.step=type==='integer'?'1':'any';if(f.minimum!==undefined)input.min=f.minimum;if(f.maximum!==undefined)input.max=f.maximum;}
+        if(f.minLength!==undefined)input.minLength=f.minLength;if(f.maxLength!==undefined)input.maxLength=f.maxLength;
+      }
+      input.name=key;input.required=required.indexOf(key)>=0;promptInputStyle(input);
+      if(f.default!==undefined)input.value=String(f.default);
+      label.appendChild(input);d.appendChild(label);
+      if(f.description){var desc=document.createElement('div');desc.className='w';desc.textContent=f.description;d.appendChild(desc);}
+      el.appendChild(d);fields.push({key:key,input:input,type:type,schema:f});
+    });
+    if(supported && required.some(function(key){return !Object.prototype.hasOwnProperty.call(properties,key);}))supported=false;
+  }else supported=false;
+  if(!supported){var note=document.createElement('div');note.className='w';note.textContent=t('手机暂不支持此表单，请在原客户端处理，或明确选择拒绝或取消。');el.appendChild(note);}
+  var row=document.createElement('div');row.className='btns';
+  [['accept',p.mode==='url'?t('完成后确认'):t('提交')],['decline',t('拒绝')],['cancel',t('取消')]].forEach(function(choice){
+    var button=document.createElement('button');button.textContent=choice[1];button.dataset.action=choice[0];if(choice[0]==='accept'){button.className='p';button.disabled=!supported;}
+    button.onclick=function(){
+      var content=null;
+      if(choice[0]==='accept' && p.mode==='form'){
+        content={};var valid=true;
+        fields.forEach(function(f){
+          var v=f.input.value;if(!f.input.checkValidity()){valid=false;return;}if(v==='')return;
+          if(f.type==='number'||f.type==='integer'){v=Number(v);if(!isFinite(v)||(f.type==='integer' && Math.floor(v)!==v))valid=false;}
+          else if(f.type==='boolean')v=v==='true';
+          if(f.type==='string' && ((f.schema.minLength!==undefined && v.length<f.schema.minLength)||(f.schema.maxLength!==undefined && v.length>f.schema.maxLength)))valid=false;
+          Object.defineProperty(content,f.key,{value:v,enumerable:true,configurable:true,writable:true});
+        });
+        if(!valid){toast(t('请检查必填内容和输入格式'));return;}
+      }
+      finishPrompt(id,p,el,{action:choice[0],content:content});
+    };row.appendChild(button);
+  });el.appendChild(row);renderPendingApprovals();scrollDown(true);toast(t('工具请求确认'));
 }
 
 // ── 通知 ─────────────────────────────────────────────────────────────────────
 function onNotify(method, p) {
+  if(p.threadId && detachedHandbacks[p.threadId] &&
+     (method==='turn/completed'||method==='turn/started'))scheduleDetachedHandback(p.threadId);
   if(method === 'serverRequest/resolved') {
     var resolved = state.approvals[p.requestId];
     if(resolved && resolved.el)resolved.el.remove();
@@ -1876,14 +2184,7 @@ function onNotify(method, p) {
         }
       });
       renderFooter();
-      // 回合结束**不立刻**还写锁，而是交给闲置计时器（5 分钟）。
-      //
-      // 一开始是「回合结束就还」，结果是：每发一条消息都要重新 resume 一次，
-      // 界面上每次都显示「正在加载对话」—— 明明刚说过话。
-      // 使用者连着发几条是很常见的，每条都等一遍完全没必要。
-      //
-      // 代价是手机可能多占着写锁几分钟（电脑上此时打开同一个会话会被挡），
-      // 但只要有交互就一直续期、闲置够了就还，不会无限期占着。
+      // Allow a brief follow-up, then give desktop the writer back.
       scheduleRelease();
       break;
 
@@ -2249,7 +2550,7 @@ function buildCommand(item, rec) {
   var dur = item.durationMs ? '<span class="badge">' + Math.round(item.durationMs / 100) / 10 + 's</span>' : '';
 
   var d = document.createElement('details');
-  d.className = 'tool';
+  d.className = 'tool trace';
   d.innerHTML =
     '<summary><span class="kind">' + t('命令') + '</span>' +
     '<span class="head">' + esc(shown) + '</span>' + dur + badge + '</summary>' +
@@ -2313,7 +2614,7 @@ function buildToolCall(item) {
   var out = item.output || (item.result ? JSON.stringify(item.result).slice(0, 400) : '') ||
     (item.error ? t('错误：') + item.error : '');
   var d = document.createElement('details');
-  d.className = 'tool';
+  d.className = 'tool trace';
   d.innerHTML = '<summary><span class="kind">' + t('工具') + '</span>' +
     '<span class="head">' + esc(name + (detail ? '  ' + detail : '')) + '</span>' +
     (item.status ? '<span class="badge">' + esc(item.status) + '</span>' : '') + '</summary>' +
@@ -2340,6 +2641,31 @@ function fileUrl(p, w) {
   return '/codex/file?path=' + encodeURIComponent(p) + (w ? '&w=' + w : '');
 }
 
+function fileRequest(path, width) {
+  // The relay may see URL paths and query strings. Keep computer paths inside
+  // the encrypted POST body; the legacy GET is restricted to private LAN mode.
+  if (window.__dshE2eeSecret) {
+    var body = { path: path };
+    if (width) body.w = width;
+    return privateFetch('/codex/file', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(response) {
+      // A successful response must carry proof that the browser authenticated
+      // and decrypted it. An unmarked 200 could be plaintext from a proxy.
+      if (response.ok && (!response.headers || response.headers.get('x-dsh-e2ee-decrypted') !== '1')) {
+        var failure = new Error(t('文件响应未通过加密校验，请刷新桥页面后重试。'));
+        failure.code = 'file-e2ee-verification';
+        throw failure;
+      }
+      return response;
+    });
+  }
+  if (!plainLocalOrigin()) return Promise.reject(new Error(t('隧道地址缺少加密密钥，请用完整的手机地址重新打开。')));
+  return privateFetch(fileUrl(path, width), { cache: 'no-store' });
+}
+
 var IMG_RE = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
 var DOC_RE = /\.(pdf|docx?|xlsx?|pptx?|md|txt|json|csv|log|ya?ml|xml)$/i;
 
@@ -2362,17 +2688,6 @@ function fileIcon(p) {
  * 拦不到。所以要显式取回来、解密、再塞成一个 blob 地址。
  * 失败就退回明文地址（电脑上没配密钥时本来就该走明文）。
  */
-function protectedUrl(url, mime) {
-  var secret = window.__dshE2eeSecret;
-  if (!secret || !window.DshE2EE || !window.DshE2EE.fetchToBlobUrl) {
-    return Promise.resolve(url);
-  }
-  var enc = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'e2ee=1';
-  return window.DshE2EE.fetchToBlobUrl(secret, enc, mime).catch(function () {
-    return url;    // 解不开就用明文那条，别让图裂掉
-  });
-}
-
 // Keep preview blob URLs alive while their images are visible (long-press/save
 // still works), then release them when the images leave the document.
 var imageBlobRecords = [];
@@ -2408,34 +2723,36 @@ function buildImageView(p, caption) {
   d.className = 'imgbox';
   if (!p) { d.innerHTML = '<div class="tool"><div style="padding:9px 13px">🖼 ' + t('（没有路径）') + '</div></div>'; return d; }
 
-  var secret = window.__dshE2eeSecret;
   d.innerHTML = '<div class="imgwrap"></div>' +
     '<div class="imgcap">' + fileIcon(p) + ' ' + esc(shortPath(p)) + '</div>';
   var wrap = d.querySelector('.imgwrap');
 
-  function showNote(msg, withRetry) {
-    wrap.innerHTML = '<div class="tool"><div style="padding:9px 13px;font-size:12.5px;' +
-      'color:var(--dim)">🖼 ' + esc(msg) + esc(shortPath(p)) +
-      (withRetry ? ' · <a href="#" class="imgretry">' + esc(t('重试')) + '</a>' : '') +
-      '</div></div>';
-    var a = wrap.querySelector('.imgretry');
-    if (a) a.addEventListener('click', function (ev) { ev.preventDefault(); start(); });
+  // ★ 钥匙必须**每次现取**，不能在渲染这条消息时取一次就存住。
+  //   实测踩过：这个值在页面很早期是空的（`e2ee.js` 把 `#k=` 解析出来
+  //   要等一个 tick），而 `privateFetch` 有没有钥匙决定了走**加密**还是**明文** ——
+  //   取早了就永远走明文，而网关对内容通道是「拒绝明文、不降级」的，
+  //   于是图片一直是"没取回来"。使用者看到的就是「Codex 又打不开图片和文件了」。
+  function e2eeSecret() {
+    try { return window.__dshE2eeSecret || null; } catch (e) { return null; }
   }
 
   /** 取图。有钥匙就走加密那条（privateFetch 会带 x-dsh-e2ee，并且被拦了会补证重发）。 */
   function start() {
-    if (!secret) {
-      // 内网明文模式：本来就没有钥匙，直接用地址（和以前一样）
-      wrap.innerHTML = '<a href="' + esc(fileUrl(p)) + '" target="_blank" rel="noopener">' +
-        '<img loading="lazy" alt="' + esc(caption || t('图片')) + '" src="' + esc(fileUrl(p, 900)) + '"></a>';
-      var plain = wrap.querySelector('img');
-      plain.onerror = function () { showNote(t('打不开这张图：'), true); };
-      return;
+    var secret = e2eeSecret();
+    if (!secret && !plainLocalOrigin()) {
+        showNote(t('这台设备的地址里没有加密密钥，所以取不到图 —— 请用带 #k= 的完整地址重新打开。'), false);
+        return;
     }
     showNote(t('正在取图：'), false);
-    privateFetch(fileUrl(p, 900), { cache: 'no-store' })
+    fileRequest(p, 900)
       .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        if (!r.ok) {
+          // 把状态码带出去：403 是"没带上钥匙/凭据"，404 是"文件真不在了"，
+          // 两种的处理办法完全不同，含糊一句"没取回来"等于什么都没说。
+          var e = new Error('HTTP ' + r.status);
+          e.status = r.status;
+          throw e;
+        }
         return r.blob();
       })
       .then(function (b) {
@@ -2450,14 +2767,39 @@ function buildImageView(p, caption) {
         link.addEventListener('click', function (ev) { ev.preventDefault(); openFull(); });
       })
       .catch(function (e) {
-        // 如实说：多半是这台设备还没验证完，或者那个文件真的不在了
-        showNote(t('这张图没取回来：'), true);
+        if (e && e.code === 'file-e2ee-verification') {
+          showNote(e.message, true);
+          return;
+        }
+        // ★ 这里**不要**自己偷偷重试。
+        //
+        //   原来我加过一次"失败后 1.2 秒自动再试一遍"，结果是：
+        //   失败提示闪一下就被下一轮的"正在取图…"盖掉了 —— 使用者看到的
+        //   永远是"正在取图"或者一闪而过，**根本读不到发生了什么**。
+        //   （实测抓出来的：回归测试断言的就是最终那一屏文字。）
+        //   要重试就让人点「重试」，那个按钮一直在。
+        if (e && e.status === 403 && !e2eeSecret()) {
+          // 地址不完整 —— 把原因直接说出来，别让人以为是文件坏了
+          showNote(t('这台设备的地址里没有加密密钥，所以取不到图 —— 请用带 #k= 的完整地址重新打开。'), true);
+          return;
+        }
+        // 把状态码也摆出来：403 和 404 的处理办法完全不同
+        showNote(t('这张图没取回来：') + (e && e.status ? '(' + e.status + ') ' : ''), true);
       });
+  }
+
+  function showNote(msg, withRetry) {
+    wrap.innerHTML = '<div class="tool"><div style="padding:9px 13px;font-size:12.5px;' +
+      'color:var(--dim)">🖼 ' + esc(msg) + esc(shortPath(p)) +
+      (withRetry ? ' · <a href="#" class="imgretry">' + esc(t('重试')) + '</a>' : '') +
+      '</div></div>';
+    var a = wrap.querySelector('.imgretry');
+    if (a) a.addEventListener('click', function (ev) { ev.preventDefault(); start(); });
   }
 
   /** 点开看原图：也走加密，取回来开一个 blob */
   function openFull() {
-    privateFetch(fileUrl(p), { cache: 'no-store' })
+    fileRequest(p)
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
       .then(function (b) {
         var url = URL.createObjectURL(b);
@@ -2480,11 +2822,11 @@ function shortPath(p) {
 
 /** 通用文件卡片：图标 + 名字 + 打开 */
 function buildFileCard(p, note) {
-  var d = document.createElement('a');
+  var d = document.createElement('button');
   d.className = 'filecard';
-  d.href = fileUrl(p);
-  d.target = '_blank';
-  d.rel = 'noopener';
+  d.type = 'button';
+  d.setAttribute('data-filecite', p);
+  d.title = p;
   d.innerHTML = '<span class="fi">' + fileIcon(p) + '</span>' +
     '<span class="fn">' + esc(shortPath(p)) + '</span>' +
     (note ? '<span class="fnote">' + esc(note) + '</span>' : '') +
@@ -2496,7 +2838,7 @@ function buildWebSearch(item) {
   var q = typeof item.query === 'string' ? item.query : JSON.stringify(item.query || '');
   var n = (item.results || []).length;
   var d = document.createElement('details');
-  d.className = 'tool';
+  d.className = 'tool trace';
   var rows = (item.results || []).slice(0, 12).map(function (r) {
     var title = r.title || r.name || r.url || '';
     var url = r.url || '';
@@ -2546,7 +2888,7 @@ function buildCollab(item) {
   }).join('');
 
   var d = document.createElement('details');
-  d.className = 'tool';
+  d.className = 'tool trace';
   d.innerHTML = '<summary><span class="kind">' + t('协作') + '</span>' +
     '<span class="head">' + esc(tool + (prompt ? '　' + prompt : '')) + '</span>' +
     (item.status ? '<span class="badge">' + esc(item.status) + '</span>' : '') + '</summary>' +
@@ -2621,12 +2963,36 @@ function renderPlan(steps, turnId) {
 }
 
 // ── 会话列表 ─────────────────────────────────────────────────────────────────
+var THREAD_LIST_PAGE_SIZE = 60;
+var threadListEpoch = 0;
+var threadSearchEpoch = 0;
+var threadSearchTimer = null;
+
+function appendUniqueThreads(existing, rows) {
+  var seen = Object.create(null);
+  existing.forEach(function (th) { if (th && th.id) seen[th.id] = true; });
+  var joined = existing.slice();
+  (rows || []).forEach(function (th) {
+    if (!th || !th.id || seen[th.id]) return;
+    seen[th.id] = true;
+    joined.push(th);
+  });
+  return joined;
+}
+
 function loadThreads() {
+  var epoch = ++threadListEpoch;
+  ++threadSearchEpoch;
+  if (threadSearchTimer) { clearTimeout(threadSearchTimer); threadSearchTimer = null; }
   stopObserving();
+  rememberTextDraft();
   // 离开会话时把写锁还回去 —— 不还的话，电脑上的 Codex 就再也打不开它了
   releaseThread();
   state.view = 'list';
   state.thread = null;
+  updateLockHint();
+  taskStatusExpanded = false;
+  renderPendingApprovals();
   renderTaskStatus();
   state.items = {}; state.order = [];
   // 换会话时把「等回推的占位」也清掉：它们属于上一条会话，留着会认错人
@@ -2634,6 +3000,12 @@ function loadThreads() {
   $('title').textContent = 'Codex';
   $('back').style.display = 'none';
   $('footer').style.display = 'none';
+  state.threads = [];
+  state.listCursor = null; state.listReady = false; state.listPending = true;
+  state.listError = ''; state.listMorePending = false;
+  state.searchThreads = []; state.searchCursor = null;
+  state.searchPending = false; state.searchReady = false;
+  state.searchError = ''; state.searchMorePending = false;
 
   // 先把列表贴出来，再等服务端的新数据。
   //
@@ -2658,7 +3030,9 @@ function loadThreads() {
     .then(function (r) { return r.json(); })
     .then(function (j) {
       if (!j || !j.ok || !j.list || !j.list.length) return;
-      if (state.view !== 'list') return;
+      // The gateway cache only seeds the first screen. A late response must
+      // never replace a paged list or a newer direct app-server response.
+      if (epoch !== threadListEpoch || state.view !== 'list' || state.listReady) return;
       state.threads = j.list;
       state.projects = collectProjects(j.list);
       writeThreadCache(j.list);
@@ -2666,22 +3040,25 @@ function loadThreads() {
     })
     .catch(function () { });
 
-  call('thread/list', { limit: 60 }).then(function (r) {
-    if (state.view !== 'list') return;
+  call('thread/list', { limit: THREAD_LIST_PAGE_SIZE }).then(function (r) {
+    if (epoch !== threadListEpoch || state.view !== 'list') return;
+    state.listPending = false;
+    state.listReady = true;
+    state.listCursor = (r && r.nextCursor) || null;
     state.threads = (r && r.data) || [];
     state.projects = collectProjects(state.threads);
     writeThreadCache(state.threads);
     renderThreads();
   }).catch(function (e) {
-    // 缓存能用就别把屏幕清掉 —— 好歹让人能点进去
-    if (cached && cached.length) { toast(t('列表没能刷新：') + e.message); return; }
-    $('body').innerHTML = '';
-    addError(t('读不到会话列表：') + e.message);
-    var b = document.createElement('button');
-    b.className = 'btn'; b.textContent = t('重试');
-    b.onclick = loadThreads;
-    $('body').appendChild(b);
+    if (epoch !== threadListEpoch || state.view !== 'list') return;
+    state.listPending = false;
+    state.listError = e.message;
+    // Keep the search box and retry control available even without a cache:
+    // title search can still find an older conversation after list refresh fails.
+    renderThreads();
+    toast(t(state.threads.length ? '列表没能刷新：' : '读不到会话列表：') + e.message);
   });
+  if (state.filter.trim()) scheduleThreadSearch();
 }
 
 var THREAD_CACHE_KEY = 'dsh-codex-threads-v1';
@@ -2699,13 +3076,80 @@ function readThreadCache() {
 function writeThreadCache(list) {
   try {
     localStorage.setItem(THREAD_CACHE_KEY,
-      JSON.stringify({ at: Date.now(), list: (list || []).slice(0, 60) }));
+      JSON.stringify({ at: Date.now(), list: (list || []).slice(0, THREAD_LIST_PAGE_SIZE) }));
   } catch (e) { /* 存不下不影响功能 */ }
+}
+
+// Codex searches titles across the complete thread store. Preview text is not
+// part of that API, so we also match previews in the pages already loaded.
+function scheduleThreadSearch() {
+  var epoch = ++threadSearchEpoch;
+  if (threadSearchTimer) { clearTimeout(threadSearchTimer); threadSearchTimer = null; }
+  var term = state.filter.trim();
+  state.searchThreads = []; state.searchCursor = null;
+  state.searchPending = !!term; state.searchReady = false;
+  state.searchError = ''; state.searchMorePending = false;
+  if (!term) return;
+  threadSearchTimer = setTimeout(function () {
+    threadSearchTimer = null;
+    call('thread/list', { limit: THREAD_LIST_PAGE_SIZE, searchTerm: term }).then(function (r) {
+      if (epoch !== threadSearchEpoch || state.view !== 'list') return;
+      state.searchThreads = (r && r.data) || [];
+      state.searchCursor = (r && r.nextCursor) || null;
+      state.searchPending = false; state.searchReady = true;
+      renderThreadListOnly();
+    }).catch(function (e) {
+      if (epoch !== threadSearchEpoch || state.view !== 'list') return;
+      state.searchPending = false; state.searchError = e.message;
+      renderThreadListOnly();
+    });
+  }, 320);
+}
+
+function loadOlderThreads() {
+  if (state.view !== 'list') return;
+  var term = state.filter.trim();
+  var searching = !!term;
+  var cursor = searching ? state.searchCursor : state.listCursor;
+  if (!cursor || (searching ? state.searchMorePending : state.listMorePending)) return;
+  var epoch = searching ? threadSearchEpoch : threadListEpoch;
+  if (searching) state.searchMorePending = true;
+  else state.listMorePending = true;
+  renderThreadListOnly();
+  var params = { limit: THREAD_LIST_PAGE_SIZE, cursor: cursor };
+  if (searching) params.searchTerm = term;
+  call('thread/list', params).then(function (r) {
+    if (state.view !== 'list' || epoch !== (searching ? threadSearchEpoch : threadListEpoch)) return;
+    var rows = (r && r.data) || [];
+    var next = (r && r.nextCursor) || null;
+    // A broken/repeated cursor must not trap the user in an endless load loop.
+    if (!rows.length || next === cursor) next = null;
+    if (searching) {
+      state.searchThreads = appendUniqueThreads(state.searchThreads, rows);
+      state.searchCursor = next;
+      state.searchMorePending = false;
+    } else {
+      state.threads = appendUniqueThreads(state.threads, rows);
+      state.listCursor = next;
+      state.listMorePending = false;
+      state.projects = collectProjects(state.threads);
+    }
+    renderThreadListOnly();
+  }).catch(function (e) {
+    if (state.view !== 'list' || epoch !== (searching ? threadSearchEpoch : threadListEpoch)) return;
+    if (searching) state.searchMorePending = false;
+    else state.listMorePending = false;
+    renderThreadListOnly();
+    toast(t('加载更早的会话失败：') + e.message);
+  });
 }
 
 function renderThreads() {
   var box = $('body');
   var q = state.filter.trim().toLowerCase();
+  var oldInput = document.getElementById('q');
+  var keepFocus = oldInput && document.activeElement === oldInput;
+  var caret = keepFocus ? oldInput.selectionStart : null;
   box.innerHTML = '';
 
   // 搜索框
@@ -2717,6 +3161,7 @@ function renderThreads() {
   var qi = s.querySelector('#q');
   qi.oninput = function () {
     state.filter = qi.value;
+    scheduleThreadSearch();
     renderThreadListOnly();
   };
 
@@ -2734,6 +3179,10 @@ function renderThreads() {
   listBox.id = 'thlist';
   box.appendChild(listBox);
   fillThreadList(listBox, q);
+  if (keepFocus) {
+    qi.focus({ preventScroll: true });
+    if (caret !== null) qi.setSelectionRange(caret, caret);
+  }
   if (window.DshI18n) window.DshI18n.apply(box);
 }
 
@@ -2745,15 +3194,16 @@ function renderThreadListOnly() {
 
 function fillThreadList(box, q) {
   box.innerHTML = '';
-  var list = state.threads.filter(function (t) {
+  var local = state.threads.filter(function (t) {
     if (!q) return true;
     return ((t.name || '') + ' ' + (t.preview || '')).toLowerCase().indexOf(q) >= 0;
   });
+  var list = q ? appendUniqueThreads(local, state.searchThreads) : local;
 
   if (!list.length) {
-    box.innerHTML = '<div class="empty">' + (q ? t('没有匹配的会话') : t('还没有会话')) + '</div>';
-    return;
-  }
+    box.innerHTML = '<div class="empty">' + (q && state.searchPending ? t('正在搜索所有会话标题…') :
+      q ? t('没有匹配的会话') : t('还没有会话')) + '</div>';
+  } else {
 
   // ── 按**项目**分组，可以折叠 ────────────────────────────────────────────────
   //
@@ -2769,7 +3219,7 @@ function fillThreadList(box, q) {
     if (!groups[key]) { groups[key] = { key: key, items: [], latest: 0 }; order.push(key); }
     groups[key].items.push(th);
     var at = th.updatedAt || th.recencyAt || 0;
-    var when = typeof at === 'number' ? at : Date.parse(at);
+    var when = timestampMs(at);
     if (Number.isFinite(when) && when > groups[key].latest) groups[key].latest = when;
   });
   // 没有项目的那些放最后（比如还没定目录的会话）
@@ -2833,6 +3283,47 @@ function fillThreadList(box, q) {
     g.items.forEach(function (th) { wrap.appendChild(threadRow(th)); });
     box.appendChild(wrap);
   });
+  }
+
+  // The first 60 are deliberately fast; make the boundary and the search
+  // scope explicit instead of presenting a partial list as complete.
+  var scope = document.createElement('div');
+  scope.id = 'thread-list-scope';
+  scope.style.cssText = 'font-size:12px;line-height:1.45;color:var(--dim);padding:14px 4px 7px;text-align:center';
+  if (q) {
+    scope.textContent = state.searchPending ? t('正在搜索所有会话标题…') :
+      state.searchError ? t('搜索标题失败；当前仅搜索已加载的 {n} 条', { n: state.threads.length }) :
+      state.searchReady ? t('已搜索所有会话标题；预览仅搜索已加载的 {n} 条', { n: state.threads.length }) :
+      t('搜索所有会话标题；已加载会话的预览也会匹配');
+  } else {
+    scope.textContent = state.listPending ? t('正在检查更早的会话…') :
+      state.listError ? t('暂时无法检查更早的会话') :
+      state.listCursor ? t('已加载 {n} 条会话；还有更早的会话', { n: state.threads.length }) :
+      t('已加载全部 {n} 条会话', { n: state.threads.length });
+  }
+  box.appendChild(scope);
+
+  var cursor = q ? state.searchCursor : state.listCursor;
+  var busy = q ? state.searchMorePending : state.listMorePending;
+  if (cursor) {
+    var more = document.createElement('button');
+    more.id = 'thread-list-more';
+    more.className = 'btn';
+    more.textContent = busy ? t('正在加载…') : t(q ? '加载更多标题匹配' : '加载更早的会话');
+    more.disabled = !!busy;
+    more.onclick = loadOlderThreads;
+    box.appendChild(more);
+  } else if (q && state.searchError) {
+    var retry = document.createElement('button');
+    retry.className = 'btn'; retry.textContent = t('重试搜索');
+    retry.onclick = function () { scheduleThreadSearch(); renderThreadListOnly(); };
+    box.appendChild(retry);
+  } else if (!q && state.listError) {
+    var retryList = document.createElement('button');
+    retryList.className = 'btn'; retryList.textContent = t('重试');
+    retryList.onclick = loadThreads;
+    box.appendChild(retryList);
+  }
   if (window.DshI18n) window.DshI18n.apply(box);
 }
 
@@ -2869,7 +3360,7 @@ function isUnread(t) {
   if (!at || !t.id) return false;
   var seen = 0;
   try { seen = Number(localStorage.getItem(seenKey(t.id))) || 0; } catch (e) { return false; }
-  var when = typeof at === 'number' ? at : Date.parse(at);
+  var when = timestampMs(at);
   return Number.isFinite(when) && when > seen;
 }
 
@@ -2897,14 +3388,52 @@ function threadRow(t) {
   return b;
 }
 
+function absoluteProjectPath(p) {
+  return /^[A-Za-z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+(?:\\|$)/.test(p) || /^\//.test(p);
+}
+function openNewThreadPicker() {
+  var inner = $('sheetInner'); inner.innerHTML = '';
+  var title = document.createElement('h2'); title.textContent = t('＋ 开一个新会话'); inner.appendChild(title);
+  var note = document.createElement('p'); note.className = 'info';
+  note.textContent = t('先选择电脑上的项目文件夹，再创建会话。不会使用未知的默认目录。');
+  inner.appendChild(note);
+  var choices = state.projects.slice(0, 16);
+  if (choices.length) {
+    var heading = document.createElement('div'); heading.className = 'stitle'; heading.textContent = t('最近的项目'); inner.appendChild(heading);
+    choices.forEach(function(project) {
+      var row = document.createElement('button'); row.className = 'sopt';
+      row.innerHTML = '<span class="t">' + esc(baseName(project.path)) + '</span><span class="s">' + esc(project.path) + '</span><span class="arw">›</span>';
+      row.onclick = function() { closeSheet(); newThread(project.path); };
+      inner.appendChild(row);
+    });
+  }
+  var manual = document.createElement('div'); manual.className = 'stitle';
+  manual.textContent = t('或输入电脑上的绝对路径'); inner.appendChild(manual);
+  var path = document.createElement('input'); path.type = 'text'; path.autocomplete = 'off';
+  path.placeholder = t('项目路径，例如 D:\\work\\project');
+  promptInputStyle(path); path.style.marginBottom = '10px'; inner.appendChild(path);
+  var create = document.createElement('button'); create.className = 'btn p';
+  create.textContent = t('使用此文件夹新建');
+  create.onclick = function() {
+    var cwd = path.value.trim();
+    if (!absoluteProjectPath(cwd)) { toast(t('请填写电脑上的绝对路径')); path.focus(); return; }
+    closeSheet(); newThread(cwd);
+  };
+  inner.appendChild(create);
+  var cancel = document.createElement('button'); cancel.className = 'sclose'; cancel.textContent = t('取消');
+  cancel.onclick = closeSheet; inner.appendChild(cancel);
+  $('sheet').classList.add('on');
+}
 function newThread(cwd) {
+  if (typeof cwd !== 'string' || !absoluteProjectPath(cwd.trim())) { openNewThreadPicker(); return; }
+  cwd = cwd.trim();
   setConn('wait', t('创建中'));
   var params = {};
-  // 指定项目就在那个目录下开会话；不指定就让服务端用默认目录
-  if (cwd) params.cwd = cwd;
+  // The user explicitly chose this folder; never fall through to a hidden default.
+  params.cwd = cwd;
 
   call('thread/start', params).then(function (r) {
-    setConn('ok', '已连接');
+    setConn('ok', '桥已连接');
     var th = (r && (r.thread || r)) || {};
     if (!th.id) throw new Error(t('服务端没返回会话 id'));
     // 新建的会话本来就是加载好的，不用再 resume
@@ -2913,10 +3442,62 @@ function newThread(cwd) {
       model: (r && r.model) || null, reasoningEffort: (r && r.reasoningEffort) || null
     });
     state.resumed = true;
+    scheduleRelease();
   }).catch(function (e) {
-    setConn('ok', '已连接');
+    setConn('ok', '桥已连接');
     addError(t('开新会话失败：') + e.message);
   });
+}
+
+/** Continue in a separate conversation without taking the source writer lock.
+ * The source may still be open on desktop. Never send the saved draft on the
+ * user's behalf: the child is opened with the draft visible for review. */
+function forkCurrentThread(source) {
+  source=source || state.thread;
+  if(!source || !source.id || !state.ready || state.forking)return Promise.resolve(false);
+  if(!state.thread || state.thread.id!==source.id)return Promise.resolve(false);
+  var pending=draftAttachments(source.id).slice();
+  if(pending.some(function(a){return a.status!=='ready';})){
+    toast(t('请等待附件上传完成，或移除上传失败的附件'));return Promise.resolve(false);
+  }
+  var draft=$('input').value,sourceQueued=queueEntries.length;
+  state.forking=source.id;renderFooter();setConn('wait',t('正在创建独立会话…'));
+  return call('thread/fork',{threadId:source.id,excludeTurns:true,ephemeral:false},600000)
+    .then(function(r){
+      var child=(r && (r.thread||r))||{};
+      if(!child.id || child.id===source.id)throw Error(t('服务端没返回新的会话 id'));
+      setConn('ok','桥已连接');
+      if(!state.thread || state.thread.id!==source.id || state.view!=='thread'){
+        // The newly forked child is loaded by our app-server. If the user left
+        // before it finished, do not let an unseen copy hold a writer lock.
+        call('thread/unsubscribe',{threadId:child.id},10000).catch(function(){});
+        toast(t('独立会话已创建，请在会话列表中打开。'));return true;
+      }
+      // The fork RPC may take minutes. Copy the draft as it was when the user
+      // tapped the button, but preserve edits and uploads made in the meantime
+      // on the source instead of silently erasing them when we switch views.
+      var currentDraft=$('input').value;
+      var currentAttachments=draftAttachments(source.id);
+      var moved=pending.filter(function(a){return currentAttachments.indexOf(a)>=0 && a.status==='ready' && !a.removed;});
+      var remaining=currentAttachments.filter(function(a){return moved.indexOf(a)<0;});
+      var sourceChanged=currentDraft!==draft || remaining.length>0;
+      if(currentDraft===draft)$('input').value='';
+      textDrafts[source.id]=currentDraft===draft?'':currentDraft;
+      textDrafts[child.id]=draft;
+      attachmentDrafts[source.id]=remaining;
+      moved.forEach(function(a){a.threadId=child.id;});
+      attachmentDrafts[child.id]=moved;
+      openThread({id:child.id,name:child.name||source.name||t('独立会话'),
+        cwd:child.cwd||source.cwd,model:child.model||source.model,
+        reasoningEffort:child.reasoningEffort||source.reasoningEffort});
+      state.resumed=true;scheduleRelease();renderFooter();
+      toast(t('已创建独立会话。电脑上的原会话继续运行；请检查输入后再发送。'));
+      if(sourceChanged)toast(t('创建期间新增的文字或附件仍留在原会话。'));
+      if(sourceQueued)toast(t('原会话已保存的待办仍留在原会话，尚未执行。'));
+      return true;
+    })
+    .catch(function(e){setConn('ok','桥已连接');toast(t('创建独立会话失败；原会话和输入未改变：')+e.message);return false;})
+    .finally(function(){state.forking=false;renderFooter();});
 }
 
 // ── 单个会话 ─────────────────────────────────────────────────────────────────
@@ -2937,8 +3518,20 @@ var PAGE_SIZE = 30;
 
 function openThread(t) {
   stopObserving();
+  if(detachedHandbacks[t.id]){
+    clearTimeout(detachedHandbacks[t.id]);delete detachedHandbacks[t.id];
+  }
+  clearTimeout(state.releaseTimer);state.releaseTimer=null;
+  rememberTextDraft();
+  if (state.thread && state.thread.id !== t.id) releaseThread();
   state.view = 'thread';
   state.thread = t;
+  state.pick = threadPicks[t.id] || (threadPicks[t.id] = { model: null, effort: null });
+  // The supported effort list is derived from the current model. Never carry
+  // the previous conversation's cached list into this one's settings menu.
+  state.currentEfforts = null;
+  taskStatusExpanded = false;
+  restoreTextDraft(t);
   markSeen(t);       // 记下「这条我看过了」，列表里的未读点靠它消掉
   queueEntries=[];renderQueue();refreshQueue();
   state.items = {}; state.order = [];
@@ -2952,6 +3545,7 @@ function openThread(t) {
   state.olderCursor = null;
   state.loadingOlder = false;
   state.noMore = false;
+  renderPendingApprovals();
 
   $('title').textContent = t.name || t.preview || tr('会话');
   $('back').style.display = '';
@@ -3016,14 +3610,18 @@ function openThread(t) {
  */
 function warmUpThread() { /* 不再预加载：翻看会话不该占电脑的写锁。 只在真正要发消息时才 resume。 */ }
 
-/** 闲置一段时间后把写锁还回去 */
+/** A short follow-up grace period, scoped to this exact conversation. */
 function scheduleRelease() {
   clearTimeout(state.releaseTimer);
+  if(!state.resumed || !state.thread)return;
+  var tid=state.thread.id;
   state.releaseTimer = setTimeout(function () {
+    state.releaseTimer=null;
+    if(!state.thread || state.thread.id!==tid)return;
     if (state.running || state.resuming) { scheduleRelease(); return; }
     releaseThread();
     renderFooter();
-  }, 5 * 60 * 1000);
+  }, 30 * 1000);
 }
 
 /** 把一个 item 渲染并接到末尾 */
@@ -3183,11 +3781,37 @@ function firstVisibleBlock() {
 /** 离开当前会话：把写锁还回去 */
 function releaseThread() {
   var t = state.thread;
-  if (!state.resumed || state.running || state.resuming) return;
+  if (!state.resumed || state.resuming) return;
+  if (state.running) {
+    // The task must finish, but leaving its page must not hold the desktop
+    // writer forever. Observe this exact thread until it becomes idle.
+    if(t){state.resumed=false;scheduleDetachedHandback(t.id);}
+    return;
+  }
+  clearTimeout(state.releaseTimer);state.releaseTimer=null;
   state.resumed = false;
   if (!t || !state.ready) return;
   // 不等结果 —— 使用者已经在往外走了，卡在这里只会让他觉得卡顿
   call('thread/unsubscribe', { threadId: t.id }).catch(function () { });
+}
+
+function scheduleDetachedHandback(tid) {
+  if(detachedHandbacks[tid])clearTimeout(detachedHandbacks[tid]);
+  detachedHandbacks[tid]=setTimeout(function(){
+    if(!detachedHandbacks[tid])return;
+    if(!state.ready){scheduleDetachedHandback(tid);return;}
+    call('thread/read',{threadId:tid,includeTurns:false},10000).then(function(r){
+      if(!detachedHandbacks[tid])return;
+      var kind=statusKind(r && r.thread && r.thread.status);
+      if(kind==='notLoaded'){clearTimeout(detachedHandbacks[tid]);delete detachedHandbacks[tid];return;}
+      if(kind!=='idle'){scheduleDetachedHandback(tid);return;}
+      // Never unsubscribe while the task is active. If the status changes
+      // between this read and unsubscribe, the app-server remains the arbiter.
+      return call('thread/unsubscribe',{threadId:tid},10000).then(function(){
+        clearTimeout(detachedHandbacks[tid]);delete detachedHandbacks[tid];
+      });
+    }).catch(function(){if(detachedHandbacks[tid])scheduleDetachedHandback(tid);});
+  },30*1000);
 }
 
 /**
@@ -3224,41 +3848,35 @@ function showWriterConflict(t, why) {
   card.id = 'writer-conflict';
   card.innerHTML =
     '<div class="h">' + tr('消息未发送：会话由另一个执行服务占用') + '</div>' +
-    '<div class="w" style="margin-top:0">' + tr('这条会话正开在电脑上，手机发不出去。<br><br>你能做的：<br>· 点下面「释放电脑端的锁」→ 手机继续用这条会话（会关掉电脑上的 Codex，正在跑的任务可能被中断）<br>· 或者另开一条会话（不会接着当前任务的进度）<br><br>你输入的内容和附件都还在。') + '</div>' +
+    '<div class="w" style="margin-top:0">' + tr('这条会话目前只能查看，刚才的消息没有发送。可以复制已保存的上下文，在手机开独立会话继续；电脑上的原会话照常运行。正在执行的步骤不会完整复制，两边改同一项目文件也可能冲突。输入和附件仍在。') + '</div>' +
     '<div class="btns"></div>';
 
   var btns = card.querySelector('.btns');
 
   var b1 = document.createElement('button');
   b1.className = 'p';
-  b1.textContent = tr('在同一个项目里开新的');
-  b1.onclick = function () { card.remove(); newThread(t.cwd || null); };
+  b1.textContent = tr('复制上下文，在手机独立续聊');
+  b1.onclick = function () { forkCurrentThread(t).then(function(ok){if(ok)card.remove();}); };
   btns.appendChild(b1);
 
   var b2 = document.createElement('button');
-  b2.textContent = tr('重试');
-  b2.onclick = function () { card.remove(); toast(tr('正在重试…')); openThread(t); };
+  b2.textContent = tr('同项目新会话（不复制对话）');
+  b2.onclick = function () { card.remove(); newThread(t.cwd || null); };
   btns.appendChild(b2);
 
-  // ★ 「释放电脑端的锁」按钮。
-  //
-  //   原来这里**故意没有**这条路（文案原文是「本页面不会关闭电脑 Codex 或
-  //   强行解锁」）：怕把使用者电脑上正在跑的任务弄坏。但那个顾虑的代价是
-  //   「人在外面、手机彻底用不了」—— 而这是他要的功能之一，不该由我们替他决定。
-  //   所以改成：**给按钮，但把代价写在确认框里**，而且服务端还要求 confirm:true
-  //   才动手（手滑、别的网页替你 POST 都做不成）。
-  //
-  //   服务端做的事、以及为什么只能这么做（桌面版那个 app-server 没有端口，
-  //   够不到它，只能让它的进程结束），写在 scripts/codex-lock.js 头部。
   var b3 = document.createElement('button');
-  b3.className = 'd';
-  b3.textContent = tr('释放电脑端的锁');
-  b3.onclick = function () { releaseDesktopLock(t, card, b3); };
+  b3.textContent = tr('继续查看');
+  b3.onclick = function () { card.remove(); };
   btns.appendChild(b3);
+
+  var b4 = document.createElement('button');
+  b4.textContent = tr('接管原会话…（会关闭整个电脑 Codex）');
+  b4.onclick = openLockPanel;
+  btns.appendChild(b4);
 
   var old = document.getElementById('writer-conflict');
   if (old) old.remove();
-  $('body').insertBefore(card, $('body').firstChild);
+  $('body').appendChild(card);
   scrollDown(true);
 }
 
@@ -3278,7 +3896,7 @@ function showWriterConflict(t, why) {
 var LOCK_RESULT_TEXT = {
   'app-server': '现在能拿到这条会话了 —— 占着它的不是电脑那边（多半是手机自己之前占着）。已经还回去，正在重试…',
   'none': '这条会话的锁本来就是空的。正在重试…',
-  'desktop-closed': '已经让电脑端交出这条会话（电脑上的 Codex 可能已被关闭）。正在重试…',
+  'desktop-closed': '电脑端占用已解除。正在重新连接，连接成功后可以从手机发送新指令…',
   'not-desktop': '会话被另一个 Codex 占着，但电脑上的 Codex 没开着 —— 不是它占的，我没有动任何东西。请稍等再试一次。',
   'still-locked': '电脑上的 Codex 已经关掉，但这条会话还是拿不到。请稍等再试，或在电脑上重开一次 Codex。',
   'stop-failed': '没能关掉电脑上的 Codex —— 锁没释放，什么都没变。',
@@ -3293,7 +3911,7 @@ var lastWriterError = '';
 function releaseDesktopLock(t, card, btn) {
   var tid = t && t.id;
   if (!tid) { toast(tr('会话编号不对，请回到列表重新打开这条会话。')); return; }
-  if (!confirm(tr('释放电脑端的锁？\n\n· 电脑上的 Codex 会关掉，正在跑的任务可能被中断\n· 会话内容不会丢\n· 之后手机就能接着下指令\n\n确定吗？'))) return;
+  if (!confirm(tr('释放电脑端的锁？\n\n· 如果这条会话由电脑端占用，将关闭电脑上的 Codex，正在执行的电脑端任务会被终止\n· 已保存的会话记录会保留\n· 锁释放成功后，手机可以发送新指令\n\n确定吗？'))) return;
 
   var label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
@@ -3433,7 +4051,7 @@ function collectProjects(threads) {
     if (!t.cwd) return;
     if (!seen[t.cwd]) seen[t.cwd] = { path: t.cwd, n: 0, at: 0 };
     seen[t.cwd].n++;
-    seen[t.cwd].at = Math.max(seen[t.cwd].at, Number(t.updatedAt || t.recencyAt) || 0);
+    seen[t.cwd].at = Math.max(seen[t.cwd].at, timestampMs(t.updatedAt || t.recencyAt));
   });
   return Object.keys(seen).map(function (k) { return seen[k]; })
     .sort(function (a, b) { return b.at - a.at; });
@@ -3461,7 +4079,8 @@ function renderFooter() {
   var busy = row.querySelector('.loading');
   var uncertain = !state.ready || ['checking','unknown','offline'].indexOf(task.kind) >= 0;
   var saveOnly=queueOnly();
-  $('send-mode').style.display=(state.running||saveOnly)?'':'none';
+  var readOnlySave=task.kind==='unlinked';
+  $('send-mode').style.display=(state.running||saveOnly)&&!readOnlySave?'':'none';
   // ★ 不再因为「状态没确认」就禁用「立即补充」，也不再把它改回「排队发送」。
   //   原来那样做的后果（使用者实测）：任务进行中，他只能排队，而且界面上
   //   看不出为什么；更早的一版还会把他选过的「立即补充」永久覆盖掉。
@@ -3473,15 +4092,17 @@ function renderFooter() {
     immOpt.title = uncertain ? t('状态未确认：发送时会先确认一次当前任务') : '';
   }
   $('send-mode').value = sendModePref();
-  // 「排队」是按**他选的那个**算的。状态没确认时不再强制显示排队 ——
-  // 那种情况下按下去会先确认一次（见 send 与 steerTurn）。
-  var queuing=($('send-mode').value==='queue');
-  $('send').disabled = !!state.sending || draftAttachments().some(function(a){return a.status!=='ready';});
-  $('send').textContent=queuing?t('排队'):'↑';
+  // Queue is a choice only while a task is running or the executor/status is
+  // unconfirmed. For a completed or idle task, send() starts a new turn even
+  // when the saved running-task preference is Queue, so the button must say Send.
+  var queuing=readOnlySave||((state.running||saveOnly)&&$('send-mode').value==='queue');
+  $('send').disabled = !!state.sending || !!(state.thread && state.forking===state.thread.id) || draftAttachments().some(function(a){return a.status!=='ready';});
+  $('send').classList.toggle('queue',queuing);
+  $('send').textContent=readOnlySave?t('保存待办'):queuing?t('排队'):'↑';
   $('send').style.fontSize=queuing?'13px':'';
-  $('send').title = queuing ? t('保存到电脑队列，不打断任务') : uncertain ? t('状态未确认：发送时会先确认一次当前任务') : state.running ? t('发送补充意见') : t('发送');
-  $('send').setAttribute('aria-label',queuing ? t('加入队列') : state.running ? t('发送补充意见') : t('发送'));
-  $('input').placeholder = saveOnly ? t('先保存要求，等待接通执行端…') : queuing ? t('输入下一项要求，完成后依次执行…') : state.running ? t('补充要求，不会停止当前任务…') : t('说点什么…');
+  $('send').title = readOnlySave?t('仅保存到电脑，尚未执行'):queuing ? t('保存到电脑队列，不打断任务') : uncertain ? t('状态未确认：发送时会先确认一次当前任务') : state.running ? t('发送补充意见') : t('发送');
+  $('send').setAttribute('aria-label',readOnlySave?t('保存待办'):queuing ? t('加入队列') : state.running ? t('发送补充意见') : t('发送'));
+  $('input').placeholder = readOnlySave?t('此会话只读；可以保存待办，或复制上下文到手机独立续聊…'):saveOnly ? t('先保存要求，等待接通执行端…') : queuing ? t('输入下一项要求，完成后依次执行…') : state.running ? t('补充要求，不会停止当前任务…') : t('说点什么…');
 
   // 正在加载会话时，把发送键换成一个明确的「加载中」——
   // 大会话要等几分钟，只弹一句转瞬即逝的提示，使用者会以为按了没反应，
@@ -3525,12 +4146,16 @@ function send() {
   var box = $('input');
   var text = box.value.trim();
   if (!state.thread) return;
+  // The visible button is disabled while forking, but keyboard shortcuts can
+  // still call send(). Do not submit the snapshot to the original as well.
+  if (state.forking===state.thread.id) { toast(t('正在创建独立会话…')); return; }
   var attachments=draftAttachments().slice();
   if(!text && !attachments.length)return;
   if(attachments.some(function(a){return a.status!=='ready';})){toast(t('请等待附件上传完成，或移除上传失败的附件'));return;}
   if (state.sending) { toast(t('消息正在发送')); return; }
   // 他要「立即补充」，但此刻状态没确认：不要一句「先确认」把他挡回去 ——
   // 先替他确认一次，能插队就插队，不能就排队保存并说清楚。
+  if (task.kind==='unlinked') { enqueueDraft(text,box,attachments,{deferred:true}); return; }
   if (queueOnly() && $('send-mode').value === 'immediate') {
     sendWhenUncertain(text, box, attachments);
     return;
@@ -3572,6 +4197,7 @@ function send() {
         return;
       }
       state.resumed = true;
+      scheduleRelease();
       state.resuming = false;
       updateLockHint();
       note.remove();
@@ -3629,7 +4255,7 @@ function send() {
     attachmentSent(submittedThread.id,attachments);
     if(state.thread!==submittedThread)return;
     addLocalUser(attachmentLabel(text,attachments));
-    if(box.value.trim()===text){box.value='';box.style.height='auto';}
+    clearSubmittedTextDraft(submittedThread.id,text);
     var id = r && (r.turnId || (r.turn && r.turn.id));
     if (id) state.turnId = id;
     renderFooter();
@@ -3669,6 +4295,8 @@ function confirmRunningTurn(){
 function sendWhenUncertain(text,box,attachments){
   var sendingThread=state.thread;
   if(!sendingThread)return;
+  if(!state.resumed){enqueueDraft(text,box,attachments,{deferred:true,
+    savedNotice:t('尚未连接到此会话，只保存了待办，没有发送。')});return;}
   state.sending=true;renderFooter();
   toast(t('正在确认当前任务…'));
   refreshObservedThread();
@@ -3695,9 +4323,9 @@ function steerTurn(text,box,attachments) {
   renderFooter();
   call('turn/steer',{threadId:tid,expectedTurnId:turnId,input:attachmentInput(text,attachments)},15000).then(function(){
     attachmentSent(tid,attachments);
+    clearSubmittedTextDraft(tid,text);
     if(state.thread && state.thread.id===tid){
       addLocalUser(attachmentLabel(text,attachments));
-      if(box.value===text){box.value='';box.style.height='auto';}
       toast(t('补充意见已发送，任务继续执行'));
     }
   }).catch(function(e){
@@ -3946,6 +4574,97 @@ function pickList(title, items, currentLabel, onPick) {
   });
 }
 
+function openRenameThreadPanel() {
+  if (state.view !== 'thread' || !state.thread) return;
+  var target = state.thread;
+  var tid = target.id;
+  var current = target.name || target.preview || '';
+  var inner = $('sheetInner'); inner.innerHTML = '';
+  var back = document.createElement('button');
+  back.className = 'shead'; back.textContent = '‹ ' + tr('重命名这个会话');
+  back.onclick = openSheet; inner.appendChild(back);
+  var label = document.createElement('div');
+  label.className = 'stitle'; label.textContent = tr('当前名称'); inner.appendChild(label);
+  var shown = document.createElement('div');
+  shown.className = 'info'; shown.style.overflowWrap = 'anywhere';
+  shown.textContent = current || tr('（没有标题）'); inner.appendChild(shown);
+  var input = document.createElement('input');
+  input.id = 'rename-input'; input.type = 'text'; input.autocomplete = 'off';
+  input.setAttribute('aria-label', tr('新名字')); input.value = current;
+  promptInputStyle(input); input.style.marginBottom = '10px'; inner.appendChild(input);
+  var error = document.createElement('div');
+  error.id = 'rename-error'; error.className = 'info'; error.setAttribute('role', 'alert');
+  error.style.color = 'var(--bad)'; error.hidden = true; inner.appendChild(error);
+  var save = document.createElement('button');
+  save.id = 'rename-save'; save.className = 'btn p'; save.textContent = tr('保存名称');
+  save.onclick = function () {
+    var name = input.value.trim();
+    if (!name) { error.textContent = tr('请输入会话名称'); error.hidden = false; input.focus(); return; }
+    if (name === current) { openSheet(); return; }
+    error.hidden = true; save.disabled = true; save.textContent = tr('正在保存…');
+    call('thread/name/set', { threadId: tid, name: name }).then(function () {
+      target.name = name;
+      state.threads.forEach(function (th) { if (th.id === tid) th.name = name; });
+      state.searchThreads.forEach(function (th) { if (th.id === tid) th.name = name; });
+      writeThreadCache(state.threads);
+      if (state.thread && state.thread.id === tid) $('title').textContent = name;
+      toast(tr('已改名'));
+      if (inner.contains(save)) openSheet();
+    }).catch(function (e) {
+      error.textContent = tr('改名失败：') + e.message;
+      error.hidden = false; save.disabled = false; save.textContent = tr('保存名称');
+    });
+  };
+  input.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); save.click(); } };
+  inner.appendChild(save);
+  var cancel = document.createElement('button');
+  cancel.className = 'sclose'; cancel.textContent = tr('取消');
+  cancel.onclick = openSheet; inner.appendChild(cancel);
+  $('sheet').classList.add('on');
+  input.focus({ preventScroll: true }); input.select();
+}
+
+function openArchiveThreadPanel() {
+  if (state.view !== 'thread' || !state.thread) return;
+  var target = state.thread;
+  var tid = target.id;
+  var inner = $('sheetInner'); inner.innerHTML = '';
+  var back = document.createElement('button');
+  back.className = 'shead'; back.textContent = '‹ ' + tr('归档这个会话');
+  back.onclick = openSheet; inner.appendChild(back);
+  var name = document.createElement('div');
+  name.className = 'stitle'; name.textContent = target.name || target.preview || tr('（没有标题）');
+  name.style.overflowWrap = 'anywhere';
+  inner.appendChild(name);
+  var note = document.createElement('p');
+  note.className = 'info'; note.textContent = tr('归档之后它会从列表里消失（不会删除）。');
+  inner.appendChild(note);
+  var error = document.createElement('div');
+  error.id = 'archive-error'; error.className = 'info'; error.setAttribute('role', 'alert');
+  error.style.color = 'var(--bad)'; error.hidden = true; inner.appendChild(error);
+  var confirmButton = document.createElement('button');
+  confirmButton.id = 'archive-confirm'; confirmButton.className = 'btn d';
+  confirmButton.textContent = tr('确认归档');
+  confirmButton.onclick = function () {
+    error.hidden = true; confirmButton.disabled = true;
+    confirmButton.textContent = tr('正在归档…');
+    call('thread/archive', { threadId: tid }).then(function () {
+      toast(tr('已归档'));
+      if (inner.contains(confirmButton)) closeSheet();
+      if (state.view === 'thread' && state.thread && state.thread.id === tid) loadThreads();
+    }).catch(function (e) {
+      error.textContent = tr('归档失败：') + e.message;
+      error.hidden = false; confirmButton.disabled = false;
+      confirmButton.textContent = tr('确认归档');
+    });
+  };
+  inner.appendChild(confirmButton);
+  var cancel = document.createElement('button');
+  cancel.className = 'sclose'; cancel.textContent = tr('取消');
+  cancel.onclick = openSheet; inner.appendChild(cancel);
+  $('sheet').classList.add('on');
+}
+
 function openSheet() {
   var inner = $('sheetInner');
   inner.innerHTML = '';
@@ -3967,7 +4686,6 @@ function openSheet() {
         return { label: baseName(p.path), sub: p.path, path: p.path };
       });
       // 换目录等于换一个上下文，得新开一个会话才行 —— 说清楚，别让人以为改了没生效
-      var head = document.createElement('div');
       pickList(tr('选择项目（会新开一个会话）'), items, baseName(t.cwd || ''), function (it) {
         closeSheet();
         newThread(it.path);
@@ -3976,7 +4694,12 @@ function openSheet() {
       note.className = 'info';
       note.textContent = tr('Codex 的工作目录是会话级的，中途改不了 —— 选了会新开一个会话在那个目录下。');
       $('sheetInner').insertBefore(note, $('sheetInner').children[1] || null);
-      if (!items.length) head = head;
+      var other = document.createElement('button');
+      other.className = 'sopt';
+      other.id = 'project-other-folder';
+      other.innerHTML = '<span class="t">' + esc(tr('其他文件夹（手输绝对路径）')) + '</span><span class="arw">›</span>';
+      other.onclick = openNewThreadPicker;
+      $('sheetInner').appendChild(other);
     }, t.cwd || ''));
 
     // 模型
@@ -3990,15 +4713,12 @@ function openSheet() {
             };
           }));
         pickList(tr('选择模型'), items, modelLabel(state.pick.model || t.model), function (it) {
-          state.pick.model = it.model;
-          if (it.model) {
-            // 换模型时把思考强度清掉 —— 不同模型支持的档位不一样，
-            // 留着一个对方不认的值会直接报错
-            state.pick.effort = null;
-            state.currentEfforts = it.efforts || [];
-          } else {
-            state.currentEfforts = [];
-          }
+          // Returning to the conversation's model also returns to its own
+          // effort. A different model with no explicit effort uses that model's
+          // default; carrying over the old effort would misstate what we send.
+          state.pick.model = it.model && it.model !== t.model ? it.model : null;
+          state.pick.effort = null;
+          state.currentEfforts = state.pick.model ? (it.efforts || []) : null;
           openSheet();
         });
       }));
@@ -4008,16 +4728,19 @@ function openSheet() {
     var mdl = state.models.filter(function (m) { return m.id === modelId; })[0];
     var efforts = state.currentEfforts ||
       (mdl && (mdl.supportedReasoningEfforts || mdl.reasoningEfforts)) || [];
+    var differentModel = !!state.pick.model && state.pick.model !== t.model;
+    var defaultEffortLabel = differentModel ? tr('所选模型默认档位') : tr('（用会话自己的）');
+    var shownEffort = state.pick.effort || (differentModel ? defaultEffortLabel : t.reasoningEffort || tr('（默认）'));
     inner.appendChild(sheetRow(tr('思考强度'),
-      state.pick.effort || t.reasoningEffort || tr('（默认）'), function () {
-        var items = [{ label: tr('（用会话自己的）'), effort: null }].concat(
+      shownEffort, function () {
+        var items = [{ label: defaultEffortLabel, effort: null }].concat(
           efforts.map(function (e) {
             return {
               label: e.reasoningEffort || e.effort || String(e),
               sub: e.description || '', effort: e.reasoningEffort || e.effort
             };
           }));
-        pickList(tr('选择思考强度'), items, state.pick.effort || t.reasoningEffort, function (it) {
+        pickList(tr('选择思考强度'), items, shownEffort, function (it) {
           state.pick.effort = it.effort;
           openSheet();
         });
@@ -4028,24 +4751,9 @@ function openSheet() {
     sec2.textContent = tr('操作');
     inner.appendChild(sec2);
 
-    inner.appendChild(sheetRow(tr('重命名这个会话'), '', function () {
-      closeSheet();
-      var name = prompt(tr('新名字'), state.thread.name || '');
-      if (name === null) return;
-      call('thread/name/set', { threadId: state.thread.id, name: name })
-        .then(function () {
-          state.thread.name = name; $('title').textContent = name; toast(tr('已改名'));
-        })
-        .catch(function (e) { toast(tr('改名失败：') + e.message); });
-    }));
+    inner.appendChild(sheetRow(tr('重命名这个会话'), '', openRenameThreadPanel));
 
-    inner.appendChild(sheetRow(tr('归档这个会话'), '', function () {
-      closeSheet();
-      if (!confirm(tr('归档之后它会从列表里消失（不会删除）。'))) return;
-      call('thread/archive', { threadId: state.thread.id })
-        .then(function () { toast(tr('已归档')); loadThreads(); })
-        .catch(function (e) { toast(tr('归档失败：') + e.message); });
-    }));
+    inner.appendChild(sheetRow(tr('归档这个会话'), '', openArchiveThreadPanel));
 
     inner.appendChild(sheetRow(tr('回到会话列表'), '', function () { closeSheet(); loadThreads(); }));
   } else {    var info = document.createElement('div');
@@ -4066,7 +4774,7 @@ function openSheet() {
   secLock.textContent = tr('会话写入锁');
   inner.appendChild(secLock);
 
-  inner.appendChild(sheetRow(tr('释放电脑端的锁'),
+  inner.appendChild(sheetRow(tr('会话写入锁'),
     // 值里给**会话名**，别只写「（这条会话）」—— 让人一眼看出这一下会动到哪一条
     state.thread ? (state.thread.name || state.thread.preview || tr('（没有标题）')) : tr('先打开一条会话'),
     function () { openLockPanel(); }));
@@ -4153,8 +4861,9 @@ function openLockPanel() {
   var th = state.thread;
   var info = document.createElement('div');
   info.className = 'info';
-  info.textContent = tr('什么是「锁」：同一条会话同时只能有一个写入者。电脑上的 Codex 开着这条会话时，它占着写权限 —— 手机能看，但一发消息就报「会话由另一个执行服务占用」。下面两颗按钮给出两条出路，代价完全不同。');
+  info.textContent = tr('同一条会话同时只能有一个地方发送。查看不会占锁；若电脑正在使用原会话，手机可以创建独立副本继续。已保存的待办尚未执行。');
   inner.appendChild(info);
+  var promptInfo=document.createElement('div');promptInfo.className='info';promptInfo.textContent=tr('电脑端任务的授权、选择和提问仍需在电脑端处理；当前连接只能同步其记录。手机接管后发起的新任务，可以在这里处理请求。');inner.appendChild(promptInfo);
 
   if (th) {
     var row = document.createElement('div');
@@ -4167,8 +4876,18 @@ function openLockPanel() {
     st.className = 'info';
     st.textContent = state.resumed
       ? tr('手机现在占着它 —— 这期间电脑上可能打不开这条会话。')
-      : tr('手机没占着它。如果发消息时报「会话由另一个执行服务占用」，就是电脑上的 Codex 占着。');
+      : tr('手机没有占用这条会话。若发送时报「会话由另一个执行服务占用」，请检查是否由电脑 Codex 或其他执行服务占用。');
     inner.appendChild(st);
+
+    if(!state.resumed){
+      var fork=document.createElement('button');fork.className='btn p';
+      fork.textContent=tr('复制上下文，在手机独立续聊');
+      fork.onclick=function(){closeSheet();forkCurrentThread(th);};
+      inner.appendChild(fork);
+      var forkHelp=document.createElement('div');forkHelp.className='info';
+      forkHelp.textContent=tr('电脑原会话继续运行。副本只包含已保存的上下文；正在执行的步骤可能不完整。同一项目目录的并行文件修改可能冲突。');
+      inner.appendChild(forkHelp);
+    }
 
     // ★ 先摆「没代价的那一个」：只松开手机这边占的会话，不碰电脑上的 Codex。
     //   两个按钮的分工必须一眼看清 —— 使用者 2026-09-27 分不清，
@@ -4178,6 +4897,7 @@ function openLockPanel() {
     safe.className = 'btn';
     safe.id = 'lock-release-phone';
     safe.textContent = tr('释放手机端的锁');
+    safe.style.display=state.resumed?'':'none';
     safe.onclick = function () {
       if (!confirm(tr('释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会关闭电脑上的 Codex，也不会主动发送停止任务命令\n· 若手机任务仍在运行，建议等它结束后再操作\n· 手机下次发消息会自动重新接上\n\n确定吗？'))) return;
       var safeLabel = safe.textContent;
@@ -4194,22 +4914,28 @@ function openLockPanel() {
 
     var safeCost = document.createElement('div');
     safeCost.className = 'info';
-    safeCost.textContent = tr('只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会**自动**松开，所以通常不用点它。');
+    safeCost.textContent = tr('只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会自动松开，所以通常不用点它。');
+    safeCost.style.display=state.resumed?'':'none';
     inner.appendChild(safeCost);
 
-    // ★ 危险按钮上面先摆一条红色警告 —— 它真的会关掉电脑上的 Codex。
+    // Taking the original writer is an emergency path. The normal, visible
+    // action is the independent fork above, which leaves desktop running.
+    var advanced=document.createElement('details');advanced.className='lock-advanced';
+    var advancedTitle=document.createElement('summary');
+    advancedTitle.textContent=tr('紧急接管原会话（关闭整个电脑 Codex）');
+    advanced.appendChild(advancedTitle);
     var danger = document.createElement('div');
     danger.className = 'warn-red';
-    danger.innerHTML = '<b>' + esc(tr('⚠️ 会关掉电脑上的 Codex，正在跑的任务可能被中断')) + '</b><br>' +
-      esc(tr('它让**电脑端**交出写权限，代价是关掉电脑上的 Codex（会话内容不会丢，但那一轮任务会停）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。'));
-    inner.appendChild(danger);
+    danger.innerHTML = '<b>' + esc(tr('⚠️ 会关掉电脑上的 Codex，正在执行的电脑端任务会被终止')) + '</b><br>' +
+      esc(tr('它让电脑端交出写权限，代价是关掉电脑上的 Codex（已保存的会话记录会保留，但电脑端正在执行的任务会终止）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。'));
+    advanced.appendChild(danger);
 
     var btn = document.createElement('button');
     btn.className = 'btn d';
     btn.id = 'lock-release';
-    btn.textContent = tr('释放电脑端的锁');
+    btn.textContent = tr('关闭电脑 Codex 并接管原会话');
     btn.onclick = function () {
-      if (!confirm(tr('释放电脑端的锁？\n\n· 电脑上的 Codex 会关掉，正在跑的任务可能被中断\n· 会话内容不会丢\n· 之后手机就能接着下指令\n\n确定吗？'))) return;
+      if (!confirm(tr('释放电脑端的锁？\n\n· 如果这条会话由电脑端占用，将关闭电脑上的 Codex，正在执行的电脑端任务会被终止\n· 已保存的会话记录会保留\n· 锁释放成功后，手机可以发送新指令\n\n确定吗？'))) return;
       var label = btn.textContent;
       btn.disabled = true;
       btn.textContent = tr('正在释放电脑端的锁…');
@@ -4220,16 +4946,17 @@ function openLockPanel() {
         if (ok) { closeSheet(); openThread(th); }
       });
     };
-    inner.appendChild(btn);
+    advanced.appendChild(btn);
 
     var cost = document.createElement('div');
     cost.className = 'info';
-    cost.textContent = tr('会关掉电脑上的 Codex，正在跑的任务可能被中断；会话内容不会丢。');
-    inner.appendChild(cost);
+    cost.textContent = tr('会关掉电脑上的 Codex，正在执行的电脑端任务会被终止；已保存的会话记录会保留。');
+    advanced.appendChild(cost);
+    inner.appendChild(advanced);
   } else {
     var none = document.createElement('div');
     none.className = 'info';
-    none.textContent = tr('先打开一条会话，再回到这里 —— 锁是**按会话**算的，得先知道是哪一条。');
+    none.textContent = tr('先打开一条会话，再回到这里 —— 锁是按会话算的，得先知道是哪一条。');
     inner.appendChild(none);
   }
 
@@ -4324,7 +5051,7 @@ $('send-mode').value=sendModePref();
   apply();
 })();
 // 输入区那两个小图标是有实际作用的，不是摆设：
-// ＋ 开新会话（和列表页那个按钮同一件事，只是不用先退出去）
+// ＋ 打开附件菜单，里面另有清楚分组的新会话入口
 // ⇣ 跳回最新（翻历史翻远了的时候，比在右下角找浮标顺手）
 $('btn-attach').onclick = openAttachmentPicker;
 ['pick-images','pick-files'].forEach(function(id){$(id).onchange=function(){chooseAttachments(this.files);this.value='';};});
@@ -4340,15 +5067,17 @@ $('btn-bottom').onclick = function () { stick = true; toBottom(true); updateJump
  */
 function ensureOwnershipAfterResume() {
   if (state.view !== 'thread' || !state.thread || !state.ready) return;
+  if (!state.resumed) { refreshObservedThread(); return; }
   var tid = state.thread.id;
   call('thread/loaded/list', {}, 6000).then(function (r) {
     var ids = (r && (r.data || r.threadIds)) || [];
     if (!Array.isArray(ids) || ids.indexOf(tid) >= 0) return;   // 还占着 / 问不出来 → 什么都不做
-    state.resumed = false;
-    renderFooter();
-    call('thread/resume', { threadId: tid, excludeTurns: true }, 60000).then(function () {
-      if (state.thread && state.thread.id === tid) { state.resumed = true; renderFooter(); }
-    }, function () { /* 拿不回来也不是这里的事：发消息那条路会再试一次并如实报错 */ });
+    // Returning to the tab is observation, not consent to seize the writer.
+    if (state.thread && state.thread.id === tid) {
+      state.resumed = false;
+      clearTimeout(state.releaseTimer);state.releaseTimer=null;
+      renderFooter();refreshObservedThread();
+    }
   }).catch(function () { });
 }
 
@@ -4364,19 +5093,7 @@ try {
 // sessions after the final connection has stayed closed for 60 seconds; it
 // also avoids sending a plaintext thread ID through a relay.
 
-// 🔓 释放电脑端的锁 —— 就在语音旁边，一眼能看见。
-//
-// 为什么值得占一个常驻位置：Codex 的同一个会话同时只能有一个地方写，
-// 电脑上的 Codex 开着它的时候，手机这边**发不出消息**。这时候人正站在外面，
-// 唯一的出路就是这个按钮 —— 把它藏在一条错误提示里（原来的做法）等于没有。
-//
-// 点下去直接走释放流程：确认框先把代价说清（必要时会关掉电脑上的 Codex），
-// 然后动手，做完把结果和「重试」一起摆出来。**不做成「再点一次才动」**——
-// 那正是使用者说的「按了没反应」。
-$('btn-lock').onclick = function () {
-  if (!state.thread) { toast(t('先打开一条会话')); return; }
-  releaseDesktopLock(state.thread, null, $('btn-lock'));
-};
+$('btn-lock-help').onclick = openLockPanel;
 
 // 🎤 语音输入。
 //

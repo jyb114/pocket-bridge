@@ -14,20 +14,21 @@ The full connection URL is a credential. Its path contains an access key, and it
 
 For a TryCloudflare connection, Cloudflare terminates HTTPS. It can see URL paths, cookies, traffic timing and size, and any request or response that Pocket Bridge has not separately encrypted. The fragment is not normally sent in the HTTP request, but that fact does **not** make it safe from an actively malicious relay: a changed first page or a redirect can disclose it. The first page and its scripts are not end-to-end authenticated. Code-integrity checks cannot establish trust in the very first page delivered by that relay.
 
-Current application-layer encryption is **partial**:
+Application-layer encryption depends on the phone view and route. It does not authenticate the first page delivered by the tunnel:
 
 | Channel | Current boundary |
 |---|---|
-| Codex | Covered real-time and content channels require application-layer encryption over a relay; this does not certify every possible Codex request or the first page. |
-| DSH real-time WebSocket | Application-layer encryption is used for the covered event stream. |
-| DSH prompt and binary upload | The current phone client encrypts these outbound request bodies. This is opportunistic for compatibility: an older client without the encryption marker can still be forwarded. |
-| Other DSH HTTP APIs and history responses | Not comprehensively covered; some content or metadata may be visible to the TLS-terminating relay. |
+| Bridge-owned DSH phone view | Its protected project, conversation, prompt, live event, approval, directory, upload and download routes require encrypted request and response bodies over the tunnel. The computer's DSH still performs the work. URLs, cookies, timing, sizes and initial page/scripts remain visible. |
+| Codex phone view | Covered real-time and content routes require application-layer encryption over the tunnel. The updated file browser sends local file paths inside encrypted POST bodies and receives encrypted bytes. This does not certify every possible route or the first page. |
+| Original DSH view (`view=classic`) | Covered WebSocket events and outbound prompt/upload bodies are encrypted; the gateway now rejects unencrypted remote prompt/upload writes. Other DSH HTTP API and history **responses can still be plaintext** to the TLS-terminating relay. Use the bridge-owned phone view for the stronger content boundary. |
 
-The gateway also requires proof of the fragment secret before serving protected HTTP or WebSocket content to a remote device. This reduces what someone can do with the access key from the URL path alone; it does **not** protect against a relay that can replace the page or redirect the browser. A successful device proof is temporarily retained by device ID, including across gateway restarts. A relay that obtains an already-proven device cookie may reuse that device's access window; do not treat proof as protection against a malicious relay. Encryption failures on protected channels are intended to fail closed, but testing is not a guarantee of complete coverage or security.
+The gateway also requires proof of the fragment secret before serving protected HTTP or WebSocket content to a remote device. This reduces what someone can do with the access key from the URL path alone; it does **not** protect against a relay that can replace the page or redirect the browser. A successful device proof is temporarily retained by device ID, including across gateway restarts. A relay that obtains an already-proven device cookie may reuse that device's access window; do not treat proof as protection against a malicious relay. Protected requests reject missing or invalid encryption instead of silently forwarding plaintext. Testing is not a guarantee of complete coverage or security.
 
-Rotating only the `#` fragment secret changes the content-encryption secret; it does **not** revoke the access-key path, existing device cookies, or an already-retained device proof. If the complete link, a cookie, or a device may be compromised, revoke that device and rotate the **access key** with session revocation. Unencrypted DSH API paths remain outside the content-encryption boundary described above.
+Rotating only the `#` fragment secret changes the content-encryption secret; it does **not** revoke the access-key path, existing device cookies, or an already-retained device proof. If the complete link, a cookie, or a device may be compromised, revoke that device and rotate the **access key** with session revocation. An older cached Codex page may send a file path in a GET URL before the updated gateway rejects it over a tunnel; reopen the updated phone page to use the encrypted POST route. Classic DSH API responses remain outside the content-encryption boundary described above.
 
 On a local network, the HTTP entry point is plaintext; the optional local HTTPS entry point uses a local certificate that your device must validate appropriately. A direct Internet HTTP entry point is also plaintext. See [README.md](README.md) for the supported connection modes and their trade-offs.
+
+This preview starts only Cloudflare tunnels; the old ngrok fallback is disabled. The gateway rejects local-console access and requires the remote encryption boundary when an incoming request has a public Host or forwarding headers, even if the socket peer is loopback. Arbitrary reverse proxies are not supported. If a proxy rewrites Host to a local address and removes every forwarding header, the gateway cannot distinguish its remote requests from requests made on the computer itself. Do not publish the gateway through such a proxy.
 
 ## Outside the security boundary
 

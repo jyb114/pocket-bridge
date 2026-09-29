@@ -32,8 +32,8 @@ function harness(options = {}) {
     value: options.mode || 'immediate', style: {},
     querySelector() { return { disabled: false, title: '' }; }
   };
-  const input = { value: 'A message', style: {} };
-  const sendButton = { disabled: false, textContent: '', style: {}, setAttribute() {} };
+  const input = { value: 'A message', style: {}, scrollHeight: 30 };
+  const sendButton = { disabled: false, textContent: '', style: {}, classList: { toggle() {} }, setAttribute() {} };
   const row = { querySelector() { return null; }, insertBefore() {} };
   const footer = { style: {}, querySelector() { return row; } };
   const elements = { footer, 'send-mode': select, send: sendButton, input };
@@ -59,6 +59,7 @@ function harness(options = {}) {
     sendModePref() { return select.value; },
     crypto: { randomUUID() { return 'draft-id'; } },
     queueDraft: null,
+    textDrafts: Object.create(null),
     queueRequest(payload) { rpc.push({ method: 'queue', payload }); return enqueue.promise; },
     call(method, payload) {
       rpc.push({ method, payload });
@@ -69,7 +70,8 @@ function harness(options = {}) {
     Promise, Array, Object, JSON, Date, Math, Error
   };
   vm.createContext(box);
-  for (const name of ['queueOnly', 'enqueueDraft', 'renderFooter', 'send',
+  for (const name of ['rememberTextDraft', 'restoreTextDraft', 'clearSubmittedTextDraft',
+    'queueOnly', 'enqueueDraft', 'renderFooter', 'send',
     'confirmRunningTurn', 'sendWhenUncertain', 'steerTurn']) {
     const fn = extractFunction(src, name);
     if (!fn) throw new Error('Missing function ' + name);
@@ -83,6 +85,24 @@ function harness(options = {}) {
 }
 
 (async () => {
+  console.log('\n[0] Unsent text follows its conversation, not the shared composer');
+  {
+    const h = harness();
+    h.box.rememberTextDraft();
+    h.state.thread = h.threadB;
+    h.box.restoreTextDraft(h.threadB);
+    check('opening B does not show A’s unsent message', h.input.value === '');
+    h.input.value = 'B message';
+    h.box.rememberTextDraft();
+    h.state.thread = h.threadA;
+    h.box.restoreTextDraft(h.threadA);
+    check('returning to A restores only A’s draft', h.input.value === 'A message');
+    h.box.clearSubmittedTextDraft(h.threadA.id, 'A message');
+    h.state.thread = h.threadB;
+    h.box.restoreTextDraft(h.threadB);
+    check('sending A does not erase B’s draft', h.input.value === 'B message');
+  }
+
   console.log('\n[1] The immediate choice remains actionable while the task status is uncertain');
   {
     const h = harness();

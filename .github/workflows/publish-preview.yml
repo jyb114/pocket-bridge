@@ -1,0 +1,57 @@
+name: Publish Windows preview
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    if: contains(github.event.head_commit.message, '[publish-preview]')
+    runs-on: windows-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.1'
+
+      - name: Build and smoke-test installer
+        shell: pwsh
+        run: ./packaging/windows/build.ps1
+
+      - name: Package source and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installer = "dist/PocketBridge-$version-win-x64-Setup.exe"
+          $source = "dist/PocketBridge-v$version-source.zip"
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Missing $installer" }
+          git archive --format=zip --output=$source HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive failed' }
+          $lines = @($installer, $source) | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash
+            "$hash  $(Split-Path -Leaf $_)"
+          }
+          [IO.File]::WriteAllLines('dist/SHA256SUMS.txt', $lines, [Text.UTF8Encoding]::new($false))
+
+      - name: Create public preview release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          gh release create $tag `
+            "dist/PocketBridge-$version-win-x64-Setup.exe" `
+            "dist/PocketBridge-v$version-source.zip" `
+            'dist/SHA256SUMS.txt' `
+            --target $env:GITHUB_SHA `
+            --title "Pocket Bridge $version (Windows preview)" `
+            --notes-file RELEASE_NOTES.md `
+            --prerelease
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed' }

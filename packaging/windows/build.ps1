@@ -1,5 +1,6 @@
 param(
   [string]$OutDir = '',
+  [string]$WorkBase = '',
   [switch]$SkipInstallTest
 )
 
@@ -8,7 +9,8 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 $version = (Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Unsupported package version: $version" }
+if ($version -notmatch '^(\d+\.\d+\.\d+)(?:-preview\.\d+)?$') { throw "Unsupported package version: $version" }
+$numericVersion = $Matches[1]
 
 # All downloaded executables are pinned to known hashes. The NSIS mirror has
 # the same bytes as the canonical NSIS release-data entry.
@@ -50,7 +52,8 @@ function Acquire-License([string]$local, [string]$url, [string]$destination) {
   }
 }
 
-$tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$tempBase = if ($WorkBase) { [IO.Path]::GetFullPath($WorkBase) } else { [IO.Path]::GetFullPath([IO.Path]::GetTempPath()) }
+New-Item -ItemType Directory -Path $tempBase -Force | Out-Null
 $work = Join-Path $tempBase ("pocket-bridge-win-build-{0}-{1}" -f $PID, [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
@@ -114,7 +117,7 @@ try {
 
   New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
   $setup = Join-Path $OutDir "PocketBridge-$version-win-x64-Setup.exe"
-  & $makensis "/DPRODUCT_VERSION=$version" "/DPAYLOAD_DIR=$payload" `
+  & $makensis "/DPRODUCT_VERSION=$version" "/DNUMERIC_VERSION=$numericVersion" "/DPAYLOAD_DIR=$payload" `
     "/DOUTPUT_FILE=$setup" "/DUNINSTALL_INCLUDE=$uninstallInclude" `
     (Join-Path $PSScriptRoot 'installer.nsi')
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $setup)) {

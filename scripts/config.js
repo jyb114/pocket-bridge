@@ -34,6 +34,10 @@ const IDENTITY_FILES = [
 const DEFAULTS = {
   gatewayPort: 8080,        // 中间层监听端口；被占用时从它开始往后找
   dshExecutable: '',        // 留空 = 自动发现
+  dshMode: 'auto',          // auto | desktop | web；优先连接已在运行的对应版本
+  dshWebExecutable: '',     // 可选：CLI 的 Node 可执行文件或 dsh 命令
+  dshWebEntry: '',          // 使用 Node 时填写 @deepseek-ai/dsh 的 CLI 入口
+  dshWebArguments: ['web', '--no-open'], // 参数数组；不经过 shell、不自动联网安装
   tunnelProvider: 'auto',   // auto | cloudflare | none
   enableLanAccess: true,    // 是否提供内网直连入口
   dshPort: 0,               // 0 = 自动发现；显式指定则优先
@@ -181,15 +185,74 @@ function findDshFromRegistry() {
     try {
       const out = execFileSync('reg', ['query', root, '/s', '/f', 'DeepSeek', '/d'],
         { encoding: 'utf8', timeout: 12000, windowsHide: true });
-      // 从输出里找形如 C:\...\DeepSeek Harness.exe 的路径
-      const matches = String(out).match(/[A-Za-z]:\\[^"\r\n]*DeepSeek Harness\.exe/gi) || [];
+      // 从输出里找形如 C:\...\DeepSeek Harness.exe 的路径。
+      //
+      // ★ 必须再按**文件名**过滤一次，不能只靠正则匹配。
+      //
+      //   实测踩到的：同一个卸载项里还有一条 `Uninstall DeepSeek Harness.exe`，
+      //   而 `[^"\r\n]*DeepSeek Harness\.exe` 会把前面的 "Uninstall " 一起吞掉
+      //   —— 于是「自动发现」到的可执行文件**是卸载程序本身**。
+      //   后果不是找不到，而是更糟：使用者在 DSH 没开时点「启动 DSH」，
+      //   弹出来的是卸载向导。
+      const matches = String(out).match(/[A-Za-z]:\\[^"\r\n]*\.exe/gi) || [];
       for (const m of matches) {
         const p = m.trim();
+        if (path.basename(p).toLowerCase() !== 'deepseek harness.exe') continue;
         if (isExecutableFile(p)) return p;
       }
     } catch (err) {
       // 某个根不存在很正常
     }
+  }
+  return null;
+}
+
+/**
+ * 从快捷方式里找 DSH 装在哪。
+ *
+ * 为什么要有这一条：注册表那条要求安装器**写了卸载项**才算数，而 DSH 完全
+ * 可能装在任何地方 —— 这台机器上它就在 `D:\dsh`，一个不在任何「常见安装路径」
+ * 清单里的目录，靠猜是猜不到的。
+ *
+ * 快捷方式是唯一一处**必然**记录真实路径的地方：安装器不管装到哪个盘、
+ * 哪个目录名，都会在开始菜单或桌面留一个。所以它比继续往清单里加路径更耐用。
+ *
+ * 解析 .lnk 得借 WScript.Shell（纯 PowerShell 读不出目标路径），
+ * 所以这里转一手 powershell —— 和上面 findDshFromProcesses 是同一个路子。
+ */
+function findDshFromShortcuts() {
+  if (process.platform !== 'win32') return null;
+
+  const dirs = [
+    path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    path.join(process.env.ProgramData || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    path.join(os.homedir(), 'Desktop'),
+    path.join(process.env.PUBLIC || '', 'Desktop')
+  ].filter(Boolean);
+
+  try {
+    const quote = (s) => `'${s.replace(/'/g, "''")}'`;
+    const script = [
+      '$ErrorActionPreference = "SilentlyContinue"',
+      '$sh = New-Object -ComObject WScript.Shell',
+      `$dirs = @(${dirs.map(quote).join(',')})`,
+      'foreach ($d in $dirs) {',
+      '  if (-not (Test-Path -LiteralPath $d)) { continue }',
+      '  Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk | ForEach-Object {',
+      '    $t = $sh.CreateShortcut($_.FullName).TargetPath',
+      '    if ($t -and $t -match "DeepSeek Harness\\.exe$") { Write-Output $t }',
+      '  }',
+      '}'
+    ].join('\n');
+
+    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    for (const line of String(out).split('\n')) {
+      const p = line.trim();
+      if (p && isExecutableFile(p)) return p;
+    }
+  } catch (err) {
+    // 没有快捷方式、或者 COM 不可用 —— 都只是「没找到」
   }
   return null;
 }
@@ -216,6 +279,9 @@ function findDshExecutable(explicitPath) {
 
   const fromReg = findDshFromRegistry();
   if (fromReg) return { path: fromReg, source: '注册表' };
+
+  const fromShortcut = findDshFromShortcuts();
+  if (fromShortcut) return { path: fromShortcut, source: '快捷方式' };
 
   return { path: null, source: '未找到' };
 }
@@ -481,6 +547,8 @@ module.exports = {
   saveConfig,
   isOwnAddress,
   findDshExecutable,
+  findDshFromRegistry,
+  findDshFromShortcuts,
   commonDshPaths,
   findAvailablePort,
   isPortFree,

@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const BASE = path.resolve(__dirname, '..');
 const SRC = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
@@ -30,10 +31,22 @@ console.log('\n[1] 选项不再被「状态没确认」禁用');
     /状态未确认：发送时会先确认一次当前任务/.test(SRC));
 }
 
-console.log('\n[2] 「排队」只按使用者选的那个算');
+console.log('\n[2] 任务中按使用者选择排队，空闲时发送新消息');
 {
-  ok('queuing 不再被 saveOnly 强制',
-    /var queuing=\(\$\('send-mode'\)\.value==='queue'\)/.test(SRC));
+  const footer = SRC.match(/function renderFooter\(\)\s*\{[\s\S]*?\n\}/);
+  const expression = footer && footer[0].match(/var queuing=([^;]+);/);
+  ok('排队标签由任务状态和使用者选择共同决定', !!expression);
+  if (expression) {
+    const queuing = (running, saveOnly, mode, readOnlySave = false) => vm.runInNewContext(expression[1], {
+      state: { running }, saveOnly, readOnlySave, $: () => ({ value: mode })
+    });
+    ok('正在执行且选择排队时显示排队', queuing(true, false, 'queue') === true);
+    ok('正在执行且选择立即补充时不显示排队', queuing(true, false, 'immediate') === false);
+    ok('状态未确认且选择排队时显示排队', queuing(false, true, 'queue') === true);
+    ok('状态未确认且选择立即补充时不显示排队', queuing(false, true, 'immediate') === false);
+    ok('已完成或空闲时，即使保留了排队偏好也显示发送', queuing(false, false, 'queue') === false);
+    ok('只读状态显示保存，不把它伪装成立即发送', queuing(false, true, 'immediate', true) === true);
+  }
 }
 
 console.log('\n[3] 状态没确认但选了「立即补充」：先确认，再决定');

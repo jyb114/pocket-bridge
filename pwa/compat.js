@@ -197,6 +197,30 @@
     };
   }
 
+  // ── Promise.withResolvers ────────────────────────────────────────────────
+  // DSH creates approval and question cards with this API. Older browsers can
+  // load the conversation but throw as soon as one of those requests arrives.
+  if (typeof Promise.withResolvers !== 'function') {
+    Object.defineProperty(Promise, 'withResolvers', {
+      value: function withResolvers() {
+        var resolve, reject;
+        // Use the receiver constructor so Promise subclasses and other valid
+        // capability constructors keep the standard generic behavior.
+        var promise = new this(function (resolveFn, rejectFn) {
+          if (resolve !== undefined || reject !== undefined) {
+            throw new TypeError('Promise capability executor called more than once');
+          }
+          resolve = resolveFn;
+          reject = rejectFn;
+        });
+        if (typeof resolve !== 'function' || typeof reject !== 'function') {
+          throw new TypeError('Promise capability requires resolve and reject functions');
+        }
+        return { promise: promise, resolve: resolve, reject: reject };
+      },
+      writable: true, configurable: true
+    });
+  }
   // ── Promise.any / Promise.allSettled ──────────────────────────────────────
   if (!Promise.any) {
     Promise.any = function any(iterable) {

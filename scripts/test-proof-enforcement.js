@@ -110,7 +110,7 @@ console.log('\n② 网关侧：被拦时回什么');
 // ── ③ 源码级：实时通道也拦 ───────────────────────────────────────────────────
 console.log('\n③ 网关侧：WebSocket 那道门');
 {
-  const up = (SRC.match(/function handleUpgrade\(req, socket, head\) \{[\s\S]*?\n\}/) || [])[0] || '';
+  const up = require('./page-source.js').extractFunction(SRC, 'handleUpgrade') || '';
   ok('handleUpgrade 存在', !!up);
   ok('升级前查过挑战应答（HTTP 拦、WS 不拦 = 门锁了窗户开着）',
     /!authProvenAt\(dev\.device\.id\)/.test(up));

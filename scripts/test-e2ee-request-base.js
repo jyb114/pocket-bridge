@@ -1,0 +1,21 @@
+'use strict';
+const assert=require('assert/strict'),fs=require('fs'),path=require('path'),vm=require('vm');const {extractFunction}=require('./page-source');const source=fs.readFileSync(path.join(__dirname,'../pwa/e2ee.js'),'utf8');let count=0;
+function check(name,run){run();count++;console.log('PASS '+name);}
+function fixture(baseURI='https://phone.example/'){
+ const calls=[],encrypted=[];function Xhr(){this.sent=[];this.headers={};}Xhr.prototype.open=function(method,url){};Xhr.prototype.setRequestHeader=function(k,v){this.headers[k]=v;};Xhr.prototype.send=function(body){this.sent.push(body);};
+ const global={document:{baseURI},location:{href:'https://phone.example/k/access?target=dsh',origin:'https://phone.example'},fetch:(...a)=>{calls.push(a);return Promise.resolve({ok:true});}};
+ const c={global,URL,Uint8Array,ArrayBuffer,XMLHttpRequest:Xhr,enc:new TextEncoder(),slotAt:()=>1,deriveKeys:async()=>({a:1}),encryptBinaryWith:async(_k,b)=>new Uint8Array([9,...b]),encryptedFetch:(secret,input,init)=>{encrypted.push({secret,input,init});return Promise.resolve({ok:true});},isContentApi:p=>['/__dsh/directories','/api/session/prompt','/api/session/uploadFileBinary'].includes(p)};vm.createContext(c);for(const name of ['requestUrl','installRequestEncrypt','installXhrRequestEncrypt'])vm.runInContext(extractFunction(source,name),c);c.installRequestEncrypt('test-key');c.installXhrRequestEncrypt('test-key');return {global,calls,encrypted,Xhr};
+}
+(async()=>{
+ for(const input of ['api/session/prompt','./api/session/prompt','/api/session/prompt',new URL('https://phone.example/api/session/prompt')]){const f=fixture(),init={method:'POST',body:'fixture',headers:{'content-type':'application/json'},signal:new AbortController().signal};await f.global.fetch(input,init);check('fetch base '+String(input),()=>{assert.equal(f.encrypted.length,1);assert.equal(f.calls.length,0);assert.equal(f.encrypted[0].input,input);assert.equal(f.encrypted[0].init,init);});}
+ {const f=fixture(),input=new Request('https://phone.example/api/session/prompt',{method:'POST'});await f.global.fetch(input,{body:'fixture'});check('Request with body override preserved',()=>{assert.equal(f.encrypted.length,1);assert.equal(f.encrypted[0].input,input);});}
+ for(const input of ['https://other.example/api/session/prompt','/api/workspace/list','api/session/prompt?x=1']){const f=fixture();await f.global.fetch(input,{body:'fixture'});check('scope '+input,()=>assert.equal(f.encrypted.length,input.endsWith('?x=1')?1:0));}
+ {const f=fixture();await f.global.fetch('api/session/prompt',{body:'fixture',headers:{'x-dsh-e2ee':'1'}});check('marked request bypasses second encryption',()=>{assert.equal(f.encrypted.length,0);assert.equal(f.calls.length,1);});}
+ {const f=fixture('');await f.global.fetch('/api/session/prompt',{body:'fixture'});check('location fallback',()=>assert.equal(f.encrypted.length,1));}
+ {const f=fixture('https://other.example/');await f.global.fetch('api/session/prompt',{body:'fixture'});check('cross origin base untouched',()=>assert.equal(f.encrypted.length,0));}
+ for(const input of ['api/session/prompt','./api/session/uploadFileBinary','/__dsh/directories']){const f=fixture(),xhr=new f.Xhr();xhr.open('POST',input);xhr.setRequestHeader('content-type','application/json');xhr.send('fixture');await new Promise(r=>setImmediate(r));check('XHR base '+input,()=>{assert.equal(xhr.sent.length,1);assert.ok(xhr.sent[0] instanceof Uint8Array);assert.equal(xhr.headers['x-dsh-e2ee'],'1');});}
+ {const f=fixture(),xhr=new f.Xhr();xhr.open('POST','https://other.example/api/session/prompt');xhr.send('fixture');check('XHR cross origin unchanged',()=>assert.deepEqual(xhr.sent,['fixture']));}
+ {const f=fixture(),input=vm.runInNewContext("({toString(){return 'api/session/prompt';}})");await f.global.fetch(input,{body:'fixture'});check('fetch stringifiable cross realm address',()=>assert.equal(f.encrypted.length,1));}
+ {const f=fixture(),xhr=new f.Xhr(),input=vm.runInNewContext("({toString(){return 'api/session/prompt';}})");xhr.open('POST',input);xhr.send('fixture');await new Promise(r=>setImmediate(r));check('XHR stringifiable cross realm address',()=>assert.equal(xhr.headers['x-dsh-e2ee'],'1'));}
+ console.log('Request base URI regression: '+count+' passed');
+})().catch(err=>{console.error(err);process.exitCode=1;});

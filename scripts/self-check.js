@@ -103,30 +103,38 @@ function readLog(name) {
 // ── 检查 0：DSH 版本变化（升级检测）──────────────────────────────────────────
 // 升级本身没法预防，但可以做到「升级后第一次自检就提醒你重点复查什么」，
 // 而不是等到手机上出现空白或报错才发现。
+/**
+ * 探测 DSH 的版本号。**新旧版走不同的地方，按可靠性依次尝试。**
+ *
+ * 为什么必须几条都留：这个探测原来只认 `harness-runtimes` 目录，而新版 DSH
+ * 已经不再创建它（实测 0.1.7-rc.2 上那个目录**根本不存在**）。于是每次探测都
+ * 退化成「exe 的修改日期」，版本变化检测就名存实亡了 —— 而它恰恰是
+ * 「DSH 升级了，请重点看兼容性」这条提醒的**唯一来源**。
+ *
+ * 顺序：
+ *   ① 旧版：%APPDATA%\DeepSeek Harness Desktop\harness-runtimes\<版本号>
+ *   ② 新版：<安装目录>\resources\app.asar 头部内嵌的 package.json 版本号
+ *   ③ 注册表 DisplayVersion —— **新旧版都写**，最通用的一条
+ *   ④ 兜底：exe 的修改日期（拿不到真版本号时至少还能感知「文件变了」）
+ */
+function detectDshVersion(exePath) {
+  return require('./dsh-adapter.js').readDesktopVersion(exePath).version || 'unknown';
+}
+
+function readVersionFromAsar(asarPath) {
+  return require('./dsh-adapter.js').readAsarVersion(asarPath);
+}
+
 async function checkDshVersion() {
-  const found = cfg.findDshExecutable(cfg.loadConfig().dshExecutable);
-  if (!found.path) {
+  const api = require('./dsh-runtime.js');
+  const conf = cfg.loadConfig();
+  const runtime = await api.resolveRuntime(conf);
+  const installed = api.detectInstallation(conf);
+  if (!runtime.running && !installed.installed) {
     record('dsh-version', 'DSH 版本变化检测', 'warn', '找不到 DSH，无法记录版本基线');
     return;
   }
-
-  // 优先用运行时目录名（形如 0.1.5-rc.1），它最能代表版本
-  let version = null;
-  const runtimeRoots = [
-    path.join(process.env.APPDATA || '', 'DeepSeek Harness Desktop', 'harness-runtimes'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'DeepSeek Harness Desktop', 'harness-runtimes'),
-    path.join(os.homedir(), '.config', 'DeepSeek Harness Desktop', 'harness-runtimes')
-  ];
-  for (const root of runtimeRoots) {
-    try {
-      const entries = fs.readdirSync(root).filter((x) => /^\d/.test(x)).sort();
-      if (entries.length) { version = entries[entries.length - 1]; break; }
-    } catch (err) { /* 换下一个平台路径 */ }
-  }
-  if (!version) {
-    try { version = 'exe@' + fs.statSync(found.path).mtime.toISOString().slice(0, 10); }
-    catch (err) { version = 'unknown'; }
-  }
+  const version = runtime.version || installed.version || 'unknown';
 
   const stampFile = path.join(LOG_DIR, 'dsh-version.txt');
   let previous = null;
@@ -202,7 +210,7 @@ async function checkTunnelProviders() {
       `${ready.length} 个就绪：${ready.map((p) => p.id).join(', ')}`);
   } else if (exe.length > 0) {
     record('tunnel-providers', '隧道方案可用性（目标 3 的一部分）', 'warn',
-      `有可执行文件但都不就绪：${exe.map((p) => p.id).join(', ')}（ngrok 需要 NGROK_AUTHTOKEN）`);
+      `有可执行文件但都不就绪：${exe.map((p) => p.id).join(', ')}（检查 Cloudflare 隧道配置）`);
   } else {
     record('tunnel-providers', '隧道方案可用性（目标 3 的一部分）', 'fail',
       '没有任何隧道客户端 —— 外网入口会不可用');

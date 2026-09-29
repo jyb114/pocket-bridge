@@ -40,8 +40,10 @@ console.log('\n[客户端] 哪几条请求会被加密\n');
   // 补丁的作用域必须**只**覆盖这几条，别的 /api/** 不能动（里面有 SSE）
   const m = src.match(/var CONTENT_API_PATHS = \[([\s\S]*?)\];/);
   const list = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
-  assert.deepEqual(list, ['/api/session/prompt', '/api/session/uploadFileBinary']);
-  ok('范围被钉住：只这两条，SSE 那几条一个字都没动');
+  assert.deepEqual(list, ['/__dsh/directories', '/__dsh/lite-rpc', '/__dsh/lite-upload',
+    '/__dsh/lite-download', '/__dsh/lite-files', '/__dsh/legacy-rpc',
+    '/api/session/prompt', '/api/session/uploadFileBinary']);
+  ok('范围被钉住：目录、轻量 RPC 和消息正文加密，SSE 不变');
 }
 
 console.log('\n[链路] 客户端加密 → 网关解开 → 上游拿到的必须一字不差\n');
@@ -94,7 +96,8 @@ console.log('\n[链路] 客户端加密 → 网关解开 → 上游拿到的必�
 
   // ★ 解不开时**不许**把密文转给上游（否则 DSH 会当成坏 JSON，使用者看到一句莫名的错）
   const src = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
-  const blk = src.slice(src.indexOf('const wantsE2eeBody'), src.indexOf('req.pipe(upstream);\n}'));
+  const blk = require('./page-source.js').extractFunction(src, 'proxyRequest');
+  assert.ok(blk, '找不到实际代理函数');
   assert.ok(/if \(!plain\)/.test(blk), '解不开时没有兜底分支');
   assert.ok(/upstream\.end\(plain\)/.test(blk), '没有把明文转发给上游');
   assert.ok(!/upstream\.end\(raw\)/.test(blk), '解不开时把密文原样转发了 —— 那是错的');
@@ -103,15 +106,32 @@ console.log('\n[链路] 客户端加密 → 网关解开 → 上游拿到的必�
   up.close();
 }
 
-console.log('\n[红线] 明文请求仍然照旧（老客户端不能被挡在门外）\n');
+console.log('\n[红线] 旧界面加密失败时，经隧道不能降级发送明文\n');
 {
   const src = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
-  const blk = src.slice(src.indexOf('const wantsE2eeBody'), src.indexOf('req.pipe(upstream);\n}'));
+  const blk = require('./page-source.js').extractFunction(src, 'proxyRequest');
+  assert.ok(blk, '找不到实际代理函数');
   assert.ok(/req\.headers\['x-dsh-e2ee'\] === '1'/.test(blk), '没有按标记判断');
   assert.ok(/req\.pipe\(upstream\)/.test(src), '原本的明文转发被删了');
-  ok('只按标记解：没带标记的请求（手机还没加载到新 e2ee.js）照旧明文转发，不会被挡');
-  assert.ok(!/refusePlaintext/.test(blk), '这里不该有「不加密就拒绝」—— 那会把老客户端锁在外面');
-  ok('这一轮**故意不做强制**（先做成机会式；等手机都更新完再单独开闸门）');
+  const routes = (src.match(/const E2EE_CONTENT_PATHS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
+  for (const route of ['/api/session/prompt', '/api/session/uploadFileBinary']) {
+    assert.ok(routes.includes(`'${route}'`), `${route} 没有列入隧道加密闸门`);
+  }
+  const gate = src.match(/if \(E2EE_CONTENT_PATHS\.has\(u\.pathname\)[\s\S]{0,180}refusePlaintext\(req, res, u\.pathname\);/) || [];
+  assert.ok(gate.length, '内容路径未在代理前被拒绝明文');
+  const wantsSource = require('./page-source.js').extractFunction(src, 'clientWantsE2ee');
+  const wants = vm.runInNewContext(`${wantsSource}; clientWantsE2ee`, {});
+  for (const route of ['/api/session/prompt', '/api/session/uploadFileBinary']) {
+    assert.equal(wants({ headers: {} }, new URL(`http://relay.test${route}?e2ee=1`)), false,
+      `${route} 被查询参数伪装为加密请求`);
+    assert.equal(wants({ headers: { 'x-dsh-e2ee': '1', 'content-type': 'application/json' } },
+      new URL(`http://relay.test${route}`)), false, `${route} 接受明文 JSON 标记`);
+    assert.equal(wants({ headers: { 'x-dsh-e2ee': '1', 'content-type': 'application/octet-stream' } },
+      new URL(`http://relay.test${route}`)), true, `${route} 拒绝已加密的二进制信封`);
+  }
+  ok('原版 DSH 的提示词及附件入口列入经中继必加密清单；明文会在进入代理前被拒绝');
+  ok('只加 ?e2ee=1 或只伪造标记不能让原版 DSH 的明文请求越过闸门');
+  ok('本机与内网保留旧版请求兼容；加密请求仍由网关解开后送给本机 DSH');
 }
 
 console.log(bad ? `\n${bad} 处问题\n` : '\n全部通过\n');

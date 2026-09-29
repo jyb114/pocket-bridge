@@ -374,18 +374,18 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
 
     // 1. 按钮在、文案在
     assert.ok(html.includes('releaseDesktopLock('), 'codex.html 里没有 releaseDesktopLock');
-    assert.ok(/tr\('释放电脑端的锁'\)/.test(html), '按钮文字没了');
-    ok('界面上有「释放电脑端的锁」按钮');
+    assert.ok(/btn\.textContent = tr\('关闭电脑 Codex 并接管原会话'\)/.test(html), '紧急接管按钮文字没了');
+    ok('界面上有明确写出关闭整个电脑 Codex 的紧急按钮');
 
     // 2. 每个释放入口的确认框都要讲清后果；不绑定「交出会话」之类的旧措辞。
     const confirmSrcs = [...html.matchAll(/confirm\(tr\('释放电脑端的锁\？[\s\S]*?'\)\)/g)];
     assert.ok(confirmSrcs.length, '找不到确认框那段');
     for (const confirmSrc of confirmSrcs) {
-      for (const must of ['电脑上的 Codex 会关掉', '任务可能被中断', '会话内容不会丢', '手机就能接着下指令']) {
+      for (const must of ['如果这条会话由电脑端占用，将关闭电脑上的 Codex', '电脑端任务会被终止', '已保存的会话记录会保留', '手机可以发送新指令']) {
         assert.ok(confirmSrc[0].includes(must), `确认框里没写「${must}」`);
       }
     }
-    ok('所有确认框写清了：关闭桌面端 / 任务可能中断 / 会话不丢 / 手机继续发送');
+    ok('所有确认框写清了：关闭桌面端 / 任务终止 / 保存记录保留 / 成功后手机发送');
 
     // 3. 请求必须带上确认与服务端要的那道头
     assert.ok(/'x-dsh-lock': '1'/.test(html), '请求没带 x-dsh-lock 头');
@@ -447,26 +447,25 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
 
     const card = renderConflictCard(html, dict, 'zh', { confirm: false });
     assert.deepEqual(card.buttons.map((b) => b.text),
-      ['在同一个项目里开新的', '重试', '释放电脑端的锁']);
-    ok('卡片上三个按钮都在（新开 / 重试 / 释放电脑端的锁）');
-    assert.equal(card.buttons[2].className, 'd', '释放键没有用「危险」样式');
-    ok('释放键用的是危险样式（和审批里的拒绝同一类）');
-
-    // 确认框里点「取消」→ 一个请求都不许发出去
+      ['复制上下文，在手机独立续聊', '同项目新会话（不复制对话）', '继续查看', '接管原会话…（会关闭整个电脑 Codex）']);
+    ok('冲突卡片先提供独立续聊、新会话和继续查看，紧急接管排最后');
+    assert.ok(card.buttons.every((b) => b.className !== 'd'), '卡片上不该直接放一键关闭桌面端的按钮');
     card.click(2);
-    assert.deepEqual(card.calls, [], `取消之后还发了请求：${JSON.stringify(card.calls)}`);
-    ok('确认框点「取消」：一个请求都不发（不会误触）');
+    assert.deepEqual(card.calls, [], '继续查看不能发出锁释放请求');
+    ok('继续查看不会向锁释放接口发请求');
 
-    // 确认之后 → 必须带上服务端要的那道头与 confirm:true
-    const yes = renderConflictCard(html, dict, 'zh', { confirm: true });
-    yes.click(2);
-    assert.equal(yes.calls.length, 1, '确认之后应该正好发一个请求');
-    const c = yes.calls[0];
-    assert.equal(c.url, '/codex/lock');
-    assert.equal(c.headers['x-dsh-lock'], '1');
-    assert.equal(JSON.parse(c.body).confirm, true);
-    assert.equal(JSON.parse(c.body).threadId, TID);
-    ok('确认之后：POST /codex/lock，带 x-dsh-lock 与 confirm:true');
+    // The dangerous action lives in the collapsed advanced section. Its
+    // confirmation still gates the same server request path.
+    const no = renderLockPanel(html, dict, { id: TID, name: '测试会话' }, { confirm: false });
+    assert.ok(no.advanced && no.releaseBtn, '紧急操作必须位于折叠的高级区域');
+    no.releaseBtn.onclick();
+    assert.deepEqual(no.calls, [], '取消确认后不许发释放请求');
+    ok('紧急接管确认框点取消，不发出释放请求');
+
+    const yes = renderLockPanel(html, dict, { id: TID, name: '测试会话' }, { confirm: true });
+    yes.releaseBtn.onclick();
+    assert.deepEqual(yes.calls, [TID]);
+    ok('确认后仅针对当前会话调用释放动作');
 
     // 三种语言下确认框都得把后果说全（漏一种，那个语种的使用者就是在盲按）
     const confirmCall = html.match(/confirm\(tr\(('释放电脑端的锁\？(?:\\.|[^'\\])*')\)\)/);
@@ -474,8 +473,8 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     const CONFIRM = vm.runInNewContext(confirmCall[1], {});
     assert.ok(dict[CONFIRM], '释放锁确认框文案不在翻译字典里');
     for (const lg of ['en', 'es']) {
-      const r2 = renderConflictCard(html, dict, lg, { confirm: false });
-      r2.click(2);                       // 点一下才会弹确认框（也就才会有文案可查）
+      const r2 = renderLockPanel(html, dict, { id: TID }, { lang: lg, confirm: false });
+      r2.releaseBtn.onclick();
       const want = dict[CONFIRM][lg];
       if ((r2.asked[0] || '') === want) ok(`${lg}：确认框用的是这个语种的完整后果说明`);
       else fail(`${lg}：确认框文案不对 → ${String(r2.asked[0]).slice(0, 50)}`);
@@ -509,14 +508,14 @@ console.log('\n危险按钮必须标红（原来 .btn.d 根本没有样式）\n'
   ok('.btn.d 现在真的有危险样式（红底红边）',
     /\.btn\.d\{[^}]*background:#3a1d1d[^}]*border:1px solid #a33/.test(html));
   ok('危险按钮上方有红色警告条（.warn-red）', /\.warn-red\{/.test(html) && /className = 'warn-red'/.test(html));
-  ok('警告条写明「会关掉电脑上的 Codex，正在跑的任务可能被中断」',
-    /会关掉电脑上的 Codex，正在跑的任务可能被中断/.test(html));
+  ok('警告条写明「会关掉电脑上的 Codex，正在执行的电脑端任务会被终止」',
+    /会关掉电脑上的 Codex，正在执行的电脑端任务会被终止/.test(html));
   // 使用者 2026-09-27：「释放锁的功能也要解释清楚 —— 因为电脑端占用、手机无法使用，
   // 可以释放锁，但可能造成电脑端 Codex 关闭、任务终止」
-  ok('面板开头解释了「锁」是什么（谁占着、会怎样）',
-    /什么是「锁」：同一条会话同时只能有一个写入者/.test(html));
-  ok('安全那颗说清「代价为零 + 会自动松开」',
-    /手机关掉或断开一会儿之后会\*\*自动\*\*松开/.test(html));
+  ok('面板开头解释了同一条会话只能有一个发送端',
+    /同一条会话同时只能有一个地方发送/.test(html));
+  ok('安全那颗说清手机断开后会自动松开',
+    /手机关掉或断开一会儿之后会自动松开/.test(html));
   ok('危险那颗说清代价（关掉 Codex、那一轮任务会停）',
     /代价是关掉电脑上的 Codex/.test(html));
   ok('警告条摆在按钮**之前**',
@@ -685,7 +684,7 @@ console.log('\n「释放手机端的锁」：只收手机自己的摊子，一�
   ok('文案说清不会动电脑上的 Codex', /不会动电脑上的 Codex/.test(html));
 }
 
-console.log('\n「释放电脑端的锁」得是一个**找得到**的入口（使用者说找不到）\n');
+console.log('\n紧急接管保留入口，但默认先显示安全的独立续聊\n');
   {
     const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
     const dict = vm.runInNewContext(`(${extractRegisterArg(html)})`, {});
@@ -703,31 +702,22 @@ console.log('\n「释放电脑端的锁」得是一个**找得到**的入口（�
     assert.ok(hintSrc && /openLockPanel\(\)/.test(hintSrc), '标题栏的 🔒 标没有接上面板');
     ok('标题栏的「🔒 占用中」点开也是这个面板');
 
-    // ②b 固定入口位于**语音旁边**（输入区那排图标里）
-    //
-    //   这条断言同时钉住两件事：按钮在，而且**紧跟在 btn-voice 后面** ——
-    //   以后谁把顺序挪了，这里会红。
+    // 入口仍固定可见，但危险按钮不该挨着日常发送和语音。
     const iconRow = html.slice(html.indexOf('<div class="iconrow">'), html.indexOf('</div>', html.indexOf('<div class="iconrow">')));
-    const atVoice = iconRow.indexOf('id="btn-voice"');
-    const atLock = iconRow.indexOf('id="btn-lock"');
-    assert.ok(atLock > 0, '输入区那排图标里没有 btn-lock —— 使用者要的是「语音旁边」');
-    assert.ok(atVoice > 0 && atLock > atVoice, 'btn-lock 没有排在 btn-voice 后面');
-    assert.ok(iconRow.slice(atVoice + 'id="btn-voice"'.length, atLock).indexOf('id="btn-') < 0,
-      'btn-lock 和 btn-voice 之间还夹着别的按钮');
-    ok('输入区里 🔓 紧挨着 🎤（使用者点名要的位置）');
-    assert.ok(/btn-lock'\)\.onclick[\s\S]{0,200}releaseDesktopLock\(/.test(html),
-      "btn-lock 的 onclick 没有接到 releaseDesktopLock —— 点了等于没点");
-    ok('点 🔓 直接走释放流程（不是「再点一次才动」）');
+    assert.ok(!iconRow.includes('id="btn-lock"'), '日常输入区不该有会关掉整个桌面端的快捷键');
+    assert.ok(/btn-lock-help'\)\.onclick = openLockPanel/.test(html), '会话权限说明入口丢失');
+    ok('危险按钮不在输入区；会话权限说明可直接打开面板');
 
     // ③ 面板本身：开着会话时给按钮，没开会话时说清为什么现在不能按
     const withThread = renderLockPanel(html, dict, { id: TID, name: '测试会话' });
     assert.equal(withThread.sheetOn, true, '面板没被打开');
     assert.ok(withThread.releaseBtn, '面板里没有释放按钮');
-    assert.equal(withThread.releaseBtn.textContent, '释放电脑端的锁');
+    assert.equal(withThread.releaseBtn.textContent, '关闭电脑 Codex 并接管原会话');
+    assert.ok(withThread.advanced, '紧急按钮没有放进折叠区域');
     assert.ok(/btn d/.test(withThread.releaseBtn.className), '释放按钮没有用危险样式');
-    assert.ok(withThread.texts.some((x) => /关掉电脑上的 Codex/.test(x) && /任务可能被中断/.test(x)),
+    assert.ok(withThread.advanced.children.some((x) => /关掉电脑上的 Codex/.test(x.textContent || x._html) && /电脑端任务会被终止/.test(x.textContent || x._html)),
       '面板里没写关闭桌面端和中断任务的风险');
-    ok('面板里有「释放电脑端的锁」按钮（危险样式）+ 代价说明');
+    ok('面板里有折叠的紧急按钮（危险样式）和明确后果');
 
     const noThread = renderLockPanel(html, dict, null);
     assert.ok(!noThread.releaseBtn, '没有会话时不该给一个按不动的按钮');
@@ -880,19 +870,21 @@ function extractLockResultText(html) {
  * 在假 DOM 里跑一遍 openLockPanel()（设置面板里那个「会话写入锁」面板）。
  * @param thread null = 还没打开任何会话
  */
-function renderLockPanel(html, dict, thread) {
+function renderLockPanel(html, dict, thread, opts) {
+  const o = opts || {};
   const inner = conflictFakeEl('div');
   const sheet = conflictFakeEl('div');
   const texts = [];
+  const calls = [], asked = [];
   const sandbox = {
     state: { thread: thread, resumed: false, view: thread ? 'thread' : 'list' },
     document: { createElement: conflictFakeEl, getElementById: () => null },
     $: (id) => (id === 'sheetInner' ? inner : sheet),
-    tr: (s) => s,
+    tr: (s) => o.lang && o.lang !== 'zh' ? ((dict[s] && dict[s][o.lang]) || s) : s,
     esc: (s) => String(s == null ? '' : s),
     toast: () => { }, closeSheet: () => { }, openThread: () => { }, openSheet: () => { },
-    askReleaseLock: () => { },
-    confirm: () => false,
+    askReleaseLock: (tid) => { calls.push(tid); },
+    confirm: (s) => { asked.push(s); return !!o.confirm; },
     console
   };
   sandbox.window = sandbox;
@@ -905,8 +897,9 @@ function renderLockPanel(html, dict, thread) {
     if (c.className === 'info' || c.className === 'shead') texts.push(c.textContent);
     if (c.className === 'btn d') texts.push(c.textContent);
   }
-  const releaseBtn = inner.children.find((c) => c.className === 'btn d') || null;
-  return { inner, texts, releaseBtn, sheetOn: sheet.classList.contains('on') };
+  const advanced = inner.children.find((c) => c.className === 'lock-advanced') || null;
+  const releaseBtn = advanced && advanced.children.find((c) => c.className === 'btn d') || null;
+  return { inner, texts, advanced, releaseBtn, calls, asked, sheetOn: sheet.classList.contains('on') };
 }
 
 function renderConflictCard(html, dict, lang, opts) {
@@ -926,6 +919,7 @@ function renderConflictCard(html, dict, lang, opts) {
       return Promise.resolve({ json: () => Promise.resolve({ ok: true, method: 'app-server' }) });
     },
     toast: () => { }, scrollDown: () => { }, newThread: () => { }, openThread: () => { },
+    openLockPanel: () => { }, forkCurrentThread: () => Promise.resolve(false),
     console
   };
   sandbox.window = sandbox;

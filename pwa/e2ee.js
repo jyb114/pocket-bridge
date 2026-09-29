@@ -393,8 +393,11 @@
       var nativeSend = ws.send.bind(ws);
       var nativeAdd = ws.addEventListener.bind(ws);
       var nativeRemove = ws.removeEventListener.bind(ws);
-      var wrapped = [];     // [fn, wrapper] 以便 removeEventListener 能对上
+      var wrapped = [];     // message listeners, including their capture flag
       var encryptionFailed = false;
+      var sendQueue = Promise.resolve();
+      var receiveQueue = Promise.resolve();
+      var decryptedEvents = new WeakMap();
 
       // ★ 「没打开就关了」= 网关拒了这次升级。
       //
@@ -418,49 +421,108 @@
         try { ws.close(1011, 'Encrypted transport validation failed'); } catch (e) { }
       }
 
-      // 收到的东西：如果是二进制，说明是密文，解开再交给上层
-      function deliver(ev, fn) {
-        var d = ev.data;
-        if (encryptionFailed) return;
-        if (typeof d === 'string') { failEncryptedTransport(); return; }
-        // Blob 要异步读出来
-        var go = function (buf) {
-          keysNow().then(function (k) {
-            return decryptFromB64(k.b, bytesToB64url(new Uint8Array(buf)));
-          }).then(function (plain) {
-            if (plain !== null) return plain;
-            return deriveKeys(secret, slotAt() - 1).then(function(k) {
-              return decryptFromB64(k.b, bytesToB64url(new Uint8Array(buf)));
+      // WebCrypto/Blob promises can finish out of order. Queue each wire frame
+      // once per socket, so an approval cannot arrive after its resolved event.
+      function receive(ev) {
+        if (encryptionFailed) return Promise.resolve(null);
+        if (typeof ev.data === 'string') {
+          failEncryptedTransport();
+          return Promise.resolve(null);
+        }
+        var hit = decryptedEvents.get(ev);
+        if (hit) return hit;
+        var pending = receiveQueue.then(function () {
+          if (encryptionFailed) return null;
+          var data = ev.data;
+          var bytes = typeof Blob !== 'undefined' && data instanceof Blob
+            ? data.arrayBuffer() : Promise.resolve(data);
+          return bytes.then(function (buf) {
+            var ct = bytesToB64url(new Uint8Array(buf));
+            return keysNow().then(function (k) {
+              return decryptFromB64(k.b, ct);
+            }).then(function (plain) {
+              if (plain !== null) return plain;
+              return deriveKeys(secret, slotAt() - 1).then(function (k) {
+                return decryptFromB64(k.b, ct);
+              });
             });
           }).then(function (plain) {
-            if (plain === null) {
-              failEncryptedTransport();
-            } else if (!encryptionFailed) {
-              fn.call(ws, { data: plain, type: 'message', target: ws });
-            }
-          }).catch(failEncryptedTransport);
-        };
-        if (d instanceof ArrayBuffer) go(d);
-        else if (typeof Blob !== 'undefined' && d instanceof Blob) {
-          d.arrayBuffer().then(go).catch(failEncryptedTransport);
-        } else go(d);
+            if (plain === null) { failEncryptedTransport(); return null; }
+            if (encryptionFailed) return null;
+            var init = { data: plain, origin: ev.origin || '',
+              lastEventId: ev.lastEventId || '', source: ev.source || null,
+              ports: ev.ports || [] };
+            var message = typeof global.MessageEvent === 'function'
+              ? new global.MessageEvent('message', init)
+              : Object.assign({ type: 'message' }, init);
+            Object.defineProperties(message, {
+              target: { value: ws }, currentTarget: { value: ws }
+            });
+            var delivery = { event: message, stopped: false };
+            var stop = message.stopImmediatePropagation;
+            message.stopImmediatePropagation = function () {
+              delivery.stopped = true;
+              if (stop) stop.call(message);
+            };
+            return delivery;
+          });
+        }).catch(function () { failEncryptedTransport(); return null; });
+        decryptedEvents.set(ev, pending);
+        receiveQueue = pending;
+        return pending;
       }
 
+      function deliver(ev, fn) {
+        receive(ev).then(function (delivery) {
+          if (!delivery || delivery.stopped || encryptionFailed) return;
+          try {
+            if (typeof fn === 'function') fn.call(ws, delivery.event);
+            else if (fn && typeof fn.handleEvent === 'function') fn.handleEvent(delivery.event);
+          } catch (err) {
+            // An application listener throwing must not close an encrypted socket
+            // or prevent the remaining listeners/frames from being delivered.
+            if (typeof global.reportError === 'function') global.reportError(err);
+            else if (global.console && global.console.error) global.console.error(err);
+          }
+        });
+      }
+
+      function captureOf(opts) { return typeof opts === 'boolean' ? opts : !!(opts && opts.capture); }
+      function forget(record) {
+        var index = wrapped.indexOf(record);
+        if (index >= 0) wrapped.splice(index, 1);
+        if (record.signal && record.abort) record.signal.removeEventListener('abort', record.abort);
+      }
       ws.addEventListener = function (type, fn, opts) {
-        if (type !== 'message' || typeof fn !== 'function') {
+        if (type !== 'message' || !fn || (typeof fn !== 'function' && typeof fn !== 'object')) {
           return nativeAdd(type, fn, opts);
         }
-        var wrapper = function (ev) { deliver(ev, fn); };
-        wrapped.push([fn, wrapper]);
-        return nativeAdd('message', wrapper, opts);
+        var capture = captureOf(opts);
+        for (var i = 0; i < wrapped.length; i++) {
+          if (wrapped[i].fn === fn && wrapped[i].capture === capture) return;
+        }
+        if (opts && opts.signal && opts.signal.aborted) return nativeAdd(type, fn, opts);
+        var record = { fn: fn, capture: capture, signal: opts && opts.signal };
+        record.wrapper = function (ev) {
+          if (opts && opts.once) forget(record);
+          deliver(ev, fn);
+        };
+        nativeAdd('message', record.wrapper, opts);
+        wrapped.push(record);
+        if (record.signal) {
+          record.abort = function () { forget(record); };
+          record.signal.addEventListener('abort', record.abort, { once: true });
+        }
       };
 
       ws.removeEventListener = function (type, fn, opts) {
         if (type === 'message') {
+          var capture = captureOf(opts);
           for (var i = 0; i < wrapped.length; i++) {
-            if (wrapped[i][0] === fn) {
-              nativeRemove('message', wrapped[i][1], opts);
-              wrapped.splice(i, 1);
+            if (wrapped[i].fn === fn && wrapped[i].capture === capture) {
+              var record = wrapped[i];
+              nativeRemove('message', record.wrapper, opts);
+              forget(record);
               return;
             }
           }
@@ -468,27 +530,18 @@
         return nativeRemove(type, fn, opts);
       };
 
-      // 上层更常用 `ws.onmessage = fn` 这种写法，也要接管
+      // Keep the property handler separate: setting onmessage must not remove
+      // an addEventListener registration that happens to use the same function.
       var onmsg = null;
+      var onmsgWrapper = function (ev) { if (onmsg) deliver(ev, onmsg); };
       Object.defineProperty(ws, 'onmessage', {
         configurable: true,
         get: function () { return onmsg; },
         set: function (fn) {
-          if (onmsg) {
-            for (var i = 0; i < wrapped.length; i++) {
-              if (wrapped[i][0] === onmsg) {
-                nativeRemove('message', wrapped[i][1]);
-                wrapped.splice(i, 1);
-                break;
-              }
-            }
-          }
-          onmsg = fn;
-          if (typeof fn === 'function') {
-            var wrapper = function (ev) { deliver(ev, fn); };
-            wrapped.push([fn, wrapper]);
-            nativeAdd('message', wrapper);
-          }
+          var next = typeof fn === 'function' ? fn : null;
+          if (!onmsg && next) nativeAdd('message', onmsgWrapper);
+          else if (onmsg && !next) nativeRemove('message', onmsgWrapper);
+          onmsg = next;
         }
       });
 
@@ -498,10 +551,13 @@
         if (typeof data !== 'string') {
           throw new TypeError('Encrypted WebSocket accepts text messages only; binary data requires an authenticated envelope');
         }
-        keysNow().then(function (k) {
-          return encryptToB64(k.a, data);
-        }).then(function (ct) {
-          if (!encryptionFailed) nativeSend(toArrayBuffer(b64urlToBytes(ct)));
+        sendQueue = sendQueue.then(function () {
+          if (encryptionFailed) return;
+          return keysNow().then(function (k) {
+            return encryptToB64(k.a, data);
+          }).then(function (ct) {
+            if (!encryptionFailed) nativeSend(toArrayBuffer(b64urlToBytes(ct)));
+          });
         }).catch(function () {
           // Never leak a draft when key derivation/encryption or transport fails.
           // Closing rejects pending RPCs so callers can keep their unsent draft.
@@ -700,6 +756,45 @@
     return false;   // ReadableStream 之类 → 不重发
   }
 
+  // Missing login cookies need a new pairing; proof retries cannot mint them.
+  function showAuthRequired() {
+    try {
+      if (!global.document || global.document.getElementById('dsh-gw-auth-required')) return;
+      if (!global.document.body) {
+        global.document.addEventListener('DOMContentLoaded', showAuthRequired, { once: true });
+        return;
+      }
+      var language = String((global.navigator && global.navigator.language) || 'zh').toLowerCase();
+      var title = language.indexOf('zh') === 0 ? '隧道登录已失效' :
+        language.indexOf('es') === 0 ? 'La sesión del túnel caducó' : 'Tunnel sign-in expired';
+      var detail = language.indexOf('zh') === 0 ?
+        '请从电脑上的桥控制台重新复制完整手机地址打开，或使用配对码重新登录。内网和隧道是两个不同地址，登录状态不会互通。' :
+        language.indexOf('es') === 0 ?
+          'Abre la dirección completa desde el puente del ordenador o vuelve a vincular este dispositivo. La red local y el túnel tienen sesiones separadas.' :
+          'Open the full phone address from the computer bridge, or pair this device again. Local and tunnel addresses keep separate sign-ins.';
+      var button = language.indexOf('zh') === 0 ? '使用配对码' :
+        language.indexOf('es') === 0 ? 'Usar código de vinculación' : 'Use pairing code';
+      var box = global.document.createElement('div');
+      box.id = 'dsh-gw-auth-required';
+      box.setAttribute('role', 'alert');
+      box.style.cssText = 'position:fixed;top:12px;left:12px;right:12px;z-index:2147483646;' +
+        'max-width:620px;margin:auto;padding:18px;border-radius:14px;background:#26202c;' +
+        'border:1px solid #b74747;color:white;box-shadow:0 8px 30px #0008;' +
+        'font:15px/1.55 -apple-system,BlinkMacSystemFont,system-ui,sans-serif';
+      var heading = global.document.createElement('strong');
+      heading.textContent = title;
+      var message = global.document.createElement('p');
+      message.textContent = detail;
+      message.style.cssText = 'margin:8px 0 14px';
+      var link = global.document.createElement('a');
+      link.textContent = button;
+      link.href = '/pair' + (/^#k=/.test(String(global.location && global.location.hash || '')) ? global.location.hash : '');
+      link.style.cssText = 'display:inline-block;background:#eee;color:#111;padding:9px 13px;border-radius:9px;text-decoration:none';
+      box.appendChild(heading); box.appendChild(message); box.appendChild(link);
+      global.document.body.appendChild(box);
+    } catch (err) { /* Keep original 403 if the hint cannot render. */ }
+  }
+
   function installProofRetry() {
     var orig = global.fetch;
     if (!orig || orig.__dshProofRetry) return false;
@@ -707,6 +802,10 @@
       var self = this;
       var isRequestObj = (typeof Request !== 'undefined' && input instanceof Request);
       return orig.apply(self, arguments).then(function (res) {
+        if (res && res.status === 403 && res.headers && res.headers.get('x-dsh-auth-required') === '1') {
+          showAuthRequired();
+          return res;
+        }
         if (!isNeedProof(res)) return res;
         // ★ 服务端说「你没证明」→ 本地那份「我证过了」作废，否则 prove(true)
         //   会被「三秒内不重复强证」挡掉，重发还是 403，页面坏到手动刷新为止。
@@ -744,6 +843,10 @@
             try {
               if (info.__dshProofRetried) return;
               if (self.status !== 403) return;
+              if (self.getResponseHeader && self.getResponseHeader('x-dsh-auth-required') === '1') {
+                showAuthRequired();
+                return;
+              }
               if (!self.getResponseHeader || self.getResponseHeader('x-dsh-need-proof') !== '1') return;
               info.__dshProofRetried = true;
               proofState.ok = false;      // 同上：本地判断先作废，否则补证会被节流挡掉
@@ -820,7 +923,9 @@
             return new Response(plain, {
               status: res.status,
               statusText: res.statusText,
-              headers: { 'content-type': origType }
+              // A caller must be able to distinguish verified decrypted
+              // bytes from an unexpected unmarked plaintext HTTP response.
+              headers: { 'content-type': origType, 'x-dsh-e2ee-decrypted': '1' }
             });
           });
         });
@@ -894,6 +999,12 @@
    * 两边是**机会式**的：带了标记就解，没带就照旧 —— 老客户端不会被挡在外面。
    */
   var CONTENT_API_PATHS = [
+    '/__dsh/directories',            // 选择电脑目录：完整路径也不明文走隧道
+    '/__dsh/lite-rpc',               // 轻量 DSH：项目路径、消息和交互应答
+    '/__dsh/lite-upload',            // 轻量 DSH：会话、文件名与文件字节
+    '/__dsh/lite-download',          // 轻量 DSH：会话与文件路径
+    '/__dsh/lite-files',             // 轻量 DSH：工作区文件列表
+    '/__dsh/legacy-rpc',            // 旧版 DSH：受限点号 RPC
     '/api/session/prompt',            // 你打出去的字 + 粘贴的图片（base64 在里面）
     '/api/session/uploadFileBinary'   // 上传的附件字节
   ];
@@ -910,6 +1021,14 @@
    *   · 已经带 `x-dsh-e2ee: 1` 的不再包第二层（encryptedFetch 内部还会再调
    *     global.fetch，不挡就会**加密两次**，DSH 解出来是垃圾）。
    */
+  // Resolve relative RPC addresses against the same base as native fetch/XHR.
+  function requestUrl(input) {
+    var raw = input && typeof input.url === 'string' ? input.url : String(input);
+    var base = (global.document && global.document.baseURI) ||
+      (global.location && global.location.href) || 'http://localhost';
+    return new URL(raw, base);
+  }
+
   function installRequestEncrypt(secret) {
     if (!secret || !global.fetch) return false;
     var orig = global.fetch;
@@ -921,8 +1040,7 @@
         var marked = headers['x-dsh-e2ee'] || headers['X-Dsh-E2ee'] ||
           (input && input.headers && input.headers.get && input.headers.get('x-dsh-e2ee'));
         if (!marked && init && init.body != null) {
-          var raw = typeof input === 'string' ? input : (input && input.url) || '';
-          var u = new URL(raw, (global.location && global.location.href) || 'http://localhost');
+          var u = requestUrl(input);
           var sameOrigin = !global.location || u.origin === global.location.origin;
           if (sameOrigin && isContentApi(u.pathname)) {
             return encryptedFetch(secret, input, init);
@@ -961,7 +1079,7 @@
       try {
         var info = this.__dshReq;
         if (info && body != null && !info.headers['x-dsh-e2ee']) {
-          var u = new URL(info.url, (global.location && global.location.href) || 'http://localhost');
+          var u = requestUrl(info.url);
           var sameOrigin = !global.location || u.origin === global.location.origin;
           if (sameOrigin && isContentApi(u.pathname)) {
             var origType = info.headers['content-type'] || 'application/json; charset=utf-8';

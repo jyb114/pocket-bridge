@@ -37,8 +37,9 @@ console.log('[1] 接线');
     /parseCitations\(src0\)/.test(SRC) && /u0000C\(\\d\+\)/.test(SRC.replace(/\\\\/g, '\\')));
   ok('点击是事件委托（正文每次重画都不用重挂）',
     /addEventListener\('click', function \(ev\) \{[\s\S]{0,400}data-filecite/.test(SRC));
-  ok('下载走 privateFetch（经中继必须加密，普通 <a href> 会被闸门拒掉）',
-    /downloadDeliverable[\s\S]{0,600}privateFetch\('\/codex\/file\?path='/.test(SRC));
+  ok('下载走文件请求封装（经中继加密路径，普通 <a href> 会被闸门拒掉）',
+    /downloadDeliverable[\s\S]{0,300}fileRequest\(path\)/.test(SRC) &&
+    /function fileRequest\(path, width\)[\s\S]{0,500}privateFetch\('\/codex\/file',\s*\{[\s\S]{0,120}method:\s*'POST'/.test(SRC));
   ok('有 .filecite 的样式', /\.bub \.filecite\{/.test(SRC));
   ok('403 且带 x-dsh-need-proof 时不再说「重新配对」',
     /headers\.get\('x-dsh-need-proof'\)==='1'[\s\S]{0,120}正在验证这台设备/.test(SRC));

@@ -6,8 +6,8 @@ You do not need to register for a Pocket Bridge account or install a Pocket Brid
 
 | What you want to use on your phone | What the computer needs |
 | --- | --- |
-| DeepSeek Harness | The DeepSeek Harness desktop application, installed and signed in |
-| Codex | A working, signed-in OpenAI Codex desktop installation or compatible Codex CLI executable |
+| DeepSeek Harness | The current DeepSeek Harness desktop build tested for this preview, installed and signed in |
+| Codex | The current OpenAI Codex desktop installation tested for this preview, signed in |
 | Both | Both of the above |
 
 **You do not have to install both products.** Pocket Bridge discovers and starts each available target separately. A ChatGPT website session, by itself, is not a local Codex installation. The Pocket Bridge installer includes its own Node.js runtime and cloudflared, but **does not include DeepSeek Harness, Codex, their accounts, or model access**. Those products may have separate eligibility, subscription, and usage costs. Your computer must remain on and connected to the internet while you use it remotely.
@@ -17,7 +17,7 @@ You do not need to register for a Pocket Bridge account or install a Pocket Brid
 - Windows x64 is the only packaged platform. The installer has been checked in an isolated Windows 11 environment; this is not a guarantee for every PC, target-app version, or network.
 - The Windows installer is not code-signed. Windows SmartScreen may show an unknown-publisher warning. Download only from this repository's Releases page and compare its published SHA-256 checksum.
 - Linux and macOS installers are not available. Some cross-platform source paths exist but have not been validated on those systems.
-- The phone interface has been exercised on iPhone Safari. Other browsers and devices have not received equivalent real-device testing.
+- Earlier phone paths were exercised on iPhone Safari. This preview's revised DSH and Codex phone interfaces were operated in local mobile-sized browser sessions; acceptance of this release on iPhone Safari over 5G and on Android remains outstanding.
 
 ## Set up on Windows
 
@@ -30,6 +30,32 @@ You do not need to register for a Pocket Bridge account or install a Pocket Brid
 There is no separate phone app to download. To add a shortcut on iPhone, open the complete address in Safari, tap **Share**, then **Add to Home Screen**. Browser storage for that shortcut may differ from Safari's; if it opens a pairing or login screen, use the current complete address again from within the shortcut. If the access key or tunnel domain changes, an old bookmark or home-screen shortcut may stop working. Return to the computer console for a new address.
 
 The default internet route uses a temporary TryCloudflare tunnel. [Cloudflare describes Quick Tunnels as intended for testing and development, not production use](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/). Starting one can take time; its address can change or disappear, and it has no uptime guarantee. An address-change notification is only an aid, **not** a dependable recovery channel. A fixed-domain tunnel requires your own Cloudflare account and domain configuration; it is not needed for the default route.
+
+This preview starts only Cloudflare tunnels. The former ngrok fallback is disabled. Do not place an arbitrary reverse proxy in front of the gateway: a proxy that rewrites the public Host to a local address and removes forwarding headers can make a remote request appear local. See [SECURITY.md](SECURITY.md).
+
+## Tested DSH desktop scope
+
+This preview was operated with the **DSH 0.1.7-rc.2 desktop build installed on the test PC**. Pocket Bridge checks the running app and its HTTP listener before connecting; the local console and phone target list show the detected edition and version. Other desktop versions and `npx @deepseek-ai/dsh web` have **not** been operated end to end for this release and are **not claimed as supported**. Protocol inspection and adapter fixtures do not establish real compatibility.
+
+For the tested desktop runtime, the internet phone link opens Pocket Bridge's own DSH phone interface before the official plugin bundle loads. It keeps a familiar project, conversation and composer layout, while the computer's DSH still performs the work. The bridge-owned page lists and creates projects and conversations; reads paged history, live replies, reasoning and tool activity; sends prompts and approval/question replies; and browses, uploads and downloads files through authenticated encrypted endpoints. An uploaded file is attached only when its receipt is sent with a prompt. The bridge-owned page is much smaller than the official plugin frontend and requests no official DSH `/plugins/` or `/assets/` modules during initial use. The original desktop view remains available with `view=classic`. On a local HTTP page without browser WebCrypto, the original DSH frontend remains the default.
+
+The file browser downloads files inside the selected conversation's verified computer workspace. DSH's uploaded attachment records contain no workspace path or public download API, so a pathless attachment in the transcript is shown as a file label rather than a download link.
+
+The repository contains detection and adapter code for npm Web and older DSH protocols, but those paths were checked only with package inspection and test fixtures. They were **not** exercised as running products through the phone interface for this preview. Their behavior, including project creation, conversations, files, and approvals, remains unverified. Unknown protocols show a diagnostic. Acceptance of the tested desktop path on iPhone Safari over 5G and on Android also remains outstanding.
+
+The phone folder chooser browses computer directories through an authenticated, encrypted, read-only bridge endpoint. It uses the native desktop frontend's official picker hook, so selecting a folder does not require someone to respond to a computer-side dialog. Cancelling creates no workspace. Directory requests show a retry action after a bounded wait.
+
+Phone compatibility patches are selected by browser capabilities rather than user-agent brand. A missing `Promise.withResolvers` is patched before the DSH frontend initializes. This design does not establish Android support: protocol fixtures and compiled frontend tests are not substitutes for real-device acceptance. To check the actual installed frontend's initialization in isolation, run `node scripts/test-dsh-workspace-browser.js --live-frontend`; this reads static assets only and does not open sessions or run tasks.
+
+## Codex phone view
+
+The Codex phone interface was exercised in a mobile-sized browser against the Codex installation on the test PC, with additional isolated browser checks for menu actions. This preview does not establish compatibility with every Codex release. The conversation list loads older pages on request; searching covers all conversation titles returned by Codex, while preview-text matching covers only conversations already loaded on the phone. A new conversation asks for a computer project folder, including a manually entered full path when it is absent from recent folders.
+
+Conversation actions include in-page rename and archive confirmation, plus a separate attachment picker. Draft text and attachments stay with their own conversation. Model and reasoning-effort choices also stay with the conversation, and changing models resets an incompatible effort choice to that model's default. The composer labels a running-task queue action separately from sending a new turn after a task ends.
+
+Opening or reading a Codex conversation on the phone does not take its writer lock. If desktop Codex owns that conversation, the phone can view it and save a request on the computer, but **the saved request has not reached Codex**. Finishing the desktop task alone does not send it: the bridge must later gain the writer and the previous turn must finish normally. The phone offers a safer way to work immediately: **copy the saved conversation context into a separate phone conversation**. This leaves the desktop conversation running and moves the current unsent draft and ready attachments into the copy for review; it does not send them automatically. An in-progress desktop step may not be fully copied, and concurrent edits to the same project files can conflict. The current installed Codex build's `thread/fork` behavior was checked with two isolated app-server processes, including while the source had another writer; real phone and other-version acceptance remains outstanding.
+
+Taking over the original desktop-held conversation is under **Emergency takeover**. It can close the entire desktop Codex application and terminate all running desktop tasks, not just the selected conversation. A phone-held conversation is handed back about 30 seconds after an idle phone turn; an active turn is allowed to finish first. Returning to the phone page does not silently take the writer again.
 
 ## Run from source
 
@@ -62,11 +88,11 @@ Pocket Bridge gives a remote browser powerful access to the software and files o
 | Temporary internet tunnel | Cloudflare terminates TLS and can see the URL path, cookies, metadata, and any request or response content not separately encrypted by Pocket Bridge. The address and availability can change. |
 | Direct IPv6 over HTTP | Avoids Cloudflare but is still unencrypted over the internet and requires inbound IPv6 access. Do not treat it as a secure default. |
 
-The #k= fragment is normally not sent in an HTTP request. It helps prove possession of a separate key, but it is **not** a guarantee against an intermediary that actively changes the first page or redirects the browser. Some Codex content channels and real-time streams use application-layer encryption; DeepSeek Harness real-time streams and some outgoing request bodies are covered, but other DSH API responses are not. **Do not assume all traffic is end-to-end encrypted or invisible to the tunnel provider.** See [Security](SECURITY.md) for the detailed threat model.
+The #k= fragment is normally not sent in an HTTP request. It helps prove possession of a separate key, but it is **not** a guarantee against an intermediary that actively changes the first page or redirects the browser. The bridge-owned DSH phone view encrypts its protected content requests and replies; the explicit original DSH view still forwards some API/history replies as plaintext through the TLS-terminating relay. Covered Codex channels use application-layer encryption, and the updated file view encrypts local file paths inside request bodies. URL paths, cookies, timing, sizes and the first page remain visible to Cloudflare. **Do not assume all traffic is end-to-end encrypted or invisible to the tunnel provider.** See [Security](SECURITY.md) for the detailed threat model.
 
 Optional notifications may contact web-push services, ntfy, or Bark. Optional balance checks can contact DeepSeek. Network-route detection may contact public-IP lookup services. The local console page itself does not load third-party assets. Do not rely on notifications to recover from a changed tunnel address.
 
-Codex can hold an exclusive writer lock for a conversation. The phone may be able to observe a running task, but taking over writing by releasing the desktop lock can close or interrupt the desktop Codex process. Do not use that control during work you cannot afford to interrupt. The Codex WebSocket app-server interface is experimental and can change with Codex releases; DeepSeek Harness updates can also affect compatibility.
+Codex can hold an exclusive writer lock for a conversation. The phone may be able to observe a running task, but emergency takeover of the original can close the entire desktop Codex application and terminate running desktop tasks. A separate phone continuation avoids that process action but does not merge future messages back into the original. The Codex WebSocket app-server interface is experimental and can change with Codex releases; DeepSeek Harness updates can also affect compatibility.
 
 Releasing a phone-held conversation is a separate control and does not close desktop Codex. When all Codex phone connections disconnect, Pocket Bridge waits about 60 seconds before releasing its phone-side conversation holds; closing a browser tab is not an instant handback. Pocket Bridge applies a detected system proxy to the Codex service it launches, without automatically changing Windows user-wide proxy variables. The optional desktop-proxy troubleshooting action **does** change those user-wide variables and may affect other newly opened applications; read its warning before using it.
 
