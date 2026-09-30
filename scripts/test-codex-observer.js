@@ -57,6 +57,30 @@ window.WebSocket = class {
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   let browser, page, failed = 0;
   const check = (name, value) => { console.log((value ? 'PASS ' : 'FAIL ') + name); if (!value) failed++; };
+  const waitForPageReady = async () => {
+    const deadline = Date.now() + 30000;
+    let last = null;
+    while (Date.now() < deadline) {
+      try {
+        last = await page.eval(`(() => {
+          const mode = document.getElementById('send-mode');
+          return {
+            loaded: document.readyState === 'complete',
+            fixture: !!window.fixture,
+            input: !!document.getElementById('input'),
+            mode: !!mode && typeof mode.onchange === 'function',
+            connected: typeof state !== 'undefined' && state.ready === true
+          };
+        })()`, 3000);
+        if (Object.values(last).every(Boolean)) return;
+      } catch (err) {
+        // Page.navigate can return before the new execution context is available.
+        last = { evaluationError: err.message };
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error('Codex fixture page did not initialize: ' + JSON.stringify(last));
+  };
   try {
     browser = await Browser.launch();
     page = await browser.newPage();
@@ -69,6 +93,7 @@ window.WebSocket = class {
         `Object.defineProperty(navigator,'language',{get:()=> ${JSON.stringify(forcedLanguage)}});Object.defineProperty(navigator,'languages',{get:()=> [${JSON.stringify(forcedLanguage)}]});`});
     }
     await page.goto('http://127.0.0.1:' + server.address().port,300);
+    await waitForPageReady();
     // 像真人一样改：赋值 + 触发 change。直接写 .value 会绕过 onchange，
     // 而 onchange 里才记「使用者选的是哪个模式」—— 绕过它就测不出
     // 「选择被临时状态覆盖」那类问题。
@@ -283,6 +308,7 @@ window.WebSocket = class {
       await new Promise(r=>setTimeout(r,180));
       check('queue mode saves message without steering',await page.eval(`queueEntries.some(e=>e.label.includes('排队的下一项任务')) && document.getElementById('input').value===''`));
       await page.goto('http://127.0.0.1:'+server.address().port,300);
+      await waitForPageReady();
       await page.eval(`openThread({id:'fixture-thread',name:'队列恢复验证'})`);
       await new Promise(r=>setTimeout(r,200));
       check('queued message reappears after full page reload',await page.eval(`document.getElementById('queued-messages').textContent.includes('排队的下一项任务')`));

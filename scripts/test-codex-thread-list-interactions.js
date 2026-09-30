@@ -96,7 +96,8 @@ function bootstrap() {
     await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await page.send('Page.addScriptToEvaluateOnNewDocument', { source: '(' + bootstrap.toString() + ')()' });
     await page.goto('http://127.0.0.1:' + server.address().port, 500);
-    await wait(() => state.listReady && state.threads.length === 60);
+    // Page.navigate can return before the inline app script defines state on slower CI runners.
+    await wait(() => typeof state !== 'undefined' && state.listReady && state.threads.length === 60, 15000);
     await check('first screen stays at 60 and offers older conversations', () =>
       document.querySelectorAll('#thlist .item').length === 60 &&
       document.getElementById('thread-list-more')?.textContent.includes(t('加载更早的会话')));
