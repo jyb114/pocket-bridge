@@ -8,7 +8,7 @@ When another Codex instance owns the writer, the phone can continue in an indepe
 
 The explicit handback action checks for running work, pending approvals or questions, queued messages, and unresolved control requests before proceeding. It cancels the subscription on the phone's actual Codex connection and requests that this connection close. Live updates remain paused until the user explicitly restores the phone connection.
 
-Restoring updates does not automatically resume a handed-back conversation or send a saved message. Connecting that conversation and submitting a queued message require separate, explicit actions.
+Restoring updates does not automatically resume a handed-back conversation or send a saved message. Connecting that conversation and submitting a queued message require separate, explicit actions. After using the ordinary connection control, choose **Send saved messages** in the saved-message panel to authorize those requests. The action remains available while saved requests still need confirmation.
 
 The service may retain an idle writer during an unload grace period. A successful `thread/unsubscribe` response confirms only the subscription operation. An empty loaded-thread list or a closed phone connection does not independently prove that the computer can acquire the writer. Pocket Bridge must not display immediate handover as confirmed on those signals alone.
 

@@ -573,6 +573,11 @@ if (window.DshI18n) window.DshI18n.register({
   "会话权限 · 查看不占锁，手机可独立续聊": {en:"Conversation access · Read without a lock, or continue separately on your phone",es:"Acceso a la conversación · Leer sin bloqueo o continuar por separado en el teléfono"},
   "已保存 {n} 条 · 尚未发送；电脑任务结束也不会自动发送": {en:"{n} saved · Not sent; finishing the desktop task will not send them",es:"{n} guardados · No enviados; terminar la tarea del ordenador no los enviará"},
   "尝试连接并发送已存内容（不关闭电脑 Codex）": {en:"Try connecting to send saved messages (keeps desktop Codex open)",es:"Intentar conectar para enviar los mensajes guardados (sin cerrar Codex)"},
+  "发送已存内容": {en:"Send saved messages",es:"Enviar mensajes guardados"},
+  "正在确认发送已存内容…": {en:"Enabling saved messages…",es:"Habilitando mensajes guardados…"},
+  "已确认发送已存内容；请查看会话中的执行结果。": {en:"Saved messages are enabled for sending. Check this conversation for execution results.",es:"Los mensajes guardados están habilitados para enviarse. Revisa los resultados en esta conversación."},
+  "未能确认发送已存内容；请先检查会话和待办状态：": {en:"Could not confirm saved-message delivery. Check the conversation and queue before retrying: ",es:"No se pudo confirmar la entrega de los mensajes guardados. Revisa la conversación y la cola antes de reintentar: "},
+  "连接或会话已改变，未确认发送已存内容。": {en:"The connection or conversation changed. Sending saved messages was not confirmed.",es:"La conexión o conversación cambió. No se confirmó el envío de los mensajes guardados."},
   "已连接，正在确认任务状态；只有桥持有此会话且当前任务正常结束才会发送。": {en:"Connected. Saved messages can send only while Bridge owns this conversation and the current task ends normally.",es:"Conectado. Los mensajes guardados solo pueden enviarse si Bridge controla la conversación y la tarea actual termina normalmente."},
   "已保存在电脑，尚未送达。电脑端完成任务不等于自动发送；需由桥连接此会话。": {en:"Saved on your computer, not delivered. Finishing the desktop task does not send it; Bridge must connect to this conversation.",es:"Guardado en el ordenador, no entregado. Terminar la tarea no lo envía; Bridge debe conectarse a esta conversación."},
   "正在创建独立会话…": {en:"Creating a separate conversation…",es:"Creando una conversación independiente…"},
@@ -1199,9 +1204,15 @@ function renderQueue(){
   var title=document.createElement('div');title.textContent=task.kind==='unlinked'
     ?t('已保存 {n} 条 · 尚未发送；电脑任务结束也不会自动发送', {n:queueEntries.length})
     :t('待发送 {n} 条 · 保存在电脑端', {n:queueEntries.length});box.appendChild(title);
-  if(task.kind==='unlinked'){
-    var connect=document.createElement('button');connect.id='queue-connect';connect.textContent=t('尝试连接并发送已存内容（不关闭电脑 Codex）');
-    connect.disabled=!state.ready||state.resuming||!!state.handingBack;connect.onclick=connectQueuedThread;box.appendChild(connect);
+  var activating=state.queueActivating && state.thread && state.queueActivating.thread===state.thread;
+  var held=queueEntries.some(function(e){return e.state==='queued' && e.requiresConfirmation===true;});
+  if(activating || held || task.kind==='unlinked' && queueEntries.some(function(e){return e.state==='queued';})){
+    var connect=document.createElement('button');connect.id='queue-connect';connect.textContent=activating?t('正在确认发送已存内容…'):state.resumed?t('发送已存内容'):t('尝试连接并发送已存内容（不关闭电脑 Codex）');
+    connect.disabled=!state.ready||state.resuming||!!state.handingBack||!!state.sending||!!state.queueActivating||queueEntries.some(function(e){return e.state==='sending';});connect.onclick=connectQueuedThread;box.appendChild(connect);
+  }
+  var feedback=state.thread && state.queueActivationFeedback && state.queueActivationFeedback[state.thread.id];
+  if(feedback){
+    var notice=document.createElement('div');notice.id='queue-activation-status';notice.setAttribute('role','status');notice.textContent=feedback;notice.style.color='var(--bad)';box.appendChild(notice);
   }
   queueEntries.forEach(function(e){
     var row=document.createElement('div');row.className='queued-row';
@@ -1219,8 +1230,30 @@ function renderQueue(){
   });
   if (window.DshI18n) window.DshI18n.apply(box);
 }
-function connectQueuedThread(){ return connectCurrentThread(true); }
+function connectQueuedThread(){
+  if(!state.ready||state.view!=='thread'||!state.thread||state.resuming||state.handingBack||state.sending||state.queueActivating||state.forking||
+    queueEntries.some(function(e){return e.state==='sending';})||!queueEntries.some(function(e){return e.state==='queued' && (e.requiresConfirmation===true || task.kind==='unlinked');}))return Promise.resolve(false);
+  var thread=state.thread,ws=state.ws,token={thread:thread};state.queueActivating=token;
+  if(!state.queueActivationFeedback)state.queueActivationFeedback=Object.create(null);
+  delete state.queueActivationFeedback[thread.id];renderFooter();
+  return (state.resumed?Promise.resolve(true):connectCurrentThread(false)).then(function(connected){
+    if(!connected || !state.ready || !state.resumed || state.view!=='thread' || state.thread!==thread || state.ws!==ws || state.handingBack || state.sending)
+      throw new Error(t('连接或会话已改变，未确认发送已存内容。'));
+    return queueRequest({action:'activate',threadId:thread.id});
+  }).then(function(){
+    if(state.thread===thread){toast(t('已确认发送已存内容；请查看会话中的执行结果。'));refreshQueue();}
+    return true;
+  }).catch(function(e){
+    state.queueActivationFeedback[thread.id]=t('未能确认发送已存内容；请先检查会话和待办状态：')+e.message;
+    if(state.thread===thread){toast(state.queueActivationFeedback[thread.id]);refreshQueue();}
+    return false;
+  }).finally(function(){
+    if(state.queueActivating===token)state.queueActivating=null;
+    renderFooter();if(state.thread===thread && state.resumed)scheduleRelease();
+  });
+}
 function connectCurrentThread(sendSaved){
+  if(sendSaved)return connectQueuedThread();
   if(!state.ready||!state.thread||state.resuming||state.handingBack)return Promise.resolve(false);
   var thread=state.thread;state.resuming=true;renderFooter();
   return call('thread/resume',{threadId:thread.id,excludeTurns:true},15000).then(function(r){
@@ -1230,7 +1263,6 @@ function connectCurrentThread(sendSaved){
     if(r && r.reasoningEffort)thread.reasoningEffort=r.reasoningEffort;
     applyObservedStatus(r && r.thread,null);scheduleRelease();
     toast(t('已连接；草稿仍未发送，请检查后点击发送。'));
-    if(sendSaved)return queueRequest({action:'activate',threadId:thread.id}).then(function(){refreshQueue();return true;});
     return true;
   }).catch(function(e){
     if(state.thread!==thread)return false;
@@ -1326,7 +1358,7 @@ function enqueueDraft(text,box,attachments,options){
       attachmentSent(tid,attachments);if(queueDraft===draft)queueDraft=null;clearSubmittedTextDraft(tid,text);
       setQueueSaveNotice(tid,'saved',t('已保存，尚未发送。'),j && j.id || draft.id);
       if(state.thread && state.thread.id===tid){
-        if(!queueEntries.some(function(e){return e.id===(j && j.id || draft.id);}))queueEntries.push({id:j && j.id || draft.id,label:label,state:'queued',note:t('已保存，等待确认执行端；尚未发送。')});
+        if(!queueEntries.some(function(e){return e.id===(j && j.id || draft.id);}))queueEntries.push({id:j && j.id || draft.id,label:label,state:'queued',requiresConfirmation:deferred,note:t('已保存，等待确认执行端；尚未发送。')});
         renderQueue();toast(options.savedNotice||t('已保存在电脑，尚未送达。电脑端完成任务不等于自动发送；需由桥连接此会话。'));refreshQueue();
       }
       return true;
@@ -1601,7 +1633,7 @@ function refreshObservedThread() {
     read('thread/loaded/list',{})
   ]).then(function(results) {
     if (epoch !== observerEpoch || !state.thread || state.thread.id !== tid || state.ws !== ws ||
-      version !== activityVersion || state.resuming || state.sending || state.handingBack) return;
+      version !== activityVersion || state.resuming || state.sending || state.handingBack || state.queueActivating) return;
     var meta = results[0], turns = results[1], items = results[2];
     if (!meta.ok && !turns.ok && !items.ok) {
       if(state.handedBackThreads && state.handedBackThreads[tid]){setTask('unlinked',t('已请求交还；电脑能否接手仍待确认。这里继续只读查看，不会自动重新占用。'));return;}
@@ -3850,7 +3882,7 @@ function warmUpThread() { /* 不再预加载：翻看会话不该占电脑的写
 function scheduleRelease() {
   clearTimeout(state.releaseTimer);
   state.releaseTimer = null;
-  if(!state.resumed || !state.thread || state.handingBack || state.renameEditingId===state.thread.id)return;
+  if(!state.resumed || !state.thread || state.handingBack || state.queueActivating || state.renameEditingId===state.thread.id)return;
   // An empty thread has no persisted rollout yet. Unsubscribing after 30 seconds
   // destroys it, so a person still writing their first message cannot resume it.
   // Leaving the page still releases it; after the first turn, normal handback resumes.
@@ -3859,7 +3891,7 @@ function scheduleRelease() {
   state.releaseTimer = setTimeout(function () {
     state.releaseTimer=null;
     if(!state.thread || state.thread.id!==tid)return;
-    if (state.running || state.resuming || state.handingBack) { scheduleRelease(); return; }
+    if (state.running || state.resuming || state.handingBack || state.queueActivating) { scheduleRelease(); return; }
     releaseThread();
     renderFooter();
   }, 30 * 1000);
@@ -4139,7 +4171,7 @@ var lastWriterError = '';
 function phoneHandbackIssue(ws, tid) {
   if(!state.ready || !ws || state.ws!==ws || ws.readyState!==1 || !state.thread || state.thread.id!==tid)
     return tr('连接或会话已改变，未断开手机连接；请重新检查后再交还。');
-  if(state.running || state.sending || state.resuming || state.forking || resumeSubscription ||
+  if(state.running || state.sending || state.resuming || state.queueActivating || state.forking || resumeSubscription ||
      Object.keys(state.pending || {}).some(function(id){return /^(thread\/(start|fork|resume)|turn\/(start|steer))$/.test(state.pending[id].method || '');}))
     return tr('仍有手机任务或连接请求在进行，未断开连接；请等完成后再交还。');
   if(Object.keys(state.approvals || {}).length)
@@ -4298,7 +4330,7 @@ function renderFooter() {
   var connectionPanel=$('connect-thread-panel');
   if(connectionPanel){
     connectionPanel.hidden=!!state.resumed||!state.thread;
-    $('connect-current').disabled=!state.ready||!!state.resuming||!!state.handingBack;
+    $('connect-current').disabled=!state.ready||!!state.resuming||!!state.handingBack||!!state.queueActivating;
     $('connect-current').textContent=state.resuming?t('正在连接此会话…'):t('连接此会话');
     $('fork-from-composer').disabled=!state.ready||!!state.forking||!!state.handingBack;
   }
@@ -4318,7 +4350,7 @@ function renderFooter() {
   // unconfirmed. For a completed or idle task, send() starts a new turn even
   // when the saved running-task preference is Queue, so the button must say Send.
   var queuing=readOnlySave||((state.running||saveOnly)&&$('send-mode').value==='queue');
-  $('send').disabled = !!state.sending || !!state.handingBack || !!(state.thread && state.forking===state.thread.id) || draftAttachments().some(function(a){return a.status!=='ready';});
+  $('send').disabled = !!state.sending || !!state.handingBack || !!state.queueActivating || !!(state.thread && state.forking===state.thread.id) || draftAttachments().some(function(a){return a.status!=='ready';});
   $('send').classList.toggle('queue',queuing);
   $('send').textContent=readOnlySave?t('保存待办'):queuing?t('排队'):'↑';
   $('send').style.fontSize=queuing?'13px':'';
@@ -4367,6 +4399,7 @@ function renderFooter() {
  */
 function send() {
   if(state.handingBack){toast(t('正在检查交还，请稍候再操作。'));return;}
+  if(state.queueActivating){toast(t('正在确认发送已存内容…'));return;}
   var box = $('input');
   var text = box.value.trim();
   if (!state.thread) return;
@@ -5135,7 +5168,7 @@ function openLockPanel() {
       forkHelp.textContent=tr('电脑原会话继续运行。副本只包含已保存的上下文；正在执行的步骤可能不完整。同一项目目录的并行文件修改可能冲突。');
       inner.appendChild(forkHelp);
       var connect=document.createElement('button');connect.className='btn';connect.id='lock-connect-current';
-      connect.textContent=tr('连接此会话');connect.disabled=!state.ready||!!state.resuming;
+      connect.textContent=tr('连接此会话');connect.disabled=!state.ready||!!state.resuming||!!state.queueActivating;
       connect.onclick=function(){closeSheet();connectCurrentThread(false);};inner.appendChild(connect);
       var connectHelp=document.createElement('div');connectHelp.className='info';
       connectHelp.textContent=tr('正在执行的任务不会停止；连接后仍需点击发送。');inner.appendChild(connectHelp);

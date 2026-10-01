@@ -220,6 +220,54 @@ function testQueuePresentation() {
     /等待|需|必须|until|need/i.test(texts), texts);
 }
 
+async function testSavedQueueActivation() {
+  console.log('\n[5b] Saved-message activation stays explicit, guarded, and conversation-scoped');
+  function harness() {
+    function element(tag) { return {tag,children:[],style:{},innerHTML:'',textContent:'',id:'',appendChild(child){this.children.push(child);return child;},setAttribute(){}}; }
+    const thread={id:'held'},state={view:'thread',thread,ws:{},ready:true,resumed:true,resuming:false,sending:false},task={kind:'completed'};
+    const queueBox=element('div'),requests=[],rpc=[],messages=[];let footerRenders=0;
+    const box=loadFunctions({state,task,queueEntries:[{id:'saved',state:'queued',requiresConfirmation:true,label:'Held instruction'}],
+      document:{createElement:element},$:()=>queueBox,t:s=>s,window:{},Promise,Object,
+      renderFooter(){footerRenders++;},scheduleRelease(){},refreshQueue(){},applyObservedStatus(){task.kind='idle';},toast(s){messages.push(s);},
+      refreshObservedThread(){},call(method,params){rpc.push({method,params});return Promise.resolve({thread:{id:params.threadId,status:{type:'idle'}}});},
+      queueRequest(body){requests.push(body);return Promise.resolve({ok:true});}},['renderQueue','connectQueuedThread','connectCurrentThread']);
+    return {box,state,task,thread,requests,rpc,messages,queueBox,renderCount:()=>footerRenders};
+  }
+  for(const entry of [{state:'error',requiresConfirmation:true},{state:'sending',requiresConfirmation:true},{state:'queued',requiresConfirmation:false}]){
+    const h=harness();h.box.queueEntries=[{...entry,id:'saved',label:'Saved'}];h.box.renderQueue();
+    check(entry.state+' / confirmation '+entry.requiresConfirmation+' does not offer connected resend',!h.queueBox.children.some(el=>el.id==='queue-connect'));
+    await h.box.connectQueuedThread();check(entry.state+' / confirmation '+entry.requiresConfirmation+' cannot activate through a stale callback',h.requests.length===0);
+  }
+  for(const flag of ['ready','resuming','handingBack','sending']){
+    const h=harness();h.state[flag]=flag==='ready'?false:true;h.box.renderQueue();
+    check(flag+' guards the saved-send button',h.queueBox.children.find(el=>el.id==='queue-connect')?.disabled===true);
+    await h.box.connectQueuedThread();check(flag+' guards direct saved-send invocation',h.requests.length===0&&h.rpc.length===0);
+  }
+  {
+    const h=harness();let resolve;h.box.queueRequest=body=>{h.requests.push(body);return new Promise(r=>{resolve=r;});};
+    const first=h.box.connectQueuedThread();await flush();await h.box.connectQueuedThread();
+    check('concurrent connected activation calls issue only one HTTP action and no resume',h.requests.length===1&&h.rpc.length===0&&!!h.state.queueActivating);
+    resolve({ok:true});check('confirmed activation clears busy state without claiming delivery',await first===true&&!h.state.queueActivating&&h.messages.some(s=>/执行结果/.test(s)));
+  }
+  {
+    const h=harness();h.box.queueRequest=body=>{h.requests.push(body);return Promise.reject(Error('Activation outcome unknown'));};
+    await h.box.connectQueuedThread();
+    check('failed activation retains the entry and reports an unconfirmed outcome',!h.state.queueActivating&&h.box.queueEntries[0].requiresConfirmation===true&&/Activation outcome unknown/.test(h.state.queueActivationFeedback.held)&&/未能确认/.test(h.state.queueActivationFeedback.held));
+  }
+  {
+    const h=harness();h.state.resumed=false;h.task.kind='unlinked';let resume;
+    h.box.call=(method,params)=>{h.rpc.push({method,params});return method==='thread/resume'?new Promise(resolve=>{resume=resolve;}):Promise.resolve({});};
+    const action=h.box.connectQueuedThread();h.state.thread={id:'other'};h.state.resuming=false;
+    resume({thread:{id:'held',status:{type:'idle'}}});await action;
+    check('switching conversations during connection never activates either queue',h.requests.length===0&&!h.state.queueActivating&&h.state.thread.id==='other');
+    check('old activation feedback remains scoped to the source and current controls rerender',!!h.state.queueActivationFeedback.held&&!h.state.queueActivationFeedback.other&&h.messages.length===0&&h.renderCount()>1);
+  }
+  {
+    const h=harness();h.state.resumed=false;h.task.kind='unlinked';await h.box.connectQueuedThread();
+    check('the explicit unlinked connect-and-send path still resumes once then activates',h.rpc.filter(x=>x.method==='thread/resume').length===1&&h.requests.length===1&&h.requests[0].action==='activate'&&h.requests[0].threadId==='held');
+  }
+}
+
 function testConflictChoices() {
   console.log('\n[6] Conflict offers safe phone work before desktop takeover');
   const calls = [], cards = [];
@@ -399,6 +447,7 @@ async function testFork() {
   await testDetachedHandback();
   await testQueue();
   testQueuePresentation();
+  await testSavedQueueActivation();
   testConflictChoices();
   await testFork();
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

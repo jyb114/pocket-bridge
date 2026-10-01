@@ -94,6 +94,7 @@ function harness(){
    for(const [name,change] of [
      ['an explicit resume',h=>{h.state.resuming=true;}],
      ['an explicit send',h=>{h.state.sending=true;}],
+     ['an explicit saved-message activation',h=>{h.state.queueActivating={thread:h.state.thread};}],
      ['an explicit handback',h=>{h.state.handingBack={};}],
      ['a replacement connection',h=>{h.state.ws={close(){h.closed++;}};}],
      ['new live task activity',h=>{h.box.activityVersion++;}]
@@ -107,6 +108,15 @@ function harness(){
    const current=observerHarness();await current.fail();
    check('current observer failures still close only their unchanged idle connection',
      current.closed===1&&current.task.kind==='unknown'&&!current.box.observerBusy&&current.timers.some(timer=>timer.delay===2500));
+ }
+ {
+   const h=harness(),timers=[];h.box.setTimeout=(fn,delay)=>{const timer={fn,delay};timers.push(timer);return timer;};
+   for(const name of ['releaseThread','scheduleRelease'])vm.runInContext(extractFunction(source,name),h.box);
+   h.box.scheduleRelease();const old=timers.find(timer=>timer.delay===30000);
+   h.state.queueActivating={thread:h.state.thread};old.fn();
+   check('an old idle-release timer cannot unsubscribe while saved messages are being activated',h.state.resumed&&!h.calls.includes('thread/unsubscribe'));
+   h.state.queueActivating=null;h.box.scheduleRelease();timers.at(-1).fn();
+   check('idle-release scheduling resumes after saved-message activation finishes',!h.state.resumed&&h.calls.join(',')==='thread/unsubscribe');
  }
  {
    const h=harness(),timers=[];h.box.setTimeout=(fn,delay)=>{const timer={fn,delay};timers.push(timer);return timer;};

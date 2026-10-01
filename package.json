@@ -1,6 +1,6 @@
 {
   "name": "pocket-bridge",
-  "version": "1.0.0-preview.4",
+  "version": "1.0.0-preview.5",
   "private": true,
   "description": "An unofficial gateway for using DeepSeek Harness or OpenAI Codex on your own Windows PC from a phone browser.",
   "keywords": [

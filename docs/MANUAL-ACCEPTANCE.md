@@ -1,6 +1,6 @@
-# Manual acceptance — v1.0.0-preview.4 candidate
+# Manual acceptance — v1.0.0-preview.5 candidate
 
-Status: **preview.4 acceptance record with explicit limits**. Updated 2026-10-01. This record is based on actual browser interaction with locally running target applications, except where an entry explicitly describes an isolated HTTP or automated check. Code inspection, schemas, and mocked tests do not count as successful end-to-end use.
+Status: **preview.5 follow-up with explicit limits**. Updated 2026-10-01. Preview.4 observations below remain historical evidence for the retained features; they were not all repeated for this follow-up. This record is based on actual browser interaction with locally running target applications, except where an entry explicitly describes an isolated HTTP or automated check. Code inspection, schemas, and mocked tests do not count as successful end-to-end use.
 
 ## Test conditions
 
@@ -40,6 +40,7 @@ Credentials, connection secrets, private addresses, and account identifiers are 
 | CX-11 | Operate on a physical Android phone | Pending | Not operated in this acceptance run. |
 | CX-12 | Select GPT-6.1 Sol and send an instruction | Passed | The tester selected the actual model and low effort controls; the real response `sol61-mobile-ok` appeared. |
 | CX-13 | Rename a disposable conversation and cancel its archive confirmation | Passed | The name saved and reappeared in the list. The archive confirmation explained that it does not delete content; cancellation was operated. Archive completion and restoration remain unverified. |
+| CX-14 | Save while viewing, use ordinary Connect, then explicitly send the saved request | Passed in preview.5 follow-up | The tester actually reproduced preview.4 hiding the only saved-send action after ordinary Connect. In the corrected UI, ordinary Connect left the request held and displayed Send saved messages. An explicit click showed progress, the actual Codex turn returned `saved-connect-ok`, and the queue card cleared. English language selection was operated. This used the real Codex 0.159.0 process at 390 × 844, not a simulated reply or a physical phone. |
 
 These results are scoped to Codex 0.159.0 and the observed account/runtime. They do not certify every Codex desktop release or every model entitlement.
 
@@ -82,6 +83,8 @@ The 0.2.0-rc.2 test copy explicitly admitted that exact version as an experiment
 
 The guide directs users to official ChatGPT and the official setup/channel documentation. It does not forward desktop login cookies or claim to host a Dot client. OpenAI currently describes mobile web as unsupported. [Message your dot](https://learn.chatgpt.com/docs/dots/channels).
 
+In the preview.5 follow-up, the tester opened the existing Dot guide again through the real phone menu and returned to the authenticated Codex list. No new Dot messaging capability was implemented or accepted.
+
 ## Security and release acceptance
 
 | ID | Gate | Result |
@@ -91,13 +94,13 @@ The guide directs users to official ChatGPT and the official setup/channel docum
 | SEC-03 | Phone controls do not globally kill desktop Codex; handback acts on the owning connection | Passed targeted regressions and actual CX-05; runtime grace period applies |
 | SEC-04 | Protected request, file, and streamed-content encryption boundaries match SECURITY.md | Passed relevant isolated encryption/negative checks; first-page and relay limits remain |
 | SEC-05 | Codex verified-root file policy and safe active-document responses | Passed actual filesystem and HTTP tests; one Windows file-symlink test explicitly skipped after EPERM |
-| REL-01 | Candidate isolated CI and relevant targeted regression checks | Passed: 94 isolated checks, zero failures and zero whole-check skips; six live segments explicitly excluded. The final stale-observer change additionally passed 71 focused concurrency/control assertions; the CI workflow runs the complete suite on the final publication commit. |
+| REL-01 | Candidate isolated CI and relevant targeted regression checks | Preview.5: 94 isolated checks, zero failures and zero whole-check skips; six live segments explicitly excluded. The saved-send fix additionally passed 22 isolated browser/HTTP queue checks, 60 lock-UX assertions, 75 mobile-control assertions, and 10 backend queue checks. These automated checks supplement CX-14; they do not replace human acceptance. The CI workflow runs the suite on the final publication commit. |
 | REL-02 | Strict secret scan and clean source package inspection | Strict tracked-source/history scan passed; final published asset inspection is separate |
-| REL-03 | Preview.4 installer build, install/upgrade/uninstall smoke tests, and data preservation | Passed isolated Windows install, first startup, same-version upgrade, actual preview.3-to-preview.4 upgrade, and uninstall/data-preservation checks; published assets are rebuilt from the final commit |
-| REL-04 | Public source, installer, notes, and asset checksums match the accepted candidate | Verify through the preview.4 release assets and publication workflow; this record does not claim physical-device acceptance |
+| REL-03 | Installer build, install/upgrade/uninstall smoke tests, and data preservation | Historical preview.4 evidence includes isolated Windows install, first startup, same-version upgrade, actual preview.3-to-preview.4 upgrade, and uninstall/data-preservation checks. Preview.5 requires its own publication build and installer smoke results; prior tests do not certify a preview.4-to-preview.5 upgrade. |
+| REL-04 | Public source, installer, notes, and asset checksums match the accepted candidate | Verify through the preview.5 release assets and publication workflow; this record does not claim physical-device acceptance |
 
 Cloudflare can see tunnel metadata and the first page. Covered application-layer encryption does not provide an unconditional guarantee against an active relay changing that first page. Original DSH views have additional plaintext-response limits. The detailed boundary belongs in [SECURITY.md](../SECURITY.md).
 
 ## Before updating the draft results
 
-Replace Pending with Passed only after the exact workflow was operated and its result observed. Record the actual runtime version and the tested distribution. Keep upstream authentication failures, download-tool timeouts, unsupported capabilities, and device/network coverage visible. Final packaging checks must be rerun for this candidate; preview.3 results are historical, not preview.4 evidence.
+Replace Pending with Passed only after the exact workflow was operated and its result observed. Record the actual runtime version and the tested distribution. Keep upstream authentication failures, download-tool timeouts, unsupported capabilities, and device/network coverage visible. Final packaging checks must be rerun for this candidate; earlier preview results are historical, not preview.5 evidence.

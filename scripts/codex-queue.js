@@ -127,7 +127,7 @@ function createQueueService(base,port){
   return {store,handle(req,res){
     if(store.loadError){json(res,503,{error:store.loadError});return;}
     const u=new URL(req.url,'http://localhost');
-    if(req.method==='GET'){json(res,200,{entries:store.list(u.searchParams.get('threadId')).map(e=>({id:e.id,label:e.label,state:e.state,error:e.error,note:e.note||'已保存，等待确认执行端状态；尚未发送。',createdAt:e.createdAt}))});return;}
+    if(req.method==='GET'){json(res,200,{entries:store.list(u.searchParams.get('threadId')).map(e=>({id:e.id,label:e.label,state:e.state,requiresConfirmation:e.requiresConfirmation===true,error:e.error,note:e.note||'已保存，等待确认执行端状态；尚未发送。',createdAt:e.createdAt}))});return;}
     if(req.method!=='POST'){json(res,405,{error:'不支持的请求'});return;}
     if(req.headers['x-dsh-queue']!=='1'){json(res,403,{error:'无效请求'});return;}
     if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host)throw Error();}catch{json(res,403,{error:'来源不匹配'});return;}}

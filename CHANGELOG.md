@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-preview.5 — Windows preview
+
+- Fixed a Codex phone flow where saving an instruction and then connecting through the ordinary connection control removed the only action for sending the saved instruction. Saved requests remain held until the user explicitly chooses Send saved messages.
+- Added activation progress/error feedback and guarded repeated clicks, concurrent sending, and handback. The queue status response exposes only the confirmation boolean needed to distinguish saved requests from already-enabled ones.
+- Kept the existing DSH adapters, Dot official-access guide, security limits, and version support boundaries. Dot messaging is still unavailable in Bridge; old/npm DSH successful model turns and physical-phone/tunnel acceptance remain unverified.
+
 ## 1.0.0-preview.4 — Windows preview
 
 - Operated the Codex phone interface at 390 × 844 against the real Codex 0.159.0 runtime. Received GPT-6 Astra, GPT-6 Sol, and GPT-6.1 Sol replies. Continued a separate copy while the source writer stayed held; answered a real choice question and approved a real one-time read of an uploaded file.
