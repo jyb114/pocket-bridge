@@ -209,6 +209,19 @@
     var event = record && (record.type === 'event' ? record.event : record.event || record);
     if (!event || typeof event.type !== 'string' || (event.surfaceOp && event.surfaceOp !== 'append')) return [];
     var data = event.data || {};
+    if (event.type === 'turn/end' && data.reason && data.reason.kind === 'error') {
+      var failure = data.reason.error || {};
+      var failureText = Number(failure.status) === 401 || failure.code === 'AUTH'
+        ? 'DSH 的模型服务拒绝了凭据（401）。请在电脑端更新 API key 后重试。'
+        : Number(failure.status) === 402
+          ? 'DSH 的模型账户余额不足。请在电脑端检查账户后重试。'
+          : Number(failure.status) === 429
+            ? 'DSH 的模型服务请求过于频繁。请稍后重试。'
+            : bounded(failure.message || '模型请求未完成，请在电脑端检查 DSH 后重试。', 2000)
+              .replace(/(?:Bearer\s+|sk-)[A-Za-z0-9_-]{12,}/gi, '[redacted]');
+      return [{ id: 'turn-error:' + String(data.turn || event.seq), role: 'system',
+        title: '模型请求失败', text: failureText, status: 'error' }];
+    }
     if (event.type === 'user/message') {
       if (data.source && data.source.kind !== 'user') return [];
       var text = contentText(data.content, 'text') || textParts(data, 0);

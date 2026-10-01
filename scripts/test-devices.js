@@ -188,9 +188,10 @@ function isWorkbench(res) {
     `实际 ${rawCookies.length}: ${rawCookies.map((c) => String(c).split('=')[0]).join(', ')}`);
 
   const names = rawCookies.map((c) => String(c).split('=')[0]);
-  ok('其中一个是我们自己的设备 cookie', names.some((n) => n === 'dsh-gw-session'), names.join(', '));
+  ok('其中一个是我们自己的设备 cookie', names.some((n) => /^dsh-gw-session(?:-[a-f0-9]{16})?$/.test(n)), names.join(', '));
 
-  const devCookie = rawCookies.find((c) => String(c).startsWith('dsh-gw-session='));
+  const devCookie = rawCookies.find((c) => /^dsh-gw-session(?:-[a-f0-9]{16})?=/.test(String(c)));
+  const deviceName = String(devCookie).split('=')[0];
   // SameSite 要 Lax，**不能是 Strict**。
   //
   //  这里原来钉的是 Strict。后来发现 Strict 会让 iOS「从主屏幕图标启动」
@@ -296,12 +297,12 @@ function isWorkbench(res) {
   // ── 6. 老设备兼容：只有 DSH cookie、没有设备令牌 ───────────────────────────
   // 这一条决定升级会不会把已经配好的手机全部踢下线。
   console.log('\n[6] 老设备（升级前配对的，没有设备令牌）');
-  const dshOnly = cookieB.split('; ').filter((c) => !c.startsWith('dsh-gw-session=')).join('; ');
+  const dshOnly = cookieB.split('; ').filter((c) => !c.startsWith(deviceName + '=')).join('; ');
   const legacy = await req('/', { headers: { cookie: dshOnly } });
   ok('老设备没有被踢下线', isWorkbench(legacy), `HTTP ${legacy.status}`);
   const issued = legacy.headers['set-cookie'] || [];
   ok('给它补发了一张设备令牌',
-    issued.some((c) => String(c).startsWith('dsh-gw-session=')),
+    issued.some((c) => String(c).startsWith(deviceName + '=')),
     JSON.stringify(issued.map((c) => String(c).split('=')[0])));
 
   const nBefore = sessions.list().length;
@@ -314,14 +315,14 @@ function isWorkbench(res) {
 
   // ── 7. 伪造与篡改 ─────────────────────────────────────────────────────────
   console.log('\n[7] 伪造的设备令牌');
-  const forge = await req('/', { headers: { cookie: `${dshOnly}; dsh-gw-session=abc.def.ghi` } });
+  const forge = await req('/', { headers: { cookie: `${dshOnly}; ${deviceName}=abc.def.ghi` } });
   ok('乱写的令牌被拒', !isWorkbench(forge), `HTTP ${forge.status}`);
 
-  const parts = cookieB.match(/dsh-gw-session=([^;]+)/);
+  const parts = cookieB.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/);
   if (parts) {
     const seg = parts[1].split('.');
     const tampered = `${seg[0]}.${seg[1]}.${'A'.repeat(seg[2].length)}`;
-    const tamper = await req('/', { headers: { cookie: `${dshOnly}; dsh-gw-session=${tampered}` } });
+    const tamper = await req('/', { headers: { cookie: `${dshOnly}; ${deviceName}=${tampered}` } });
     ok('改过签名的令牌被拒', !isWorkbench(tamper), `HTTP ${tamper.status}`);
   }
 

@@ -225,6 +225,14 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-a
   instance.frame('lite-session-1', { type: 'event', event: { type: 'turn/start', seq: 17, data: {} } });
   instance.frame('lite-session-1', { type: 'event', event: { type: 'turn/end', seq: 18, data: {} } });
   assert.deepEqual(events.filter(e => e.type === 'session-status').map(e => e.running), [true, false]);
+  instance.frame('lite-session-1', { type: 'event', event: { type: 'turn/end', seq: 19,
+    data: { turn: 3, reason: { kind: 'error', error: { status: 401, code: 'AUTH',
+      message: 'Authentication failed: sensitive credential detail' } } } } });
+  const failedTurn = events.find(e => e.type === 'record' && e.record.id === 'turn-error:3');
+  assert.equal(failedTurn.record.role, 'system');
+  assert.equal(failedTurn.record.status, 'error');
+  assert.match(failedTurn.record.text, /401/);
+  assert.ok(!failedTurn.record.text.includes('sensitive credential detail'), 'model authentication errors never echo credential details');
   assert.equal((await api.listDirectories()).directories[0].name, 'src');
   assert.equal((await api.listWorkspaceFiles({ sessionId: 'session-1' })).entries[0].path, 'report.txt');
   const file = { name: 'report.txt', size: 10, arrayBuffer: async () => new TextEncoder().encode('file bytes').buffer };

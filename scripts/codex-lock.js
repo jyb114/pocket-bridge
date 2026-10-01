@@ -1,6 +1,6 @@
-// 锁的两个方向（使用者 2026-09-27 明确要的）：
-//   · 「释放电脑端的锁」= release()：让**电脑上**的 Codex 松手（最后一招是关掉它，有代价）
-//   · 「释放手机端的锁」= releasePhone()：只收**手机这边**的摊子，一个电脑程序都不碰
+// 锁的两个方向：
+//   · release()：检查该会话能否接入；不能验证其他 writer 的进程时拒绝关闭程序。
+//   · releasePhone()：只处理配置后端的手机订阅，不关闭电脑程序。
 //
 // 「释放电脑端的锁」—— 手机被 Codex 的独占写锁挡在门外时的那条出路。
 //
@@ -14,12 +14,11 @@
 // **没有监听任何端口**（实测：桌面版那个 codex.exe 只有出网连接，没有 LISTEN），
 // 也就是说我们没法连上去跟它商量「你松开一下」。
 //
-// 所以「释放」只有两条路，而且必须按这个顺序试：
+// 安全的处理顺序：
 //   1. 锁是**我们自己**的 app-server 占的 → 一条 `thread/unsubscribe` 就还回去了，
 //      不碰使用者电脑上的任何东西。
-//   2. 锁是**电脑桌面版**占的 → 唯一能让它松开的办法是让那个进程结束。
-//      这就是确认框里那句「电脑上正在跑的任务可能会被终止」的由来，
-//      也是这一条**必须**由使用者点确认才做、服务端再收一道 `confirm` 的原因。
+//   2. 其他 writer 占用 → 当前协议未提供可验证的 owner PID，不能从桌面存在推断
+//      是桌面持锁。返回 owner-unverified，建议独立 fork 或等待真正 owner 交还。
 //
 // 有一条**明确不做**的事：删锁文件。在 Windows 上，另一个进程持着锁的时候
 // 删掉文件并不能让它的句柄失效 —— 只会让后来者在一个「新文件」上拿到锁，
@@ -32,7 +31,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const LOCK_DIR = path.join(os.homedir(), '.codex', 'thread-writer-locks');
+const LOCK_DIR = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'thread-writer-locks');
 
 // 同一进程里反复探锁时，临时文件名不能撞（探锁一次写一个）
 let probeSeq = 0;
@@ -43,6 +42,24 @@ const THREAD_ID_RE = /^[0-9a-fA-F][0-9a-fA-F-]{7,79}$/;
 
 function threadIdOk(id) {
   return typeof id === 'string' && THREAD_ID_RE.test(id) && !id.includes('..');
+}
+
+/** The current protocol does not identify another thread writer's process.
+ * An active-writer error, an open desktop app and a lock-file handle cannot
+ * establish that they belong to the same owner. Never terminate a process on
+ * those signals. Keep this denial shared with the legacy target-control route.
+ */
+function desktopTakeoverDenied(threadId, opts = {}) {
+  const lang = String(opts.lang || 'zh').toLowerCase().split('-')[0];
+  const messages = {
+    zh: '无法确认哪个执行端持有这条会话，已拒绝关闭电脑程序。可以在手机创建独立副本继续，或在持有会话的电脑端退出该会话后重试。',
+    en: 'The process holding this conversation cannot be verified, so no desktop program was closed. Continue in a separate phone copy, or leave the conversation in its owning desktop client and retry.',
+    es: 'No se puede verificar qué proceso tiene esta conversación, por lo que no se cerró ningún programa. Continúa en una copia independiente en el teléfono o sal de la conversación en el cliente que la ocupa y vuelve a intentarlo.'
+  };
+  const code = opts.confirm !== true ? 'no-confirm' : !threadIdOk(threadId) ? 'bad-thread' : 'owner-unverified';
+  const message = (messages[lang] || messages.zh);
+  return { ok: false, threadId: threadId || null, code, ownerVerified: false,
+    desktopStopped: false, error: message, message, suggestions: ['fork', 'wait'] };
 }
 
 function lockPath(threadId) {
@@ -119,11 +136,8 @@ async function unsubscribeOwn(threadId, rpc) {
   return rpc('thread/unsubscribe', { threadId });
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 /**
- * 释放编排。deps 全部可注入 —— 测试里除了「关桌面版」这一步，
- * 其余都能用假的跑（那一步会真的关掉使用者桌面上的程序，见 test-guard）。
+   * 释放编排。deps 可注入；不可验证的其他 writer 永远不能触发进程终止。
  *
  * `base` 目前没用到（锁在 ~/.codex 下，不在工作区里），保留是为了和
  * createQueueService(base, …) 同一个签名 —— 网关那边两条通道的构造写法一致，
@@ -135,9 +149,7 @@ function createLockService(base, deps) {
     rpcFor = (p) => require('./codex-queue.js').createRpc(p),
     probe = probeLock,
     targetsFor = () => require('./targets.js').get('codex'),
-    logger = () => { },
-    waitMs = 1000,
-    waitTries = 15
+    logger = () => { }
   } = deps || {};
 
   /**
@@ -154,7 +166,7 @@ function createLockService(base, deps) {
     const log = (opts && opts.log) || (() => { });
     const out = { ok: false, threadId, method: null, code: null, lockFile: null };
 
-    if (opts && opts.confirm !== true) {
+    if (!opts || opts.confirm !== true) {
       out.code = 'no-confirm';
       return out;
     }
@@ -179,7 +191,7 @@ function createLockService(base, deps) {
     //
     //   和手机发消息时走的是同一条路，所以它的答案就是使用者真正遇到的那件事：
     //     拿到了   → 现在没人挡着（要挡也是我们自己挡的）→ 立刻还回去
-    //     active writer → 另一个进程占着（就是电脑上那个 Codex）→ 才轮到关它
+    //     active writer → 另一个执行端占着，但无法确定是哪个进程 → fail closed
     //     超时/别的错 → **如实说不知道**，绝不去关使用者的程序
     //
     //   原来用的判据是「锁文件能不能独占打开」，实测发现它恒等于「有个 app-server
@@ -199,45 +211,11 @@ function createLockService(base, deps) {
       log(`释放锁：${threadId} 拿不到，但也不是「被另一个进程占着」：${out.error}`);
       return out;
     }
-    log(`释放锁：${threadId} 确实被**另一个进程**占着（active writer）`);
-
-    // ── ② 那就只剩「让电脑桌面版松手」这一条 ─────────────────────────────────
-    const t = targetsFor();
-    let st = { running: false, count: 0 };
-    try { st = (t && t.desktopStatus && t.desktopStatus()) || st; } catch (err) { /* 查不到就当没开 */ }
-
-    if (!st.running) {
-      out.code = 'not-desktop';
-      return out;
-    }
-
-    let stopped = null;
-    try {
-      stopped = await t.stopDesktop(lang);
-    } catch (err) {
-      out.code = 'stop-failed';
-      out.stopError = err.message;
-      return out;
-    }
-    out.desktopStopped = !!(stopped && stopped.ok);
-    out.desktopMessage = (stopped && stopped.message) || '';
-
-    // ── ③ 验证：再用**同一个判据**问一次 —— 进程没了不等于锁立刻没了 ──────────
-    for (let i = 0; i < waitTries; i++) {
-      await sleep(waitMs);
-      const again = await tryTake(threadId, rpc);
-      if (again.ok) {
-        const gave = await giveBack(threadId, rpc);
-        out.ok = true;
-        out.method = 'desktop-closed';
-        out.gaveBack = gave;
-        log(`释放锁：关掉桌面版之后拿到 ${threadId} 了 → 还回去，结果=${gave}`);
-        return out;
-      }
-    }
-
-    out.code = out.desktopStopped ? 'still-locked' : 'stop-failed';
-    return out;
+    // The failure identifies another writer, not its PID, executable or home.
+    // In particular, an isolated/CLI writer can coexist with an unrelated open
+    // desktop app. Global process-name termination would stop the wrong tasks.
+    log(`释放锁：${threadId} 被其他执行端占用；无法验证持锁进程，拒绝关闭任何程序`);
+    return Object.assign(out, desktopTakeoverDenied(threadId, { confirm: true, lang }));
   }
 
   /**
@@ -246,8 +224,8 @@ function createLockService(base, deps) {
    * 使用者 2026-09-27 要的就是这个：「手机端可以释放电脑端的锁，也可以释放手机端的锁」。
    * 两个按钮的分工必须说清楚，不然会像这次一样出事：
    *
-   *   release()      找的是**电脑端**占着的锁；最后一招是关掉电脑上的 Codex
-   *                  —— 有代价（正在跑的任务可能被打断），所以必须 confirm
+   *   release()      检查配置后端是否能接入；其他 writer 无法验证时拒绝关闭进程
+   *                  —— 仍要求 confirm，以免未经选择就改变会话订阅
    *   releasePhone() 只收手机自己的摊子：
    *                    · 指定会话时只还回这一条（thread/unsubscribe）
    *                    · 无会话编号时供「所有手机都离线」清理已加载的会话
@@ -264,7 +242,9 @@ function createLockService(base, deps) {
     const out = {
       ok: false, phone: true, threadId: threadId || null,
       unsubscribed: false, released: [], releaseErrors: [],
-      serverStopped: false, serverMessage: '', serviceKept: true
+      serverStopped: false, serverMessage: '', serviceKept: true,
+      requestProcessed: false, subscriptionStatus: null, subscriptionResults: [],
+      writerReleaseVerified: false, writerReleased: null, handoffStatus: 'not-requested'
     };
 
     // An invalid supplied ID must never fall through to the all-threads path.
@@ -278,11 +258,15 @@ function createLockService(base, deps) {
     // ① A button for one thread must not unsubscribe any other phone session.
     if (!allLoaded) {
       try {
-        await unsubscribeOwn(threadId, rpcFor(port));
-        out.unsubscribed = true;
-        log(`释放手机端的锁：已让 app-server 松开 ${threadId}`);
+        const result = await unsubscribeOwn(threadId, rpcFor(port));
+        out.subscriptionStatus = result && result.status || 'legacy-unverified';
+        out.requestProcessed = true;
+        out.unsubscribed = out.subscriptionStatus === 'unsubscribed' || out.subscriptionStatus === 'legacy-unverified';
+        out.handoffStatus = 'requested';
+        log(`手机交还请求：${threadId} 取消订阅结果=${out.subscriptionStatus}；writer 是否空闲尚未验证`);
       } catch (err) {
         out.unsubscribeError = err && err.message ? err.message : String(err);
+        out.handoffStatus = 'failed';
         log(`释放手机端的锁：松开 ${threadId} 失败：${out.unsubscribeError}`);
       }
     }
@@ -291,7 +275,8 @@ function createLockService(base, deps) {
     //
     //     为什么不直接停服务：停了手机切回来要等冷启动，那就不叫「流畅切换」了
     //     （使用者的要求是「不影响手机端的使用」）。逐条松开之后，
-    //     电脑端能立刻接手，而手机这边服务还是热的、页面连回来就能用。
+    //     unsubscribe 只处理当前 RPC 连接的订阅；宽限期和其他订阅者可能仍保留
+    //     writer。保留真实响应，不能把请求成功说成电脑已能立即接手。
     if (allLoaded) {
       try {
         const cancelled = () => opts && typeof opts.shouldCancel === 'function' && opts.shouldCancel();
@@ -306,11 +291,18 @@ function createLockService(base, deps) {
             if (cancelled()) { out.cancelled = true; break; }
             const operation = unsubscribeOwn(id, rpcFor(port));
             if (opts && typeof opts.onUnsubscribe === 'function') opts.onUnsubscribe(operation);
-            try { await operation; out.released.push(id); }
+            try {
+              const result = await operation;
+              const status = result && result.status || 'legacy-unverified';
+              out.subscriptionResults.push({ threadId: id, status });
+              if (status === 'unsubscribed' || status === 'legacy-unverified') out.released.push(id);
+              out.requestProcessed = true;
+              out.handoffStatus = 'requested';
+            }
             catch (err) { out.releaseErrors.push(`${id}: ${err.message}`); }
           }
         }
-        if (out.released.length) log(`释放手机端的锁：松开了 ${out.released.length} 条会话的占用（服务保持热）`);
+        if (out.subscriptionResults.length) log(`手机交还请求：处理 ${out.subscriptionResults.length} 条订阅；writer 是否空闲尚未验证`);
       } catch (err) {
         // Whether any lock remains is unknown when enumeration fails.
         out.loadedError = err && err.message ? err.message : String(err);
@@ -334,14 +326,18 @@ function createLockService(base, deps) {
     if (!(opts && opts.stopService)) {
       // 默认路径：服务留着（手机回来就是热的）。下面那段只在显式要求时才走。
       out.serverNotRunning = !ours;
-      const allReleased = allLoaded && out.released.length > 0 && out.releaseErrors.length === 0;
-      out.ok = out.unsubscribed || allReleased || !ours;
+      const allProcessed = allLoaded && out.requestProcessed && out.releaseErrors.length === 0 && !out.loadedError && !out.cancelled;
+      // A missing managed PID means only that this gateway did not record the
+      // process. An independently started backend may still be holding threads.
+      const noManagedService = allLoaded && !ours && !out.loadedError && !out.cancelled &&
+        Array.isArray(out.loadedBefore) && out.loadedBefore.length === 0;
+      out.ok = allLoaded ? (allProcessed || noManagedService) : out.requestProcessed;
       return out;
     }
 
     if (!ours) {
       out.serverNotRunning = true;
-      log('释放手机端的锁：我们自己那个 app-server 本来就没在跑 —— 手机这边没有占用');
+      log('手机交还请求：未找到托管 PID，不终止未验证归属的执行服务');
     } else {
       try {
         const r = await t.stop(opts && opts.lang);
@@ -354,10 +350,9 @@ function createLockService(base, deps) {
       }
     }
 
-    // 「成功」= 手机这边确实不再占着了：
-    //   · 会话松开了；· 我们那个服务真停了；· 它本来就没在跑；· 端口是别人的（桌面版，不归我们管）
-    out.ok = out.unsubscribed || out.serverStopped || out.serverNotRunning ||
-      /not-ours|不是我们|别的实例/i.test(out.serverMessage || '');
+    // Request completion is not proof that another executor can resume now.
+    // Keep writerReleased unknown until an authoritative handoff is observed.
+    out.ok = out.requestProcessed || out.serverStopped;
     return out;
   }
 
@@ -459,6 +454,6 @@ function createLockService(base, deps) {
 }
 
 module.exports = {
-  createLockService, probeLock, lockPath, threadIdOk, unsubscribeOwn,
+  createLockService, probeLock, lockPath, threadIdOk, unsubscribeOwn, desktopTakeoverDenied,
   LOCK_DIR
 };

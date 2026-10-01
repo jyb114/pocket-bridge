@@ -210,9 +210,10 @@ console.log('\n=== 设备令牌：滑动续期与自愈的边界 · 回归 ===\n
         headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1' }
       });
       const cookie = (login.headers['set-cookie'] || []).map((c) => String(c).split(';')[0]).join('; ');
-      const token = cookie.split('dsh-gw-session=')[1];
+      const deviceCookie = cookie.match(/(?:^|;\s*)(dsh-gw-session(?:-[a-f0-9]{16})?)=([^;]+)/);
+      const token = deviceCookie[2];
       const id = token.split('.')[0];
-      const withTok = (t) => cookie.replace(/dsh-gw-session=[^;]+/, 'dsh-gw-session=' + t);
+      const withTok = (t) => cookie.replace(/dsh-gw-session(?:-[a-f0-9]{16})?=[^;]+/, deviceCookie[1] + '=' + t);
 
       const db = JSON.parse(fs.readFileSync(FILE, 'utf8'));
       db.devices.find((d) => d.id === id).expiresAt = Date.now() - 1000;

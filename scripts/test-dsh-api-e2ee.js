@@ -42,6 +42,7 @@ console.log('\n[客户端] 哪几条请求会被加密\n');
   const list = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
   assert.deepEqual(list, ['/__dsh/directories', '/__dsh/lite-rpc', '/__dsh/lite-upload',
     '/__dsh/lite-download', '/__dsh/lite-files', '/__dsh/legacy-rpc',
+    '/__dsh/legacy-interactions', '/__dsh/legacy-response', '/__dsh/legacy-upload',
     '/api/session/prompt', '/api/session/uploadFileBinary']);
   ok('范围被钉住：目录、轻量 RPC 和消息正文加密，SSE 不变');
 }

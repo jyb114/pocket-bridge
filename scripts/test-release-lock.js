@@ -1,18 +1,15 @@
 // 「释放电脑端的锁」的测试。
 //
-// 这个功能按下去的后果是**真的会关掉使用者电脑上的 Codex**，所以这一条测试
-// 的重点不是「成功路径通不通」，而是**它在什么情况下不许动手** ——
-// 宁可不释放，也不能误伤：
+// 当前协议不能验证另一个 writer 的 PID，因此紧急接管必须 fail closed。
+// 独立回归执行真实编排和 HTTP 入口；不终止任何本机进程。
 //
 //   1. 没有 confirm:true         → 什么都不做（连探锁都不探）
 //   2. 我们自己能松开            → 绝不去关桌面版
 //   3. 一开始就没人占着          → 绝不因为「探针看起来占着」就关
-//   4. 桌面版根本没开            → 如实报「不是它占的」，不硬来
+//   4. 其他 writer 占用         → 桌面是否开着都不能授权全局终止
 //   5. /codex/lock 少了那道自定义头、或者来源不同 → 403
 //
-// 真正「关掉桌面版」的那一步（targets.stopDesktop / taskkill ChatGPT.exe）
-// 在这里用的是**假的目标对象**，永远不会碰到使用者的程序。真机上验它要显式
-// 打开开关，走的是 test-guard 的 desktopKillAllowed 那套规矩。
+// 假目标记录任何桌面扫描/终止尝试；这些尝试本身就应使回归失败。
 'use strict';
 
 const assert = require('assert/strict');
@@ -22,22 +19,25 @@ const path = require('path');
 const vm = require('vm');
 
 const BASE = path.resolve(__dirname, '..');
-const { createLockService, probeLock, lockPath, threadIdOk } = require('./codex-lock.js');
+const { createLockService, probeLock, lockPath, threadIdOk, desktopTakeoverDenied } = require('./codex-lock.js');
 const { extractRegisterArg, extractFunction } = require('./page-source.js');
 
 const TID = '019fe0dd-83db-7881-affb-77f675c36bb9';
 let bad = 0;
-const ok = (msg) => console.log(`  ✓ ${msg}`);
+const ok = (msg, condition = true, details) => {
+  if (condition) console.log(`  ✓ ${msg}`);
+  else { bad++; console.log(`  ✗ ${msg}${details ? ': ' + details : ''}`); }
+};
 const fail = (msg) => { bad++; console.log(`  ✗ ${msg}`); };
 
 /** 假的目标对象：记下谁调过 stopDesktop，但一个进程都不碰 */
 function fakeTargets(opts) {
   const o = opts || {};
-  const calls = { stopped: 0 };
+  const calls = { stopped: 0, scanned: 0 };
   return {
     calls,
     t: {
-      desktopStatus: () => ({ running: !!o.desktopRunning, count: o.desktopRunning ? 3 : 0 }),
+      desktopStatus: () => { calls.scanned++; return { running: !!o.desktopRunning, count: o.desktopRunning ? 3 : 0 }; },
       stopDesktop: async () => { calls.stopped++; return { ok: o.stopOk !== false, message: '（假的目标：没有真的关）' }; }
     }
   };
@@ -83,6 +83,9 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     assert.equal(r.code, 'no-confirm');
     assert.equal(t.calls.stopped, 0);
     assert.deepEqual(rpc.calls, [], '没确认就一个请求都不该发');
+    const absentOpts = await s.release(TID);
+    assert.equal(absentOpts.code, 'no-confirm');
+    assert.deepEqual(rpc.calls, [], '省略 opts 也不得绕过确认');
     ok('没有 confirm:true：什么都不做（连 app-server 都不问）');
   }
 
@@ -115,28 +118,19 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     ok('拿得到这条会话：立刻还回去，桌面版一个进程都没碰');
   }
 
-  // ④ 被另一个进程占着 + 桌面版在跑 → 这是唯一允许关它的情况，而且要**验证**
+  // ④ 其他执行端占用 + 电脑桌面在跑，不能推断桌面就是 writer。
   {
     const t = fakeTargets({ desktopRunning: true, stopOk: true });
-    let closed = false;
-    const rpc = fakeRpc((method) => {
-      if (method === 'thread/resume') return closed ? { result: {} } : { error: WRITER_ERR };
-      return { result: {} };
-    });
-    // stopDesktop 之后世界变了（假的）
-    const targetsFor = () => ({
-      desktopStatus: t.t.desktopStatus,
-      stopDesktop: async (lang) => { const r = await t.t.stopDesktop(lang); closed = true; return r; }
-    });
-    const s = svc({ targetsFor, rpcFor: () => rpc.fn });
+    const rpc = fakeRpc(() => ({ error: WRITER_ERR }));
+    const s = svc({ targetsFor: () => t.t, rpcFor: () => rpc.fn });
     const r = await s.release(TID, { confirm: true });
-    assert.equal(r.ok, true);
-    assert.equal(r.method, 'desktop-closed');
-    assert.equal(t.calls.stopped, 1);
-    assert.equal(r.gaveBack, true, '拿到之后必须还回去');
-    assert.ok(rpc.calls.filter((c) => c.method === 'thread/resume').length >= 2,
-      '关掉桌面版之后要用**同一个判据**再问一次，不能关完就宣布成功');
-    ok('被另一个进程占着：关掉桌面版 → 再问一次拿得到 → 还回去（不谎报）');
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'owner-unverified');
+    assert.equal(r.desktopStopped, false);
+    assert.deepEqual(r.suggestions, ['fork', 'wait']);
+    assert.deepEqual(t.calls, { stopped: 0, scanned: 0 });
+    assert.deepEqual(rpc.calls.map(c => c.method), ['thread/resume']);
+    ok('独立 writer 与桌面同时存在：拒绝全局关闭，不扫描无关桌面');
   }
 
   // ⑤ 被占着，但桌面版没开 → 如实报，不硬来也不假装成功
@@ -146,9 +140,9 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     const s = svc({ targetsFor: () => t.t, rpcFor: () => rpc.fn });
     const r = await s.release(TID, { confirm: true });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'not-desktop');
+    assert.equal(r.code, 'owner-unverified');
     assert.equal(t.calls.stopped, 0);
-    ok('被占着但桌面版没开：报「不是它占的」，不假装成功也不硬来');
+    ok('未验证 writer owner：桌面状态不能成为终止进程的判据');
   }
 
   // ⑥ ★ 报的是**别的**错（超时、连接断了…）→ 绝不能去关桌面版
@@ -167,26 +161,28 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     ok('问不出结果（超时等）：如实说不知道，**绝不**顺手关掉使用者的程序');
   }
 
-  // ⑦ 关了桌面版还是拿不到 → still-locked（不许把「关了」当成「解开了」）
+  // ⑦ Even a target advertising successful closure cannot authorize a stop.
   {
     const t = fakeTargets({ desktopRunning: true, stopOk: true });
     const rpc = fakeRpc(() => ({ error: WRITER_ERR }));
     const s = svc({ targetsFor: () => t.t, rpcFor: () => rpc.fn });
     const r = await s.release(TID, { confirm: true });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'still-locked');
-    ok('关掉桌面版之后仍然拿不到：报 still-locked（不谎报成功）');
+    assert.equal(r.code, 'owner-unverified');
+    assert.equal(t.calls.stopped, 0);
+    ok('目标宣称可关闭成功也不能绕过未验证 owner 的拒绝');
   }
 
-  // ⑧ 关桌面版本身失败
+  // ⑧ Failure-capable targets are likewise never invoked.
   {
     const t = fakeTargets({ desktopRunning: true, stopOk: false });
     const rpc = fakeRpc(() => ({ error: WRITER_ERR }));
     const s = svc({ targetsFor: () => t.t, rpcFor: () => rpc.fn });
     const r = await s.release(TID, { confirm: true });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'stop-failed');
-    ok('关闭失败：报 stop-failed');
+    assert.equal(r.code, 'owner-unverified');
+    assert.equal(t.calls.stopped, 0);
+    ok('未知 owner 不调用任何关闭实现');
   }
 
   // ⑨ app-server 整个连不上 → 也是「认不出」，不许动使用者的程序
@@ -203,6 +199,58 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     ok('app-server 连不上：如实报「问不出来」，一个进程都不碰');
   }
 
+  console.log('\n旧目标控制入口也不能全局关闭桌面\n');
+  {
+    const child = require('child_process');
+    const saved = { execFileSync: child.execFileSync, execSync: child.execSync, spawn: child.spawn, kill: process.kill };
+    const actions = [];
+    const trap = (...args) => { actions.push(args); throw Error('process action is forbidden in this regression'); };
+    const targetFile = require.resolve('./targets.js');
+    const priorModule = require.cache[targetFile];
+    try {
+      child.execFileSync = child.execSync = child.spawn = trap;
+      process.kill = trap;
+      delete require.cache[targetFile];
+      const target = require('./targets.js').codex;
+      assert.equal((await target.stopDesktop('en')).code, 'no-confirm');
+      assert.equal((await target.stopDesktop('en', { confirm: true })).code, 'bad-thread');
+      const denied = await target.stopDesktop('en', { confirm: true, threadId: TID, pid: 16156, ownerVerified: true });
+      assert.equal(denied.code, 'owner-unverified', '客户端提供的 PID/ownerVerified 不能成为可信 owner 证据');
+      assert.equal(denied.desktopStopped, false);
+      assert.equal(target.desktopStatus().canStop, false);
+      assert.deepEqual(actions, []);
+      ok('真实 target.stopDesktop：无确认、缺会话、伪造 PID 均不执行进程操作');
+    } finally {
+      Object.assign(child, { execFileSync: saved.execFileSync, execSync: saved.execSync, spawn: saved.spawn });
+      process.kill = saved.kill;
+      delete require.cache[targetFile];
+      if (priorModule) require.cache[targetFile] = priorModule;
+    }
+    for (const lang of ['zh', 'en', 'es']) {
+      const denial = desktopTakeoverDenied(TID, { confirm: true, lang });
+      assert.equal(denial.code, 'owner-unverified');
+      assert.ok(denial.message.length > 30);
+      assert.ok(denial.error === denial.message);
+      assert.deepEqual(denial.suggestions, ['fork', 'wait']);
+    }
+    const proxySource = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
+    const proxyAction = extractFunction(proxySource, 'requestCodexDesktopTakeover');
+    assert.ok(proxyAction);
+    const rpc = fakeRpc(() => ({ error: WRITER_ERR }));
+    const t = fakeTargets({ desktopRunning: true });
+    const box = { codexLock: svc({ targetsFor: () => t.t, rpcFor: () => rpc.fn }), log() {} };
+    vm.createContext(box);
+    vm.runInContext(proxyAction, box);
+    assert.equal((await box.requestCodexDesktopTakeover({ threadId: TID }, 'en')).code, 'no-confirm');
+    assert.deepEqual(rpc.calls, []);
+    const denied = await box.requestCodexDesktopTakeover({ threadId: TID, confirm: true, pid: 16156 }, 'en');
+    assert.equal(denied.code, 'owner-unverified');
+    assert.deepEqual(t.calls, { stopped: 0, scanned: 0 });
+    assert.ok(proxySource.includes("body.action === 'stop-desktop' && t.id === 'codex') result = await requestCodexDesktopTakeover(body, tLang)"));
+    assert.ok(!proxySource.includes('result = await t.stopDesktop(tLang)'));
+    ok('stop-desktop实际入口：无confirm不发RPC，其他writer拒绝终止并提供多语言建议');
+  }
+
   console.log('\n探锁本身（真跑一次，不用假的）\n');
   {
     // 一个几乎不可能存在的会话 id → 文件不存在。这条同时验证「探针能在这台
@@ -216,7 +264,7 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
       assert.equal(r.state, 'unknown');
       ok('非 Windows：如实返回 unknown（不猜）');
     }
-    assert.equal(lockPath(id), path.join(require('os').homedir(), '.codex', 'thread-writer-locks', `${id}.lock`));
+    assert.equal(lockPath(id), path.join(process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex'), 'thread-writer-locks', `${id}.lock`));
   }
 
   console.log('\n真接一次 app-server（假的那个，但它真的收 WebSocket 帧）\n');
@@ -295,20 +343,6 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     //   锁文件也照样报 held。当时拿它当判据，结果按钮永远回答「锁本来就是空的」，
     //   使用者看到的就是「按了没反应」。
     //   所以现在：判断一律走 resume；探针只写日志。这条测试钉住这个分工。
-    const dir = path.join(require('os').homedir(), '.codex', 'thread-writer-locks');
-    let files = [];
-    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.lock')); } catch (e) { }
-    if (process.platform === 'win32' && files.length) {
-      const held = files.filter((f) => probeLock(f.replace(/\.lock$/, '')).state === 'held').length;
-      console.log(`      （这台机器上 ${files.length} 个锁文件，探针报「被占着」的有 ${held} 个）`);
-      if (held === files.length && files.length > 3) {
-        ok('证实了那个坑：探针对**所有**锁文件都报 held —— 它分不出「谁在用」');
-      } else {
-        ok('探针输出已记录（这台机器上不是全 held，但判据仍然只用于日志）');
-      }
-    } else {
-      ok('非 Windows 或没有锁文件：跳过现场统计（判据仍然只用于日志）');
-    }
     const src = fs.readFileSync(path.join(BASE, 'scripts', 'codex-lock.js'), 'utf8');
     const releaseSrc = src.slice(src.indexOf('async function release('), src.indexOf('async function tryTake('));
     assert.ok(!/\bprobe\(threadId\)\s*\.state/.test(releaseSrc) && !/beforeFree/.test(releaseSrc),
@@ -368,117 +402,36 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     server.close();
   }
 
-  console.log('\n界面上那几处必须对得上\n');
+  console.log('\nMobile session control must never offer an unverifiable desktop shutdown\n');
   {
     const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
-
-    // 1. 按钮在、文案在
-    assert.ok(html.includes('releaseDesktopLock('), 'codex.html 里没有 releaseDesktopLock');
-    assert.ok(/btn\.textContent = tr\('关闭电脑 Codex 并接管原会话'\)/.test(html), '紧急接管按钮文字没了');
-    ok('界面上有明确写出关闭整个电脑 Codex 的紧急按钮');
-
-    // 2. 每个释放入口的确认框都要讲清后果；不绑定「交出会话」之类的旧措辞。
-    const confirmSrcs = [...html.matchAll(/confirm\(tr\('释放电脑端的锁\？[\s\S]*?'\)\)/g)];
-    assert.ok(confirmSrcs.length, '找不到确认框那段');
-    for (const confirmSrc of confirmSrcs) {
-      for (const must of ['如果这条会话由电脑端占用，将关闭电脑上的 Codex', '电脑端任务会被终止', '已保存的会话记录会保留', '手机可以发送新指令']) {
-        assert.ok(confirmSrc[0].includes(must), `确认框里没写「${must}」`);
-      }
-    }
-    ok('所有确认框写清了：关闭桌面端 / 任务终止 / 保存记录保留 / 成功后手机发送');
-
-    // 3. 请求必须带上确认与服务端要的那道头
-    assert.ok(/'x-dsh-lock': '1'/.test(html), '请求没带 x-dsh-lock 头');
-    assert.ok(/confirm: true/.test(html), '请求没带 confirm:true');
-    ok('请求带 x-dsh-lock:1 与 confirm:true（服务端两道门都要过）');
-
-    // 4. 旧那句「本页面不会关闭电脑 Codex 或强行解锁」必须消失 ——
-    //    现在这句话是**假的**了，留着就是骗人。
-    //
-    //    只在**代码行**里查，注释里引用旧文案不算（那是在解释来龙去脉，
-    //    删掉它才是损失）。判据按整行是不是注释 —— 和 test-i18n.js 同一套办法。
-    const codeOnly = html.split('\n')
-      .filter((line) => { const s = line.trim(); return !(s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')); })
-      .join('\n');
-    assert.ok(!codeOnly.includes('本页面不会关闭电脑 Codex'), '旧文案还在：它现在与事实相反');
-    ok('旧的「本页面不会关闭电脑 Codex」已从界面上删掉（那句话现在与事实相反）');
-
-    // 5. 服务端会回的每个 code，界面上都得有三种语言的对应说法 ——
-    //    漏一个，使用者看到的就是服务端那句中文（甚至一串英文错误）。
+    assert.ok(!extractFunction(html, 'releaseDesktopLock'), 'Remove the obsolete desktop-close handler');
+    assert.ok(!extractFunction(html, 'askReleaseLock'), 'Remove the obsolete desktop-close request');
+    assert.ok(!html.includes('var LOCK_RESULT_TEXT'), 'Remove obsolete desktop-closed result claims');
+    assert.ok(!/action:\s*['"]stop-desktop['"]/.test(html), 'Mobile UI must not invoke global shutdown');
     const dictSrc = extractRegisterArg(html);
-    assert.ok(dictSrc, 'codex.html 里找不到 DshI18n.register({…})');
-    const dict = vm.runInNewContext(`(${dictSrc})`, {});
-    const codes = ['app-server', 'none', 'desktop-closed', 'not-desktop', 'still-locked',
-      'stop-failed', 'bad-thread', 'no-confirm'];
-    const block = html.slice(html.indexOf('var LOCK_RESULT_TEXT'), html.indexOf('function releaseDesktopLock'));
-    const missing = [];
-    for (const c of codes) {
-      const m = block.match(new RegExp(`'${c}':\\s*'([^']+)'`));
-      if (!m) { missing.push(`${c}: 界面没有对应文案`); continue; }
-      const entry = dict[m[1]];
-      if (!entry) { missing.push(`${c}: 字典里没有「${m[1].slice(0, 18)}…」`); continue; }
-      for (const lg of ['en', 'es']) if (!entry[lg]) missing.push(`${c}: 缺 ${lg}`);
-    }
-    assert.deepEqual(missing, []);
-    ok('服务端每个 code 在界面上都有中/英/西三种说法');
-
-    // 6. 界面自己硬编码的 tr('…') 也得在字典里。
-    //
-    //    ★ 字面量必须**按 JS 规则解释**再比：源码里写的是 \n（反斜杠 + n），
-    //      而字典里已经是真换行。拿源码原样去比，带换行的长句会全部误报
-    //      「字典里没有」—— test-i18n.js 第一版就是栽在这上面，误报了 29 条。
-    const trs = [...html.matchAll(/tr\('([^']{4,})'\)/g)].map((m) => m[1])
-      .filter((s) => /[\u4e00-\u9fff]/.test(s));
-    const notInDict = [...new Set(trs)].filter((raw) => {
+    assert.ok(dictSrc);
+    const dict = vm.runInNewContext('(' + dictSrc + ')', {});
+    const trs = [...html.matchAll(/tr\('([^']{4,})'\)/g)].map(m => m[1]).filter(s => /[\u4e00-\u9fff]/.test(s));
+    const missing = [...new Set(trs)].filter(raw => {
       let key = raw;
-      try { key = vm.runInNewContext(`('${raw}')`, {}); } catch (e) { /* 解不开就拿原样比 */ }
+      try { key = vm.runInNewContext("('" + raw + "')", {}); } catch (_) { }
       return !dict[key];
     });
-    assert.deepEqual(notInDict, []);
-    ok(`界面上 ${new Set(trs).size} 条 tr('…') 文案都在字典里`);
-  }
+    assert.deepEqual(missing, [], 'New mobile control instructions require translations');
+    ok('Obsolete desktop-close handlers and unsupported result claims are absent');
 
-  console.log('\n把那张「被占用」卡片真的渲染一遍（假 DOM）\n');
-  {
-    // ★ 这一段测的是使用者最在意的那条：**不能一键误触**。
-    //   「按钮在不在」扫一眼源码就知道；「点了取消会不会照样动手」只有真跑才知道。
-    const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
-    const dict = vm.runInNewContext(`(${extractRegisterArg(html)})`, {});
-
-    const card = renderConflictCard(html, dict, 'zh', { confirm: false });
-    assert.deepEqual(card.buttons.map((b) => b.text),
-      ['复制上下文，在手机独立续聊', '同项目新会话（不复制对话）', '继续查看', '接管原会话…（会关闭整个电脑 Codex）']);
-    ok('冲突卡片先提供独立续聊、新会话和继续查看，紧急接管排最后');
-    assert.ok(card.buttons.every((b) => b.className !== 'd'), '卡片上不该直接放一键关闭桌面端的按钮');
-    card.click(2);
-    assert.deepEqual(card.calls, [], '继续查看不能发出锁释放请求');
-    ok('继续查看不会向锁释放接口发请求');
-
-    // The dangerous action lives in the collapsed advanced section. Its
-    // confirmation still gates the same server request path.
-    const no = renderLockPanel(html, dict, { id: TID, name: '测试会话' }, { confirm: false });
-    assert.ok(no.advanced && no.releaseBtn, '紧急操作必须位于折叠的高级区域');
-    no.releaseBtn.onclick();
-    assert.deepEqual(no.calls, [], '取消确认后不许发释放请求');
-    ok('紧急接管确认框点取消，不发出释放请求');
-
-    const yes = renderLockPanel(html, dict, { id: TID, name: '测试会话' }, { confirm: true });
-    yes.releaseBtn.onclick();
-    assert.deepEqual(yes.calls, [TID]);
-    ok('确认后仅针对当前会话调用释放动作');
-
-    // 三种语言下确认框都得把后果说全（漏一种，那个语种的使用者就是在盲按）
-    const confirmCall = html.match(/confirm\(tr\(('释放电脑端的锁\？(?:\\.|[^'\\])*')\)\)/);
-    assert.ok(confirmCall, '找不到释放锁确认框文案');
-    const CONFIRM = vm.runInNewContext(confirmCall[1], {});
-    assert.ok(dict[CONFIRM], '释放锁确认框文案不在翻译字典里');
-    for (const lg of ['en', 'es']) {
-      const r2 = renderLockPanel(html, dict, { id: TID }, { lang: lg, confirm: false });
-      r2.releaseBtn.onclick();
-      const want = dict[CONFIRM][lg];
-      if ((r2.asked[0] || '') === want) ok(`${lg}：确认框用的是这个语种的完整后果说明`);
-      else fail(`${lg}：确认框文案不对 → ${String(r2.asked[0]).slice(0, 50)}`);
+    for (const lang of ['zh', 'en', 'es']) {
+      const card = renderConflictCard(html, dict, lang);
+      const labels = ['复制上下文，在手机独立续聊', '同项目新会话（不复制对话）', '继续查看', '查看会话控制'].map(key => lang === 'zh' ? key : dict[key][lang]);
+      assert.deepEqual(card.buttons.map(b => b.text), labels);
+      card.click(2);
+      card.click(3);
+      assert.deepEqual(card.calls, [], 'Viewing or opening control cannot release locks or close processes');
+      assert.deepEqual(card.asked, [], 'No native dialogs in session control');
     }
+    ok('Writer conflicts offer an independent copy, a new thread, and read-only viewing in all languages');
+    await verifyPhoneReleasePanel(html, dict);
   }
 
   console.log('\n手机断开后要**自动交还**给电脑（使用者：「手机端关闭后要让电脑彻底登录上」）\n');
@@ -493,7 +446,7 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
   ok('倒计时是「宽限」不是「立刻」（够一次切前后台）',
     /CODEX_RELEASE_GRACE_MS = 60 \* 1000/.test(proxy));
   ok('WS 接通时挂上 attached', /codexPhoneAttached\(\);/.test(proxy));
-  ok('WS 关闭时挂上 detached', /codexPhoneDetached\(\);/.test(proxy));
+  ok('WS 关闭时挂上 detached', /socket\.once\('close', codexPhoneDetached\)/.test(proxy));
 
   const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
   ok('不在 pagehide 中把明文会话编号伪标成加密请求',
@@ -502,26 +455,15 @@ const svc = (deps) => createLockService(BASE, Object.assign({ waitMs: 1, waitTri
     /codexPhoneDetached\(\)/.test(proxy) && /CODEX_RELEASE_GRACE_MS = 60 \* 1000/.test(proxy));
 }
 
-console.log('\n危险按钮必须标红（原来 .btn.d 根本没有样式）\n');
+console.log('\nPhone control explains the limits of unsubscribe truthfully\n');
 {
   const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
-  ok('.btn.d 现在真的有危险样式（红底红边）',
-    /\.btn\.d\{[^}]*background:#3a1d1d[^}]*border:1px solid #a33/.test(html));
-  ok('危险按钮上方有红色警告条（.warn-red）', /\.warn-red\{/.test(html) && /className = 'warn-red'/.test(html));
-  ok('警告条写明「会关掉电脑上的 Codex，正在执行的电脑端任务会被终止」',
-    /会关掉电脑上的 Codex，正在执行的电脑端任务会被终止/.test(html));
-  // 使用者 2026-09-27：「释放锁的功能也要解释清楚 —— 因为电脑端占用、手机无法使用，
-  // 可以释放锁，但可能造成电脑端 Codex 关闭、任务终止」
-  ok('面板开头解释了同一条会话只能有一个发送端',
-    /同一条会话同时只能有一个地方发送/.test(html));
-  ok('安全那颗说清手机断开后会自动松开',
-    /手机关掉或断开一会儿之后会自动松开/.test(html));
-  ok('危险那颗说清代价（关掉 Codex、那一轮任务会停）',
-    /代价是关掉电脑上的 Codex/.test(html));
-  ok('警告条摆在按钮**之前**',
-    html.indexOf("className = 'warn-red'") < html.indexOf("btn.id = 'lock-release'"));
-  ok('「释放手机端的锁」不带危险样式（它没有代价）',
-    /safe\.className = 'btn';/.test(html));
+  const panel = extractFunction(html, 'openLockPanel');
+  const releasePanel = extractFunction(html, 'openPhoneReleasePanel');
+  ok('Control panel explains one writer per thread', /同一条会话同时只能有一个地方发送/.test(panel));
+  ok('Phone handoff does not claim immediate computer access', /电脑能否接手需要实际确认/.test(releasePanel));
+  ok('Running tasks cannot be handed back from the inline control', /confirmButton\.disabled=state\.running/.test(releasePanel));
+  ok('Unknown desktop owner is explained without a shutdown action', /当前无法验证占用者/.test(panel));
 }
 
 console.log('\nCodex 代理：托管服务进程级设置；桌面版只在确认后改用户变量\n');
@@ -616,7 +558,7 @@ console.log('\n「释放手机端的锁」：只收手机自己的摊子，一�
     !calls.some((c) => c.method === 'targets.stopDesktop！！'), JSON.stringify(calls.map((c) => c.method)));
   ok('也没去探桌面版状态（这个按钮跟它无关）',
     !calls.some((c) => c.method === 'targets.desktopStatus！！'));
-  ok('返回 ok=true（手机这边确实松开了）', r.ok === true, JSON.stringify(r));
+  ok('请求完成不冒充writer已释放', r.ok === true && r.writerReleaseVerified === false && r.writerReleased === null, JSON.stringify(r));
   ok('返回值里标了 phone:true，客户端能分清是哪一个按钮的结果', r.phone === true);
 
   // 没有会话编号时只供「所有手机都离线」的自动清理使用；空列表不能冒充成功。
@@ -636,7 +578,7 @@ console.log('\n「释放手机端的锁」：只收手机自己的摊子，一�
     r2.ok === false && !calls2.includes('thread/unsubscribe') && calls2.includes('thread/loaded/list'),
     JSON.stringify(calls2));
 
-  // 「那个服务本来就不是我们的」（桌面版占着端口）也算成功 —— 手机这边没什么可放的
+  // No managed PID is not evidence that an independently started backend is idle.
   const svc3 = createLockService('/tmp/x', {
     port: () => 18790,
     rpcFor: () => async () => { throw Error('connection unavailable'); },
@@ -648,8 +590,8 @@ console.log('\n「释放手机端的锁」：只收手机自己的摊子，一�
     logger: () => { }
   });
   const r3 = await svc3.releasePhone('01a098d4-f36d-75e2-ab16-0cd6ffbdd72f', {});
-  ok('我们那个服务根本没在跑时，如实报「手机这边没占着」= ok',
-    r3.ok === true && r3.serverNotRunning === true, JSON.stringify(r3));
+  ok('外部backend连不上时如实报失败，不从缺PID推断手机未占锁',
+    r3.ok === false && r3.serverNotRunning === true && r3.handoffStatus === 'failed', JSON.stringify(r3));
 
   // ★ 这条是实测踩出来的：服务没在跑时若直接调 stop()，它会回
   //   「Codex 远程服务没在运行」，按「停止成功」判据就变成 ok:false ——
@@ -680,50 +622,33 @@ console.log('\n「释放手机端的锁」：只收手机自己的摊子，一�
   // 界面：第二个按钮真的在，而且文案说清「不碰电脑上的 Codex」
   const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
   ok('面板里有「释放手机端的锁」按钮', /id = 'lock-release-phone'|id: 'lock-release-phone'|'lock-release-phone'/.test(html));
-  ok('调用的是 action=phone', /action: 'phone'/.test(html));
-  ok('文案说清不会动电脑上的 Codex', /不会动电脑上的 Codex/.test(html));
+  ok('手机确认在实际手机连接上取消订阅', /call\('thread\/unsubscribe',\{threadId:tid\}/.test(extractFunction(html, 'askReleasePhone')));
+  ok('文案说清不关闭电脑 Codex', /不关闭电脑 Codex/.test(html));
 }
 
-console.log('\n紧急接管保留入口，但默认先显示安全的独立续聊\n');
+console.log('\nSession control remains discoverable without destructive desktop actions\n');
   {
     const html = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
-    const dict = vm.runInNewContext(`(${extractRegisterArg(html)})`, {});
-
-    // ① 设置面板里有固定的入口 —— 不能只长在「撞上冲突」那张卡片上
-    assert.ok(/function openLockPanel\(/.test(html), 'codex.html 里没有 openLockPanel');
+    const dict = vm.runInNewContext('(' + extractRegisterArg(html) + ')', {});
     const sheetSrc = extractFunction(html, 'openSheet');
-    assert.ok(sheetSrc, '找不到 openSheet()');
-    assert.ok(/会话写入锁/.test(sheetSrc) && /openLockPanel\(\)/.test(sheetSrc),
-      '设置面板里没有「会话写入锁」这一项');
-    ok('设置面板（⋯）里有固定的「会话写入锁」入口');
-
-    // ② 标题栏那个 🔒 也得能点（手机正占着锁时才有，点它就是同一个面板）
+    assert.ok(sheetSrc && /openLockPanel\(\)/.test(sheetSrc));
     const hintSrc = extractFunction(html, 'updateLockHint');
-    assert.ok(hintSrc && /openLockPanel\(\)/.test(hintSrc), '标题栏的 🔒 标没有接上面板');
-    ok('标题栏的「🔒 占用中」点开也是这个面板');
-
-    // 入口仍固定可见，但危险按钮不该挨着日常发送和语音。
-    const iconRow = html.slice(html.indexOf('<div class="iconrow">'), html.indexOf('</div>', html.indexOf('<div class="iconrow">')));
-    assert.ok(!iconRow.includes('id="btn-lock"'), '日常输入区不该有会关掉整个桌面端的快捷键');
-    assert.ok(/btn-lock-help'\)\.onclick = openLockPanel/.test(html), '会话权限说明入口丢失');
-    ok('危险按钮不在输入区；会话权限说明可直接打开面板');
-
-    // ③ 面板本身：开着会话时给按钮，没开会话时说清为什么现在不能按
-    const withThread = renderLockPanel(html, dict, { id: TID, name: '测试会话' });
-    assert.equal(withThread.sheetOn, true, '面板没被打开');
-    assert.ok(withThread.releaseBtn, '面板里没有释放按钮');
-    assert.equal(withThread.releaseBtn.textContent, '关闭电脑 Codex 并接管原会话');
-    assert.ok(withThread.advanced, '紧急按钮没有放进折叠区域');
-    assert.ok(/btn d/.test(withThread.releaseBtn.className), '释放按钮没有用危险样式');
-    assert.ok(withThread.advanced.children.some((x) => /关掉电脑上的 Codex/.test(x.textContent || x._html) && /电脑端任务会被终止/.test(x.textContent || x._html)),
-      '面板里没写关闭桌面端和中断任务的风险');
-    ok('面板里有折叠的紧急按钮（危险样式）和明确后果');
-
+    assert.ok(hintSrc && /openLockPanel\(\)/.test(hintSrc));
+    assert.ok(/btn-lock-help'\)\.onclick = openLockPanel/.test(html));
+    for (const resumed of [false, true]) {
+      const rendered = renderLockPanel(html, dict, { id: TID, name: 'Test session' }, { resumed });
+      assert.equal(rendered.sheetOn, true);
+      assert.equal(rendered.releaseBtn, null, 'No desktop-stop button may be rendered');
+      assert.ok(rendered.phoneReleaseBtn);
+      assert.equal(rendered.phoneReleaseBtn.style.display, resumed ? '' : 'none');
+      assert.ok(rendered.texts.some(text => /当前无法验证占用者/.test(text)));
+    }
     const noThread = renderLockPanel(html, dict, null);
-    assert.ok(!noThread.releaseBtn, '没有会话时不该给一个按不动的按钮');
-    assert.ok(noThread.texts.some((x) => /先打开一条会话/.test(x)), '没有会话时没说清下一步');
-    ok('还没打开会话时：说清「先打开一条会话」，而不是给一个按不动的按钮');
+    assert.equal(noThread.phoneReleaseBtn, null);
+    assert.ok(noThread.texts.some(text => /先打开一条会话/.test(text)));
+    ok('Settings, title status, and input help reach the safe control panel');
   }
+  await phoneScopeRegression();
 
   console.log(bad ? `\n${bad} 处问题\n` : '\n全部通过\n');
   // 明确退出：上面那条真接 socket 的用例会把连接留在那儿，
@@ -762,6 +687,9 @@ async function phoneScopeRegression() {
   {
     const h = make(false, [TID, other]);
     const r = await h.s.releasePhone(TID, {});
+    assert.equal(r.writerReleaseVerified, false);
+    assert.equal(r.writerReleased, null);
+    assert.equal(r.handoffStatus, 'requested');
     const ids = h.calls.filter((c) => c.method === 'thread/unsubscribe').map((c) => c.params.threadId);
     if (r.ok && ids.length === 1 && ids[0] === TID && !h.calls.some((c) => c.method === 'targets.stop' || c.method === 'targets.stopDesktop'))
       ok('only requested thread is unsubscribed; no process is stopped');
@@ -773,6 +701,35 @@ async function phoneScopeRegression() {
     const ids = h.calls.filter((c) => c.method === 'thread/unsubscribe').map((c) => c.params.threadId);
     if (!r.ok && ids.length === 1 && ids[0] === TID) ok('failed unsubscribe is reported as failure without touching another thread');
     else fail('failed unsubscribe was reported as success or touched others: ' + JSON.stringify({ ok: r.ok, ids }));
+  }
+  {
+    const calls = [];
+    const s = createLockService(BASE, {
+      rpcFor: () => async method => { calls.push(method); throw Error('connection unavailable'); },
+      targetsFor: () => ({ managedPid: () => null })
+    });
+    const r = await s.releasePhone(TID, {});
+    assert.equal(r.ok, false, '未记录托管PID不能把外部backend的RPC失败变成释放成功');
+    assert.equal(r.handoffStatus, 'failed');
+    assert.equal(r.writerReleaseVerified, false);
+    assert.deepEqual(calls, ['thread/unsubscribe']);
+    ok('unmanaged backend RPC failure remains a failure');
+  }
+  {
+    for (const status of ['unsubscribed', 'notSubscribed', 'notLoaded']) {
+      const s = createLockService(BASE, {
+        rpcFor: () => async () => ({ status }),
+        targetsFor: () => ({ managedPid: () => null })
+      });
+      const r = await s.releasePhone(TID, {});
+      assert.equal(r.ok, true, '请求正常处理可报告，但不能称writer已释放');
+      assert.equal(r.subscriptionStatus, status);
+      assert.equal(r.unsubscribed, status === 'unsubscribed');
+      assert.equal(r.writerReleased, null);
+      assert.equal(r.writerReleaseVerified, false);
+      assert.equal(r.handoffStatus, 'requested');
+    }
+    ok('modern unsubscribe results preserve subscription status without claiming a writer handoff');
   }
   console.log('\n[phone scope] No-thread automatic cleanup remains explicit and truthful');
   {
@@ -797,6 +754,16 @@ async function phoneScopeRegression() {
   }
   {
     const h = make(false, [TID, other]);
+    const r = await h.s.releasePhone(null, {
+      shouldCancel: () => h.calls.some(call => call.method === 'thread/unsubscribe')
+    });
+    assert.equal(r.ok, false, 'A new phone cancels the batch; one completed unsubscribe is not a full cleanup');
+    assert.equal(r.cancelled, true);
+    assert.deepEqual(h.calls.filter(call => call.method === 'thread/unsubscribe').map(call => call.params.threadId), [TID]);
+    ok('cancelled automatic cleanup does not claim the full handback completed');
+  }
+  {
+    const h = make(false, [TID, other]);
     const r = await h.s.releasePhone('../../bad', {});
     if (!r.ok && r.code === 'bad-thread' && h.calls.length === 0) ok('invalid supplied ID cannot trigger all-thread cleanup');
     else fail('invalid supplied ID touched the server: ' + JSON.stringify({ code: r.code, calls: h.calls }));
@@ -807,7 +774,7 @@ async function phoneScopeRegression() {
 //
 // 为什么值得这么麻烦：这一段要守的是「**不能一键误触**」——
 // 按钮在不在，扫一眼源码就知道；但「点了取消之后会不会照样发请求」
-// 只有把 showWriterConflict() 和 releaseDesktopLock() 真跑一遍才看得见。
+// 只有把实际冲突卡片和交还确认的处理函数跑一遍才看得见。
 //
 // 用函数声明（不是 const）是有意的：测试主体是文件靠前那个立即执行的
 // async 函数，const 在它后面声明会落进 TDZ；函数声明会被提升。
@@ -856,16 +823,6 @@ function conflictFakeEl(tag) {
   return el;
 }
 
-/** `var LOCK_RESULT_TEXT = {…}` 里那段字面量（这一段没有嵌套大括号，可以直切） */
-function extractLockResultText(html) {
-  const at = html.indexOf('var LOCK_RESULT_TEXT');
-  if (at < 0) return {};
-  const open = html.indexOf('{', at);
-  const close = html.indexOf('\n};', open);
-  if (open < 0 || close < 0) return {};
-  return vm.runInNewContext(`(${html.slice(open, close + 2)})`, {});
-}
-
 /**
  * 在假 DOM 里跑一遍 openLockPanel()（设置面板里那个「会话写入锁」面板）。
  * @param thread null = 还没打开任何会话
@@ -877,19 +834,19 @@ function renderLockPanel(html, dict, thread, opts) {
   const texts = [];
   const calls = [], asked = [];
   const sandbox = {
-    state: { thread: thread, resumed: false, view: thread ? 'thread' : 'list' },
+    state: { thread, resumed: !!o.resumed, running: false, view: thread ? 'thread' : 'list' },
     document: { createElement: conflictFakeEl, getElementById: () => null },
     $: (id) => (id === 'sheetInner' ? inner : sheet),
     tr: (s) => o.lang && o.lang !== 'zh' ? ((dict[s] && dict[s][o.lang]) || s) : s,
     esc: (s) => String(s == null ? '' : s),
     toast: () => { }, closeSheet: () => { }, openThread: () => { }, openSheet: () => { },
-    askReleaseLock: (tid) => { calls.push(tid); },
-    confirm: (s) => { asked.push(s); return !!o.confirm; },
+    forkCurrentThread: () => Promise.resolve(false), openPhoneReleasePanel: () => {},
+    confirm: (s) => { asked.push(s); throw Error('Native confirm is not permitted'); },
     console
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(extractFunction(html, 'openLockPanel'), sandbox, { filename: 'openLockPanel' });
+  vm.runInContext(extractFunction(html, 'displayThreadTitle') + '\n' + extractFunction(html, 'openLockPanel'), sandbox, { filename: 'openLockPanel' });
   sandbox.openLockPanel();
 
   // 面板上的文字：.info 的 textContent + 按钮上的字
@@ -899,7 +856,8 @@ function renderLockPanel(html, dict, thread, opts) {
   }
   const advanced = inner.children.find((c) => c.className === 'lock-advanced') || null;
   const releaseBtn = advanced && advanced.children.find((c) => c.className === 'btn d') || null;
-  return { inner, texts, advanced, releaseBtn, calls, asked, sheetOn: sheet.classList.contains('on') };
+  const phoneReleaseBtn = inner.children.find(c => c.id === 'lock-release-phone') || null;
+  return { inner, texts, advanced, releaseBtn, phoneReleaseBtn, calls, asked, sheetOn: sheet.classList.contains('on') };
 }
 
 function renderConflictCard(html, dict, lang, opts) {
@@ -912,8 +870,7 @@ function renderConflictCard(html, dict, lang, opts) {
     document: { createElement: conflictFakeEl, getElementById: () => null },
     $: (id) => (id === 'body' ? body : conflictFakeEl('div')),
     tr: (s) => (lang === 'zh' ? s : ((dict[s] && dict[s][lang]) || s)),
-    LOCK_RESULT_TEXT: extractLockResultText(html),
-    confirm: (text) => { asked.push(text); return !!o.confirm; },
+    confirm: (text) => { asked.push(text); throw Error('Native confirm is not permitted'); },
     privateFetch: (url, init) => {
       calls.push({ url, headers: (init && init.headers) || {}, body: (init && init.body) || '' });
       return Promise.resolve({ json: () => Promise.resolve({ ok: true, method: 'app-server' }) });
@@ -924,13 +881,7 @@ function renderConflictCard(html, dict, lang, opts) {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  // 三个函数一起放进沙箱：releaseDesktopLock() 现在把「发那一枪」委托给
-  // askReleaseLock()（设置面板里那个入口也用同一个），漏一个就会「点了没反应」。
-  vm.runInContext([
-    extractFunction(html, 'showWriterConflict'),
-    extractFunction(html, 'releaseDesktopLock'),
-    extractFunction(html, 'askReleaseLock')
-  ].join('\n'), sandbox, { filename: 'writer-conflict' });
+  vm.runInContext(extractFunction(html, 'showWriterConflict'), sandbox, { filename: 'writer-conflict' });
 
   sandbox.showWriterConflict({ id: '019fe0dd-83db-7881-affb-77f675c36bb9', cwd: 'C:\\x' });
   const card = body.children[0];
@@ -941,4 +892,87 @@ function renderConflictCard(html, dict, lang, opts) {
     buttons: btns.children.map((b) => ({ text: b.textContent, className: b.className })),
     click: (i) => { if (btns.children[i] && btns.children[i].onclick) btns.children[i].onclick(); }
   };
+}
+
+/** Exercise the actual inline confirmation and request handler, without native dialogs. */
+async function verifyPhoneReleasePanel(html, dict) {
+  const make = (lang, reply, running = false) => {
+    const inner = conflictFakeEl('div'), sheet = conflictFakeEl('div'), requests = [], taskUpdates = [], closes = [];
+    const thread = { id: TID, cwd: 'D:\\mobile-test', name: 'Test session' };
+    const ws = { readyState: 1, close: (...args) => closes.push(args) };
+    const sandbox = {
+      state: { thread, ws, ready: true, resumed: true, running, awaitingFirstTurn: false, releaseTimer: null,
+        pending: {}, approvals: {}, sending: false, resuming: false, forking: null },
+      queueEntries: [], queueDraft: null, detachedHandbacks: {}, resumeSubscription: null,
+      document: { createElement: conflictFakeEl },
+      $: id => id === 'sheetInner' ? inner : sheet,
+      tr: key => lang === 'zh' ? key : dict[key] && dict[key][lang] || key,
+      confirm: () => { throw Error('Native confirm is forbidden'); },
+      privateFetch: () => { throw Error('A separate HTTP connection cannot unsubscribe the phone writer'); },
+      call: async (method, params) => {
+        requests.push({ method, params });
+        if (method === 'thread/loaded/list') return { data: [TID], nextCursor: null };
+        if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'idle' } } };
+        if (method === 'thread/unsubscribe') {
+          if (!reply.ok) throw Error(reply.error || 'unsubscribe failed');
+          return { status: reply.subscriptionStatus };
+        }
+        throw Error('Unexpected mutation: ' + method);
+      },
+      openLockPanel() {}, closeSheet() {}, newThread() {}, forkCurrentThread() {},
+      clearTimeout() {}, renderFooter() {}, scheduleRelease() {},
+      statusKind: status => status && status.type,
+      setTask: (...args) => taskUpdates.push(args), console
+    };
+    sandbox.window = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(['displayThreadTitle', 'phoneHandbackIssue', 'verifyPhoneHandbackIdle', 'openPhoneReleasePanel', 'askReleasePhone']
+      .map(name => extractFunction(html, name)).join('\n'), sandbox);
+    sandbox.openPhoneReleasePanel(thread);
+    return { sandbox, inner, requests, taskUpdates, closes, confirmButton: inner.children.find(child => child.id === 'phone-release-confirm') };
+  };
+  for (const lang of ['zh', 'en', 'es']) {
+    for (const subscriptionStatus of ['unsubscribed', 'notSubscribed', 'notLoaded']) {
+      const h = make(lang, { ok: true, subscriptionStatus, writerReleaseVerified: false, writerReleased: null });
+      assert.ok(h.confirmButton, 'Inline confirmation must be present');
+      assert.deepEqual(h.requests, [], 'Opening the review does not send a request');
+      h.inner.children.find(child => child.className === 'sclose').onclick();
+      assert.deepEqual(h.requests, [], 'Cancel never unsubscribes');
+      h.confirmButton.onclick();
+      await new Promise(resolve => setImmediate(resolve));
+      const unsubscriptions = h.requests.filter(request => request.method === 'thread/unsubscribe');
+      assert.equal(unsubscriptions.length, 1);
+      assert.deepEqual(JSON.parse(JSON.stringify(unsubscriptions[0].params)), { threadId: TID });
+      assert.ok(h.requests.every(request => ['thread/unsubscribe', 'thread/read', 'thread/loaded/list'].includes(request.method)));
+      assert.deepEqual(h.closes, [[1000, 'phone-handoff']], 'Only the captured phone socket is closed');
+      assert.equal(h.sandbox.state.resumed, false);
+      assert.equal(h.sandbox.state.handoffPaused, true, 'Explicit handoff must not reconnect automatically');
+      assert.equal(h.sandbox.state.handedBackThreads[TID], true);
+      assert.ok(h.taskUpdates.length >= 1);
+      assert.ok(h.taskUpdates[0][1].length > 30, 'Writer handoff stays visibly unverified');
+      const expectedKey = '已请求断开手机控制连接，实时更新已暂停；电脑能否接手仍待实际确认。Codex 可能还要约一分钟才释放空闲会话，请稍后在电脑重试。需要时请明确恢复手机连接。';
+      const expected = lang === 'zh' ? expectedKey : dict[expectedKey][lang];
+      assert.equal(h.inner.children.find(child => child.id === 'phone-release-result').textContent, expected);
+    }
+  }
+  const busy = make('en', { ok: true, subscriptionStatus: 'unsubscribed' }, true);
+  assert.equal(busy.confirmButton.disabled, true);
+  busy.confirmButton.onclick();
+  assert.deepEqual(busy.requests, [], 'A running task cannot be handed back by clicking the inline button');
+  assert.deepEqual(busy.closes, []);
+  const failed = make('en', { ok: false, error: 'unsubscribe failed' });
+  failed.confirmButton.onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(failed.sandbox.state.resumed, true, 'A failed request cannot claim control was returned');
+  assert.equal(failed.confirmButton.disabled, false, 'Failed request remains retryable');
+  assert.equal(failed.taskUpdates.length, 0);
+  assert.deepEqual(failed.closes, []);
+  const unknown = make('en', { ok: true, subscriptionStatus: 'unsupported-status' });
+  unknown.confirmButton.onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(unknown.sandbox.state.resumed, true, 'Unknown protocol response cannot claim cancellation');
+  assert.equal(unknown.confirmButton.disabled, false);
+  assert.equal(unknown.taskUpdates.length, 0);
+  assert.deepEqual(unknown.closes, []);
+  ok('Inline phone handoff: cancel and running tasks do nothing; results retain uncertain writer status in all languages');
 }

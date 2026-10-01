@@ -40,12 +40,15 @@ function validRequest(method, value) {
     (!Object.hasOwn(value, 'beforeSeq') || (Number.isSafeInteger(value.beforeSeq) && value.beforeSeq >= 0)) &&
     (!Object.hasOwn(value, 'maxMessages') ||
       (Number.isSafeInteger(value.maxMessages) && value.maxMessages >= 1 && value.maxMessages <= 30));
-  if (method === 'session.prompt') return keys(value, ['sessionId', 'mode', 'content']) &&
+  if (method === 'session.prompt') return keys(value, ['sessionId', 'mode', 'content'], ['attachmentReceipts']) &&
     id(value.sessionId) && (value.mode === 'queue' || value.mode === 'steer') &&
     Array.isArray(value.content) && value.content.length === 1 &&
     keys(value.content[0], ['type', 'text']) && value.content[0].type === 'text' &&
-    typeof value.content[0].text === 'string' && value.content[0].text.trim().length > 0 &&
-    value.content[0].text.length <= 64000;
+    typeof value.content[0].text === 'string' && value.content[0].text.length <= 64000 &&
+    (!Object.hasOwn(value, 'attachmentReceipts') || (Array.isArray(value.attachmentReceipts) &&
+      value.attachmentReceipts.length > 0 && value.attachmentReceipts.length <= 4 &&
+      value.attachmentReceipts.every(id) && new Set(value.attachmentReceipts).size === value.attachmentReceipts.length)) &&
+    (value.content[0].text.trim().length > 0 || value.attachmentReceipts && value.attachmentReceipts.length > 0);
   if (method === 'session.cancel') return keys(value, ['sessionId']) && id(value.sessionId);
   return false;
 }
@@ -92,15 +95,28 @@ function createDshLiteLegacyRpc(options = {}) {
     let profile;
     try { profile = await options.runtimeProfile(input.method); }
     catch (_) { reply(503, { error: 'dsh-runtime-unavailable' }); return; }
+    if (!profile) { reply(503, { error: 'dsh-runtime-unavailable' }); return; }
     if (profile !== 'legacy-events') {
       reply(409, { error: 'dsh-protocol-changed' }); return;
     }
+    let staged = null, request = input.request;
+    if (input.method === 'session.prompt' && input.request.attachmentReceipts) {
+      if (typeof options.resolveAttachments !== 'function') { reply(400, { error: 'legacy-image-upload-unavailable' }); return; }
+      try { staged = await options.resolveAttachments(input.request.sessionId, input.request.attachmentReceipts); }
+      catch (error) { reply(error.status || 503, { error: error.code || 'legacy-image-unavailable' }); return; }
+      request = { sessionId: input.request.sessionId, mode: input.request.mode,
+        content: input.request.content.filter(part => part.text.trim()).concat(staged.content) };
+    }
     const wire = { type: 'client-request', rpcId: crypto.randomUUID(),
-      method: input.method, payload: input.request };
+      method: input.method, payload: request };
     const body = Buffer.from(JSON.stringify(wire), 'utf8');
-    if (body.length > MAX_REQUEST_BYTES) { reply(413, { error: 'request-too-large' }); return; }
+    if (body.length > (staged ? 12 * 1024 * 1024 : MAX_REQUEST_BYTES)) {
+      if (staged && typeof staged.release === 'function') staged.release();
+      reply(413, { error: 'request-too-large' }); return;
+    }
     try {
       const upstream = await options.callUpstream({ path: '/api/' + input.method, method: 'POST', body,
+        verifiedRuntime: staged && staged.runtime,
         maxResponseBytes: MAX_RESPONSE_BYTES,
         headers: { 'content-type': 'application/json; charset=utf-8',
           'content-length': String(body.length), accept: 'application/json',
@@ -118,6 +134,8 @@ function createDshLiteLegacyRpc(options = {}) {
           !record(decoded.result) || typeof decoded.result.ok !== 'boolean') {
         reply(502, { error: 'upstream-rpc-invalid' }); return;
       }
+      if (staged && decoded.result.ok === true && decoded.result.value && decoded.result.value.accepted === true) staged.commit();
+      else if (staged && typeof staged.release === 'function') staged.release();
       reply(200, { result: decoded.result });
     } catch (_) { reply(502, { error: 'upstream-rpc-unavailable' }); }
   };

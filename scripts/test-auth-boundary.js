@@ -87,7 +87,8 @@ function wsUpgrade(pathname, cookie) {
   const before = sessions.list().length;
   const login = await req(`/k/${KEY}`);
   const cookie = login.setCookie.map((c) => String(c).split(';')[0]).join('; ');
-  if (!cookie.includes('dsh-gw-session=')) {
+  const deviceName = (cookie.match(/(?:^|;\s*)(dsh-gw-session(?:-[a-f0-9]{16})?)=/) || [])[1];
+  if (!deviceName) {
     console.log('  拿不到设备令牌，这个测试需要一台正常设备。跳过。\n');
     process.exitCode = 0;
     return;
@@ -148,13 +149,13 @@ function wsUpgrade(pathname, cookie) {
     // ── 2. WebSocket 升级要有第二道门，且要比 cookie 的值 ──────────────────
     console.log('\n[2] WebSocket 升级的设备校验');
 
-    const dshOnly = cookie.split('; ').filter((c) => !c.startsWith('dsh-gw-session=')).join('; ');
+    const dshOnly = cookie.split('; ').filter((c) => !c.startsWith(deviceName + '=')).join('; ');
 
     const bad = [
       ['不带任何 cookie', ''],
       ['cookie 名对、值乱写', 'dsh-auth-xxxxxxxxxxxxxxxxxxxx=bogus'],
-      ['真 DSH cookie + 伪造设备令牌', `${dshOnly}; dsh-gw-session=FORGED.VALUE.HERE`],
-      ['真 DSH cookie + 乱格式设备令牌', `${dshOnly}; dsh-gw-session=abc`]
+      ['真 DSH cookie + 伪造设备令牌', `${dshOnly}; ${deviceName}=FORGED.VALUE.HERE`],
+      ['真 DSH cookie + 乱格式设备令牌', `${dshOnly}; ${deviceName}=abc`]
     ];
     for (const [name, c] of bad) {
       const line = await wsUpgrade('/codex/ws', c);

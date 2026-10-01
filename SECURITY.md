@@ -32,6 +32,12 @@ This preview starts only Cloudflare tunnels; the old ngrok fallback is disabled.
 
 ## Outside the security boundary
 
+Codex conversation control uses the app-server's exclusive writer mechanism. A writer conflict does not identify the owning Windows process. Pocket Bridge therefore refuses desktop termination when that owner cannot be verified and never treats an unrelated running Codex process as authorization to stop it. Explicit phone handback unsubscribes the idle conversation and pauses that phone's live connection until a deliberate reconnect. It reports this separately from verified writer availability. Codex 0.159.0 retained the idle writer for approximately 60 seconds in the actual test; other releases may behave differently. Dot's private cloud interfaces and desktop authentication cookies are not proxied by the bridge's official-access guide.
+
+Codex file reads are confined to registered project roots, Bridge-owned uploads, and the known generated-output roots. A parent folder is not granted by a child project. Credential files, private configuration directories, links escaping the allowed root, multiple hard links, and Windows alternate data streams are rejected. SVG, HTML, XML, and script documents are served as safe text/attachments rather than active image documents; encrypted file metadata retains that safe type after decryption. Ordinary raster image preview remains supported. These file-read limits do not constrain what a separately authorized Codex tool can access through the target's own permissions.
+
+Legacy DSH interaction requests are bound to the observed runtime, process, port, and conversation. Responses must still match a pending request and an allowed choice. Legacy image receipts are short lived, bound to the project and runtime, and consumed through an explicit send; generic file uploads are not supported by that old protocol adapter. The protected legacy helper routes require encrypted bodies over a remote connection. Their automated checks and successful read-only pending-interface checks do not establish a completed model-triggered approval on an old npm release.
+
 - A compromised computer or phone, or anyone who can read local keys or browser storage.
 - An active TLS-terminating relay that changes the first page or redirects the browser.
 - Traffic metadata, denial of service, and reliable delivery of temporary tunnel or notifications.

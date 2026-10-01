@@ -15,6 +15,7 @@
   var activeFirstSeq = 0;
   var activeLastSeq = -1;
   var activeUpdatedAt = null;
+  var pendingInteractions = new Map();
   var connected = false;
   var generation = 0;
   var timer = null;
@@ -34,6 +35,18 @@
     if (!event || !Number.isSafeInteger(event.seq) || event.seq < 0) return [];
     var data = event.data && typeof event.data === 'object' ? event.data : {};
     var id = 'legacy:' + event.seq;
+    if (event.type === 'turn/end' && data.reason && data.reason.kind === 'error') {
+      var failure = data.reason.error || {};
+      var failureText = Number(failure.status) === 401 || failure.code === 'AUTH'
+        ? 'DSH 的模型服务拒绝了凭据（401）。请在电脑端更新 API key 后重试。'
+        : Number(failure.status) === 402
+          ? 'DSH 的模型账户余额不足。请在电脑端检查账户后重试。'
+          : Number(failure.status) === 429
+            ? 'DSH 的模型服务请求过于频繁。请稍后重试。'
+            : bounded(failure.message || '模型请求未完成，请在电脑端检查 DSH 后重试。', 2000)
+              .replace(/(?:Bearer\s+|sk-)[A-Za-z0-9_-]{12,}/gi, '[redacted]');
+      return [{ id: id, role: 'system', title: '模型请求失败', text: failureText, status: 'error' }];
+    }
     if (event.type === 'user/message') {
       if (data.source && data.source.kind !== 'user') return [];
       var userText = textOf(data.content, 'text');
@@ -97,7 +110,12 @@
     var response = await call();
     if (response.status === 403 && await e2ee.prove(true)) response = await call();
     if (response.status === 404) throw problem('桥服务尚未更新旧版 DSH 适配，请更新桥后再试。');
-    if (response.status === 409) throw problem('DSH 已切换到不同协议，请刷新页面重新检测版本。');
+    if (response.status === 409) {
+      var conflict = null; try { conflict = await response.json(); } catch (_) {}
+      if (conflict && conflict.error === 'image-receipt-expired')
+        throw problem('图片附件已过期，请重新上传后发送。');
+      throw problem('DSH 已切换到不同协议，请刷新页面重新检测版本。');
+    }
     if (!response.ok) throw problem('旧版 DSH 请求失败（HTTP ' + response.status + '），请重连。');
     var payload;
     try { payload = await response.json(); } catch (_) { throw problem('电脑返回的 DSH 数据无法读取。'); }
@@ -105,6 +123,47 @@
       throw problem('DSH 拒绝了此操作：' + bounded(payload && payload.result && payload.result.error &&
         payload.result.error.message, 180));
     return payload.result.value;
+  }
+  async function interactionRequest(path, body) {
+    var e2ee = global.DshE2EE, secret = global.__dshE2eeSecret;
+    function call() { return e2ee.encryptedFetch(secret, path, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(body)
+    }); }
+    var response = await call();
+    if (response.status === 403 && await e2ee.prove(true)) response = await call();
+    if (response.status === 409) throw problem('这条请求已过期，请重连以获取最新请求。');
+    if (!response.ok) throw problem('同步旧版 DSH 授权或询问失败，请重连。');
+    var value = await response.json();
+    if (!value || value.ok !== true) throw problem('同步旧版 DSH 授权或询问失败，请重连。');
+    return value;
+  }
+  async function refreshInteractions(epoch) {
+    var selected = activeSessionId;
+    if (!selected) return;
+    var result = await interactionRequest('/__dsh/legacy-interactions', { sessionId: selected });
+    if (epoch !== generation || selected !== activeSessionId || !connected) return;
+    if (!Array.isArray(result.interactions)) throw problem('同步旧版 DSH 授权或询问失败，请重连。');
+    var current = new Map();
+    result.interactions.forEach(function (item) {
+      if (item && validId(item.id) && item.sessionId === selected &&
+          (item.kind === 'approval' || item.kind === 'question')) current.set(item.id, item);
+    });
+    pendingInteractions.forEach(function (_item, id) {
+      if (!current.has(id)) emit({ type: 'interaction-resolved', id: id });
+    });
+    pendingInteractions = current;
+    current.forEach(function (item) { emit({ type: 'interaction', interaction: item }); });
+  }
+  async function respondToInteraction(input) {
+    var item = pendingInteractions.get(String(input && input.id));
+    if (!item || !connected || item.sessionId !== activeSessionId)
+      throw problem('这条请求已过期，请重连以获取最新请求。');
+    await interactionRequest('/__dsh/legacy-response', {
+      sessionId: item.sessionId, id: item.id, answer: input.answer
+    });
+    pendingInteractions.delete(item.id);
+    emit({ type: 'interaction-resolved', id: item.id });
   }
   function projectRows() {
     return projects.map(function (project) {
@@ -149,6 +208,7 @@
           await refreshActive(epoch);
         }
       }
+      await refreshInteractions(epoch);
     }
   }
   async function refreshActive(epoch) {
@@ -210,11 +270,15 @@
     generation++;
     connected = false;
     if (timer) { global.clearTimeout(timer); timer = null; }
+    pendingInteractions.forEach(function (_item, id) { emit({ type: 'interaction-resolved', id: id }); });
+    pendingInteractions.clear();
     emit({ type: 'status', state: 'disconnected' });
   }
   async function loadSession(sessionId) {
     if (!connected || !validId(sessionId)) throw problem('请先连接并选择对话。');
     var epoch = generation;
+    pendingInteractions.forEach(function (_item, id) { emit({ type: 'interaction-resolved', id: id }); });
+    pendingInteractions.clear();
     activeSessionId = sessionId;
     activeEntries = new Map(); activeHasMore = false;
     activeFirstSeq = Number.MAX_SAFE_INTEGER; activeLastSeq = -1;
@@ -223,7 +287,11 @@
     var page = await rpc('session.history', { sessionId: sessionId, maxMessages: 20 });
     if (epoch !== generation || activeSessionId !== sessionId) throw problem('对话已切换，请重新打开。');
     mergePage(page);
-    return { records: records(), hasMore: activeHasMore, interactions: [] };
+    try { await refreshInteractions(epoch); }
+    catch (error) { if (epoch === generation && activeSessionId === sessionId)
+      emit({ type: 'error', userMessage: error && error.userMessage || '同步旧版 DSH 授权或询问失败，请重连。' }); }
+    if (epoch !== generation || activeSessionId !== sessionId) throw problem('对话已切换，请重新打开。');
+    return { records: records(), hasMore: activeHasMore, interactions: Array.from(pendingInteractions.values()) };
   }
   async function loadOlder(sessionId) {
     if (sessionId !== activeSessionId || !connected) throw problem('请重新打开对话。');
@@ -262,16 +330,51 @@
     return { id: value.sessionId };
   }
   async function sendMessage(input) {
-    if (input && Array.isArray(input.attachments) && input.attachments.length)
-      throw problem('此旧版 DSH 不支持普通文件附件，请在对话中提供电脑文件路径。');
+    var attachments = input && Array.isArray(input.attachments) ? input.attachments : [];
+    if (attachments.length > 4 || attachments.some(function (item) {
+      return !item || !validId(item.receiptId) || !item.file || item.file.kind !== 'image';
+    })) throw problem('此旧版 DSH 仅支持 PNG、JPEG、WebP 和 GIF 图片附件。');
     var text = string(input && input.text);
-    if (!text.trim()) throw problem('请输入消息。');
-    var value = await rpc('session.prompt', { sessionId: string(input && input.sessionId),
-      mode: 'queue', content: [{ type: 'text', text: text }] });
+    if (!text.trim() && !attachments.length) throw problem('请输入消息。');
+    var request = { sessionId: string(input && input.sessionId), mode: 'queue', content: [{ type: 'text', text: text }] };
+    if (attachments.length) request.attachmentReceipts = attachments.map(function (item) { return item.receiptId; });
+    var value = await rpc('session.prompt', request);
     if (!value || value.accepted !== true) throw problem('DSH 没有接受这条消息。');
     // Accepted prompts must not become apparent failures just because a
     // subsequent read timed out: retrying then could send the same text twice.
     refreshActive(generation).catch(function () {});
+  }
+  async function uploadFile(input) {
+    var file = input && input.file, sessionId = string(input && input.sessionId);
+    var mediaType = file && String(file.type || '').toLowerCase();
+    if (!mediaType && file) {
+      if (/\.png$/i.test(file.name)) mediaType = 'image/png';
+      else if (/\.jpe?g$/i.test(file.name)) mediaType = 'image/jpeg';
+      else if (/\.webp$/i.test(file.name)) mediaType = 'image/webp';
+      else if (/\.gif$/i.test(file.name)) mediaType = 'image/gif';
+    }
+    if (!file || !validId(sessionId) || !/^image\/(png|jpeg|webp|gif)$/.test(mediaType))
+      throw problem('此旧版 DSH 仅支持 PNG、JPEG、WebP 和 GIF 图片附件。');
+    if (file.size > 4 * 1024 * 1024) throw problem('图片超过 4 MB，未上传。');
+    var metadata = new TextEncoder().encode(JSON.stringify({ sessionId: sessionId, name: file.name, mediaType: mediaType }));
+    var bytes = new Uint8Array(await file.arrayBuffer());
+    var packet = new Uint8Array(4 + metadata.length + bytes.length);
+    new DataView(packet.buffer).setUint32(0, metadata.length, false);
+    packet.set(metadata, 4); packet.set(bytes, metadata.length + 4);
+    var e2ee = global.DshE2EE;
+    function call() { return e2ee.encryptedFetch(global.__dshE2eeSecret, '/__dsh/legacy-upload', {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'content-type': 'application/octet-stream' }, body: packet
+    }); }
+    var response = await call();
+    if (response.status === 403 && await e2ee.prove(true)) response = await call();
+    if (response.status === 413) throw problem('图片超过 4 MB，未上传。');
+    if (response.status === 415) throw problem('此旧版 DSH 仅支持 PNG、JPEG、WebP 和 GIF 图片附件。');
+    if (!response.ok) throw problem('上传图片失败，请重新选择图片后重试。');
+    var result = await response.json();
+    if (!result || result.ok !== true || !result.value || !validId(result.value.receiptId) ||
+        !result.value.file || result.value.file.kind !== 'image') throw problem('上传图片失败，请重新选择图片后重试。');
+    return result.value;
   }
   async function cancelSession(sessionId) {
     var value = await rpc('session.cancel', { sessionId: String(sessionId || '') });
@@ -341,13 +444,13 @@
   }
 
   global.DshLegacyAdapter = {
-    profile: 'legacy-events', capabilities: { interactiveReplies: false, fileAttachments: false },
+    profile: 'legacy-events', capabilities: { interactiveReplies: true, fileAttachments: false, imageAttachments: true },
     connect: connect, disconnect: disconnect,
     listProjects: function () { return Promise.resolve(projectRows()); },
     listSessions: function (projectId) { return Promise.resolve(sessionRows(String(projectId))); },
     loadSession: loadSession, loadOlder: loadOlder, listDirectories: listDirectories,
     listWorkspaceFiles: listWorkspaceFiles, downloadFile: downloadFile,
     createProject: createProject, createSession: createSession,
-    sendMessage: sendMessage, cancelSession: cancelSession
+    sendMessage: sendMessage, cancelSession: cancelSession, respondToInteraction: respondToInteraction, uploadFile: uploadFile
   };
 })(window);

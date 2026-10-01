@@ -79,7 +79,10 @@ function processInventory(deps = {}) {
   try {
     if (platform === 'win32') {
       const filter = "Name='DeepSeek Harness.exe' OR Name='dsh-desktop.exe' OR Name='node.exe' OR Name='bun.exe' OR Name='npm.exe' OR Name='npx.exe' OR Name='dsh.exe'";
-      const script = 'Get-CimInstance Win32_Process -Filter "' + filter + '" | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
+      // Windows PowerShell otherwise writes the system code page to pipes. Node
+      // decodes UTF-8, corrupting non-ASCII installation paths before validation.
+      const script = '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; ' +
+        'Get-CimInstance Win32_Process -Filter "' + filter + '" | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
       const raw = JSON.parse(exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], options));
       return (Array.isArray(raw) ? raw : [raw]).filter(Boolean).map(p => ({
         pid: p.ProcessId, name: p.Name, executablePath: p.ExecutablePath, commandLine: p.CommandLine

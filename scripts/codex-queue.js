@@ -1,5 +1,13 @@
 'use strict';
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
+function validateCollaborationMode(mode){
+  if(mode==null)return null;
+  if(!mode||!['plan','default'].includes(mode.mode)||Object.keys(mode).some(k=>!['mode','settings'].includes(k)))throw Error('Invalid collaboration mode');
+  const s=mode.settings;
+  if(!s||typeof s.model!=='string'||!s.model||s.model.length>200||Object.keys(s).some(k=>!['model','reasoning_effort','developer_instructions'].includes(k))||
+    (s.reasoning_effort!=null&&(typeof s.reasoning_effort!=='string'||s.reasoning_effort.length>100))||s.developer_instructions!=null)throw Error('Invalid collaboration mode settings');
+  return {mode:mode.mode,settings:{model:s.model,reasoning_effort:s.reasoning_effort||null,developer_instructions:null}};
+}
 
 class QueueStore {
   constructor(file,rpc) {
@@ -18,6 +26,7 @@ class QueueStore {
     const e={...data,state:'queued',createdAt:Date.now()};this.entries.push(e);this.save();return e;
   }
   cancel(tid,id){const e=this.entries.find(x=>x.id===id&&x.threadId===tid);if(!e)return;if(e.state==='sending'||e.state==='sent')throw Error('消息已经开始发送');this.entries=this.entries.filter(x=>x!==e);this.save();}
+  activate(tid){for(const e of this.entries)if(e.threadId===tid&&e.state==='queued')e.requiresConfirmation=false;this.save();}
   note(e,text){if(e.state==='queued'&&this.entries.includes(e)&&e.note!==text){e.note=text;this.save();}}
   async tick(){
     if(this.busy||this.loadError)return;this.busy=true;
@@ -26,6 +35,7 @@ class QueueStore {
       for(const tid of tids){
         const e=this.entries.find(e=>e.threadId===tid && e.state!=='sent');
         if(!e || e.state!=='queued')continue;
+        if(e.requiresConfirmation){this.note(e,'已保存，尚未发送；请明确选择发送已存内容。');continue;}
         try{
           const status=await this.rpc('thread/read',{threadId:tid,includeTurns:false});
           const runtime=status.thread?.status?.type;
@@ -54,6 +64,7 @@ class QueueStore {
           e.state='sending';this.save();
           const params={threadId:tid,input:e.input,clientUserMessageId:e.id};
           if(e.model)params.model=e.model;if(e.effort)params.effort=e.effort;
+          if(e.collaborationMode)params.collaborationMode=validateCollaborationMode(e.collaborationMode);
           const result=await this.rpc('turn/start',params);
           const turnId=result.turn?.id || result.turnId;
           if(!turnId)throw Error('服务未返回任务编号，请检查会话后再处理');
@@ -127,6 +138,7 @@ function createQueueService(base,port){
       try{
         const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(typeof data.threadId!=='string'||data.threadId.length>80)throw Error('无效会话');
         if(data.action==='cancel'){store.cancel(data.threadId,data.id);json(res,200,{ok:true});return;}
+        if(data.action==='activate'){store.activate(data.threadId);json(res,200,{ok:true});return;}
         if(data.action!=='enqueue'||!Array.isArray(data.input)||!data.input.length||data.input.length>6)throw Error('无效消息');
         for(const i of data.input){
           if(i.type==='text'){if(typeof i.text!=='string')throw Error('无效文字');}
@@ -136,10 +148,10 @@ function createQueueService(base,port){
           }else throw Error('不支持的附件类型');
         }
         const id=String(data.id||crypto.randomUUID());if(id.length>80)throw Error('无效消息编号');
-        const e=store.enqueue({id,threadId:data.threadId,waitForTurnId:String(data.waitForTurnId||''),input:data.input,label:String(data.label||'消息').slice(0,1000),model:typeof data.model==='string'?data.model:null,effort:typeof data.effort==='string'?data.effort:null});
+        const e=store.enqueue({id,threadId:data.threadId,waitForTurnId:String(data.waitForTurnId||''),input:data.input,label:String(data.label||'消息').slice(0,1000),model:typeof data.model==='string'?data.model:null,effort:typeof data.effort==='string'?data.effort:null,collaborationMode:validateCollaborationMode(data.collaborationMode),requiresConfirmation:data.requiresConfirmation===true});
         json(res,200,{ok:true,id:e.id});
       }catch(err){json(res,400,{error:err.message});}
     });
   }};
 }
-module.exports={QueueStore,createQueueService,createRpc};
+module.exports={QueueStore,createQueueService,createRpc,validateCollaborationMode};

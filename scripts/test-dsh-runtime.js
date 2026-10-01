@@ -75,6 +75,28 @@ function fixture(state = {}) {
   equal(runtime.classifyProcess({ pid: 3, name: 'Uninstall DeepSeek Harness.exe' }, { fs: io, adapter: metadataApi }), null, 'never identify the uninstaller');
   equal(runtime.scanProcesses({ processes: [record, { pid: 4, name: 'node.exe', commandLine: 'node.exe app.js web' }], fs: io, adapter: metadataApi }).map(p => p.pid), [90], 'strict process inventory');
 
+  if (process.platform === 'win32') {
+    const unicodeRoot = 'D:\\桥\\实际使用\\node_modules\\@deepseek-ai\\dsh';
+    const unicodeEntry = unicodeRoot + '\\lib\\bin.js';
+    const unicodeIo = virtualFs({
+      [unicodeRoot + '\\package.json']: JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.7-rc.2', bin: { dsh: 'lib/bin.js' } }),
+      [unicodeEntry]: '// bin'
+    });
+    const quote = value => "'" + value.replace(/'/g, "''") + "'";
+    const commandLine = '"C:\\node.exe" "' + unicodeEntry + '" web';
+    const sample = '[pscustomobject]@{ProcessId=91;Name=\'node.exe\';ExecutablePath=\'C:\\node.exe\';CommandLine=' +
+      quote(commandLine) + '} | ConvertTo-Json -Compress';
+    const scanned = runtime.scanProcesses({ fs: unicodeIo, execFileSync(file, args, options) {
+      // Exercise the real Windows PowerShell pipe/Node decoding boundary while
+      // replacing only the OS inventory data; this is not a DSH compatibility test.
+      const commandIndex = args.indexOf('-Command') + 1;
+      const adjusted = args.slice();
+      adjusted[commandIndex] = adjusted[commandIndex].replace(/Get-CimInstance[\s\S]*$/, sample);
+      return require('child_process').execFileSync(file, adjusted, options);
+    } });
+    equal(scanned.map(p => p.packageJsonPath), [unicodeRoot + '\\package.json'], 'Windows inventory preserves Chinese npm installation paths across the real UTF-8 pipe');
+  }
+
   const installedDeps = { fs: io, adapter: metadataApi, platform: 'win32', execPath: 'C:\\node.exe',
     env: { PATH: 'C:\\npm' }, findDshExecutable: () => ({ path: null, source: 'missing' }),
     execFileSync: () => { throw new Error('Installation detection must not execute a command'); } };

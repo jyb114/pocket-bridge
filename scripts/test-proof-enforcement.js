@@ -248,7 +248,7 @@ async function clientSideChecks(key, secret, made) {
   // 一台**全新设备**（未证明）—— 用它来触发 403
   const fresh = await freshDevice(key);
   const cookie = fresh.cookie;
-  const tid = (cookie.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+  const tid = (cookie.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
   if (tid) made.push(tid.split('.')[0]);
 
   const cookieHolder = { value: cookie };
@@ -338,7 +338,7 @@ async function clientSideChecks(key, secret, made) {
   // ★ 时钟不对（+10 分钟）：服务端会拒（stale-ts），手机端必须**自动退回两个来回**
   {
     const freshSkew = await freshDevice(key);
-    const tidS = (freshSkew.cookie.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+    const tidS = (freshSkew.cookie.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
     if (tidS) made.push(tidS.split('.')[0]);
     const holderS = { value: freshSkew.cookie };
     const callsS = { paths: [] };
@@ -355,7 +355,7 @@ async function clientSideChecks(key, secret, made) {
   // ── 关键那一条：再来一台未证明的设备，走**打过补丁**的 fetch ─────────────
   const fresh2 = await freshDevice(key);
   cookieHolder.value = fresh2.cookie;
-  const tid2 = (cookieHolder.value.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+  const tid2 = (cookieHolder.value.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
   if (tid2) made.push(tid2.split('.')[0]);
 
   const raw2 = await rawFetch(`http://${HOST}/__targets`, { headers: { accept: 'application/json' } });
@@ -406,8 +406,8 @@ async function clientSideChecks(key, secret, made) {
   ok('用访问密钥能进门（/k/<密钥> 是引导路径，不能被自己的门挡住）',
     fresh.res.status === 200, `HTTP ${fresh.res.status}`);
   const cookie = fresh.cookie;
-  ok('进门时拿到设备令牌', /dsh-gw-session=/.test(cookie) || cookie.length > 0, cookie.slice(0, 60));
-  const token = (cookie.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+  ok('进门时拿到设备令牌', /dsh-gw-session(?:-[a-f0-9]{16})?=/.test(cookie) || cookie.length > 0, cookie.slice(0, 60));
+  const token = (cookie.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
   if (token) made.push(token.split('.')[0]);
 
   // ① 页面和脚本照给 —— 没钥匙也不能白屏
@@ -488,7 +488,7 @@ async function clientSideChecks(key, secret, made) {
   {
     const one = await freshDevice(key);
     const cookieOne = one.cookie;
-    const tOne = (cookieOne.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+    const tOne = (cookieOne.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
     if (tOne) made.push(tOne.split('.')[0]);
 
     const nonceO = crypto.randomBytes(24).toString('base64url');
@@ -560,7 +560,7 @@ async function clientSideChecks(key, secret, made) {
   // ⑧ 核心安全断言：**只有访问密钥的一方，怎么算都进不去**
   const other = await freshDevice(key);
   const cookie2 = other.cookie;
-  const t2 = (cookie2.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+  const t2 = (cookie2.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
   if (t2) made.push(t2.split('.')[0]);
 
   const ch2 = await req({ path: '/__auth/challenge', headers: { cookie: cookie2 } });
@@ -592,7 +592,7 @@ async function clientSideChecks(key, secret, made) {
   {
     const d3 = await freshDevice(key);
     const cookie3 = d3.cookie;
-    const t3 = (cookie3.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+    const t3 = (cookie3.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
     if (t3) made.push(t3.split('.')[0]);
 
     // 先取挑战（不交应答）—— 网关据此认为「它正在证明」
@@ -614,7 +614,7 @@ async function clientSideChecks(key, secret, made) {
   {
     const d4 = await freshDevice(key);       // 这一步拿到的就是应用外壳（开了等待窗口）
     const cookie4 = d4.cookie;
-    const t4 = (cookie4.match(/dsh-gw-session=([^;]+)/) || [])[1] || '';
+    const t4 = (cookie4.match(/dsh-gw-session(?:-[a-f0-9]{16})?=([^;]+)/) || [])[1] || '';
     if (t4) made.push(t4.split('.')[0]);
 
     const slowProof = (async () => {

@@ -528,7 +528,7 @@ async function checkDevices() {
   const cA = cookieOf(a);
   const cB = cookieOf(b);
 
-  if (!/dsh-gw-session=/.test(cA)) {
+  if (!/dsh-gw-session(?:-[a-f0-9]{16})?=/.test(cA)) {
     record('devices', '设备登记与单独吊销', 'fail', '配对后没有拿到设备令牌');
     return;
   }

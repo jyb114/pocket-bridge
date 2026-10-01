@@ -58,7 +58,7 @@ function harness(options = {}) {
     addLocalUser() {}, addError() {},
     sendModePref() { return select.value; },
     crypto: { randomUUID() { return 'draft-id'; } },
-    queueDraft: null,
+    queueDraft: null,queueEntries:[],queueSaveNotices:Object.create(null),refreshQueue(){},
     textDrafts: Object.create(null),
     queueRequest(payload) { rpc.push({ method: 'queue', payload }); return enqueue.promise; },
     call(method, payload) {
@@ -71,7 +71,7 @@ function harness(options = {}) {
   };
   vm.createContext(box);
   for (const name of ['rememberTextDraft', 'restoreTextDraft', 'clearSubmittedTextDraft',
-    'queueOnly', 'enqueueDraft', 'renderFooter', 'send',
+    'queueOnly', 'setQueueSaveNotice', 'renderQueueSaveNotice', 'selectedCollaborationMode', 'userTextOf', 'enqueueDraft', 'renderFooter', 'send',
     'confirmRunningTurn', 'sendWhenUncertain', 'steerTurn']) {
     const fn = extractFunction(src, name);
     if (!fn) throw new Error('Missing function ' + name);

@@ -1005,6 +1005,9 @@
     '/__dsh/lite-download',          // 轻量 DSH：会话与文件路径
     '/__dsh/lite-files',             // 轻量 DSH：工作区文件列表
     '/__dsh/legacy-rpc',            // 旧版 DSH：受限点号 RPC
+    '/__dsh/legacy-interactions',   // Official legacy pending requests
+    '/__dsh/legacy-response',       // Session/rpc-bound legacy replies
+    '/__dsh/legacy-upload',         // Session/runtime-bound legacy image staging
     '/api/session/prompt',            // 你打出去的字 + 粘贴的图片（base64 在里面）
     '/api/session/uploadFileBinary'   // 上传的附件字节
   ];

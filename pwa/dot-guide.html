@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#151517">
+<meta name="referrer" content="no-referrer">
+<title>Dot on your phone · Pocket Bridge</title>
+<style>
+  :root{color-scheme:dark;--bg:#151517;--card:#1b1b1c;--line:#2c2c2e;--fg:#f9fafb;--dim:#adb2b8;--accent:#679efe}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,system-ui,"Segoe UI",sans-serif}
+  main{max-width:640px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top,0px)) 18px calc(28px + env(safe-area-inset-bottom,0px))}
+  a{color:var(--accent);text-underline-offset:3px;overflow-wrap:anywhere}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:4px}
+  .back{display:inline-block;padding:8px 0;margin-bottom:16px;min-height:44px}
+  h1{font-size:26px;line-height:1.25;margin:8px 0 12px;letter-spacing:-.02em}
+  h2{font-size:18px;line-height:1.35;margin:0 0 10px}
+  p{margin:0 0 12px}
+  .label{display:inline-block;color:var(--dim);font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin:18px 0}
+  .status{border-left:3px solid var(--accent)}
+  .muted{color:var(--dim);font-size:14px}
+  ol{margin:0;padding-left:22px}
+  li{padding-left:4px;margin:0 0 16px}
+  li:last-child{margin-bottom:0}
+  .action{display:block;min-height:48px;border:1px solid var(--line);border-radius:12px;padding:11px 15px;margin-top:12px;text-align:center;text-decoration:none}
+  .primary{background:#3b5bfe;border-color:#3b5bfe;color:#fff}
+  footer{padding:6px 0;font-size:13px;color:var(--dim)}
+</style>
+</head>
+<body>
+<main>
+  <a class="back" id="back-to-codex" href="/codex">‹ Back to Codex</a>
+  <div class="label">Pocket Bridge · Official access guide</div>
+  <h1>Dot on your phone</h1>
+  <p>Reach your existing dot through the official ChatGPT mobile app when its supporting update is available.</p>
+
+  <section class="card status" aria-labelledby="availability-title">
+    <h2 id="availability-title">Use the official app</h2>
+    <p>Dot is a cloud agent. OpenAI currently supports it in the desktop app and desktop web, with mobile app access rolling out. Mobile web is not supported.</p>
+    <p class="muted">Pocket Bridge currently has no Dot messaging connection. This guide does not load your Dot conversations, activity, or approval requests.</p>
+  </section>
+
+  <section class="card" aria-labelledby="start-title">
+    <h2 id="start-title">Continue with your dot</h2>
+    <ol>
+      <li><strong>Create your dot on desktop first.</strong> Use the ChatGPT desktop app or a desktop browser.</li>
+      <li><strong>Open the ChatGPT mobile app.</strong> Sign in to the same account and choose your dot. If it is missing, check for the supporting app update and account rollout.</li>
+      <li><strong>Use its own conversation and request controls.</strong> Send instructions there. Review activity and approval requests in official ChatGPT wherever those controls are available.</li>
+    </ol>
+    <a class="action primary" href="https://learn.chatgpt.com/docs/dots/getting-started" target="_blank" rel="noopener noreferrer">Open the official setup guide ↗</a>
+    <a class="action" href="https://learn.chatgpt.com/docs/dots/channels" target="_blank" rel="noopener noreferrer">Check supported messaging channels ↗</a>
+  </section>
+
+  <section class="card" aria-labelledby="computer-title">
+    <h2 id="computer-title">Let your dot use this computer</h2>
+    <p>In the desktop ChatGPT app, open your dot’s profile. Under <strong>Computers</strong>, find <strong>Your computer</strong> and select <strong>Allow access</strong>. Review and accept the app’s confirmation.</p>
+    <p class="muted">Keep the computer online with the ChatGPT app open for local work. Your dot’s cloud work can continue while the computer is off.</p>
+    <a class="action" href="https://learn.chatgpt.com/docs/dots/computers-and-apps" target="_blank" rel="noopener noreferrer">Read about computer access ↗</a>
+  </section>
+
+  <a class="action" href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">Open the ChatGPT website ↗</a>
+  <p class="muted" style="margin-top:10px">This link opens the official website. It does not establish Dot access in a phone browser.</p>
+  <footer>Availability follows OpenAI’s app updates and account rollout. Pocket Bridge is an independent project.</footer>
+</main>
+<script>
+  // Keep the local encryption fragment on the return link. Official links never receive it.
+  document.getElementById('back-to-codex').href = '/codex' + location.hash;
+</script>
+</body>
+</html>

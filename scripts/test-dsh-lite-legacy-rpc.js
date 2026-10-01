@@ -26,11 +26,11 @@ function request(body, overrides = {}) {
   if (overrides.headers) Object.assign(req.headers, overrides.headers);
   return req;
 }
-async function invoke(body, overrides) {
+async function invoke(body, overrides, handler = handle) {
   const result = { status: 0, headers: null, body: null,
     writeHead(status, headers) { this.status = status; this.headers = headers; },
     end(value) { this.body = JSON.parse(String(value)); this.writableEnded = true; } };
-  await handle(request(body, overrides), result);
+  await handler(request(body, overrides), result);
   return result;
 }
 (async () => {
@@ -65,5 +65,38 @@ async function invoke(body, overrides) {
   assert.equal((await invoke({ method: 'session.prompt', request: { sessionId: 's', mode: 'queue',
     content: [{ type: 'text', text: 'write' }] } })).status, 409);
   assert.equal(calls.length, before, 'cached old page cannot write to upgraded DSH');
+  profile = null;
+  const unavailable = await invoke({ method: 'session.list', request: {} });
+  assert.equal(unavailable.status, 503, 'missing runtime is unavailable, not a verified protocol upgrade');
+  assert.equal(unavailable.body.error, 'dsh-runtime-unavailable');
+  assert.equal(calls.length, before, 'unknown runtime cannot read or write DSH');
+  let commits = 0, releases = 0, accepted = false, transportFailure = false, imageCall = null;
+  const imageHandler = createDshLiteLegacyRpc({ runtimeProfile: async () => 'legacy-events',
+    resolveAttachments: async (sessionId, receipts) => {
+      assert.equal(sessionId, 'image-session'); assert.deepEqual(receipts, ['staged-image']);
+      return { content: [{ type: 'image', mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'sample.png' }],
+        commit() { commits++; }, release() { releases++; } };
+    },
+    callUpstream: async call => {
+      imageCall = JSON.parse(call.body.toString());
+      if (transportFailure) throw new Error('ambiguous-network-timeout');
+      return { statusCode: 200, body: JSON.stringify({ type: 'server-response', rpcId: imageCall.rpcId,
+        result: { ok: true, value: { accepted } } }) };
+    }
+  });
+  const imagePrompt = { method: 'session.prompt', request: { sessionId: 'image-session', mode: 'queue',
+    content: [{ type: 'text', text: '' }], attachmentReceipts: ['staged-image'] } };
+  assert.equal((await invoke(imagePrompt, undefined, imageHandler)).status, 200);
+  assert.equal(commits, 0, 'unaccepted prompt must not consume the image receipt');
+  assert.equal(releases, 1, 'confirmed upstream rejection releases the image for retry');
+  assert.deepEqual(Object.keys(imageCall.payload).sort(), ['content', 'mode', 'sessionId'], 'bridge receipt metadata must not reach the official strict legacy wire');
+  assert.equal(imageCall.payload.content[0].type, 'image');
+  accepted = true;
+  assert.equal((await invoke(imagePrompt, undefined, imageHandler)).status, 200);
+  assert.equal(commits, 1, 'accepted official prompt consumes its staged image receipt');
+  assert.equal(releases, 1, 'accepted prompt must not release its consumed receipt');
+  transportFailure = true;
+  assert.equal((await invoke(imagePrompt, undefined, imageHandler)).status, 502);
+  assert.equal(releases, 1, 'ambiguous network failure must not allow duplicate image submission');
   console.log('legacy-rpc: inspected envelope, method fence, E2EE proof, profile switch passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

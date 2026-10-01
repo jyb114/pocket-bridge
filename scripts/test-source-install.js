@@ -37,6 +37,15 @@ function readUtf16(file) {
   return fs.readFileSync(file).toString('utf16le').replace(/^\ufeff/, '');
 }
 
+// Do not decode WScript.Echo's active Windows ANSI code page as UTF-8.
+// Keep the probe result in a Unicode file, preserving exact non-ASCII paths.
+function unicodeProbeOutput(expression, marker) {
+  return 'Dim pbReport\r\n' +
+    'Set pbReport = CreateObject("Scripting.FileSystemObject").CreateTextFile(WScript.Arguments(0), True, True)\r\n' +
+    'pbReport.WriteLine "' + marker + '=" & ' + expression + '\r\n' +
+    'pbReport.Close\r\n';
+}
+
 async function main() {
 try {
   // Copy only tracked source files; ignored private keys, logs, runtime and
@@ -56,10 +65,11 @@ try {
     const end = lines.findIndex((line) => /^cmd\s*=/.test(line.trim()));
     assert(end >= 0, 'installer command assignment not found');
     const probe = path.join(desktop, 'probe-installer.vbs');
-    fs.writeFileSync(probe, Buffer.from('\ufeff' + lines.slice(0, end + 1).join('\r\n') + '\r\nWScript.Echo "PB_CMD=" & cmd\r\n', 'utf16le'));
-    const result = run('cscript.exe', ['//nologo', probe]);
+    const probeOutput = path.join(desktop, 'probe-installer-output.txt');
+    fs.writeFileSync(probe, Buffer.from('\ufeff' + lines.slice(0, end + 1).join('\r\n') + '\r\n' + unicodeProbeOutput('cmd', 'PB_CMD'), 'utf16le'));
+    const result = run('cscript.exe', ['//nologo', probe, probeOutput]);
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
-    const actual = result.stdout.match(/PB_CMD=(.+)/)?.[1].trim();
+    const actual = readUtf16(probeOutput).match(/PB_CMD=(.+)/)?.[1].trim();
     assert(actual, 'resolved command path missing');
     assert.strictEqual(path.resolve(actual).toLowerCase(), path.join(desktop, 'setup.cmd').toLowerCase());
   });
@@ -126,12 +136,13 @@ try {
       assert(index >= 0, `${name} has no run command`);
       const expression = lines[index].match(/^s\.Run\s+(.+),\s*0,\s*False$/)?.[1];
       assert(expression, `${name} run command is not in the expected form`);
-      lines[index] = `WScript.Echo "PB_COMMAND=" & ${expression}`;
+      lines[index] = unicodeProbeOutput(expression, 'PB_COMMAND');
       const probe = path.join(desktop, `probe-${name}`);
+      const probeOutput = path.join(desktop, `probe-${name}.txt`);
       fs.writeFileSync(probe, Buffer.from('\ufeff' + lines.join('\r\n'), 'utf16le'));
-      const result = run('cscript.exe', ['//nologo', probe]);
+      const result = run('cscript.exe', ['//nologo', probe, probeOutput]);
       assert.strictEqual(result.status, 0, result.stdout + result.stderr);
-      const command = result.stdout.match(/PB_COMMAND=(.+)/)?.[1].trim();
+      const command = readUtf16(probeOutput).match(/PB_COMMAND=(.+)/)?.[1].trim();
       assert(command, `${name} did not resolve a command`);
       assert(command.toLowerCase().includes(path.join(desktop, target).toLowerCase()), `${name} command targets the wrong file`);
       if (name === 'open-desktop.vbs') assert(command.toLowerCase().includes('node.exe'), 'app command cannot locate Node');

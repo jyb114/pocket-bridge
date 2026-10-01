@@ -64,7 +64,7 @@ function loadPage() {
     'clip', 'esc', 'reasoningText', 'buildAgent',
     // buildUser/buildAgent 现在用 asText 读「本该是字符串、实际可能是对象」的字段
     // （修「一整条消息显示成 [object Object]」时加的）—— 这里得一起抠出来。
-    'asText']) {
+    'asText', 'bridgeUploadedFiles', 'uploadedFileButtonHtml', 'baseName']) {
     const src = extractFunction(html, n);
     assert.ok(src, `codex.html 里找不到 ${n}() —— 它被改名或删了吗？`);
     vm.runInContext(src, sandbox, { filename: n });
@@ -133,6 +133,30 @@ console.log('\n带附件那条：本地是「正文 + 附件：…」，服务�
 }
 
 console.log('\n别认错人：不是同一句话的回推不能吃掉占位\n');
+{
+  const p = loadPage();
+  const prompt = 'Read only the attached phone-upload.txt file and tell me its exact text.';
+  const file = { name: 'phone-upload.txt', path: 'D:\\bridge\\uploads\\codex\\a79abc70-3623-46a2-b421-ca401ac11111\\phone-upload.txt' };
+  const wire = prompt + '\n\n用户上传的文件（已保存在电脑上，请按需读取）：\n' + JSON.stringify(file);
+  const clientId = 'pocket-bridge-upload-echo-regression';
+  p.api.addLocalUser(prompt + '\n\n附件：phone-upload.txt', wire, clientId);
+  const server = USER_ITEM('srv-file', wire); server.clientId = clientId;
+  p.api.upsertItem(server, true);
+  if (p.count() !== 1) fail('真实文件元数据回推产生两个气泡'); else ok('真实文件上传元数据只替换一条本地占位');
+  const shown = p.api.bridgeUploadedFiles(server);
+  if (!shown || shown.text !== prompt || shown.files[0].name !== file.name) fail('桥上传文件没有折叠成文件名'); else ok('桥上传JSON折叠为正文和文件名');
+  const chip = p.api.uploadedFileButtonHtml(file);
+  if (!/data-filecite=/.test(chip) || chip.includes('title=') || !chip.includes('phone-upload.txt')) fail('文件chip不可点或悬浮标题泄露内部路径'); else ok('附件chip使用既有加密下载入口，不显示内部路径标题');
+  const pasted = USER_ITEM('ordinary-json', prompt + '\n\n' + JSON.stringify(file));
+  if (p.api.bridgeUploadedFiles(pasted)) fail('用户自行粘贴JSON被折叠'); else ok('无桥提交标记的用户JSON原样保留');
+  const historical = USER_ITEM('real-old-history', prompt+'\n\n用户上传的文件（已保存在电脑上，请按需读取）：\n'+JSON.stringify({...file,path:file.path.replace(/\\/g,'\\\\')}));
+  const legacy = p.api.bridgeUploadedFiles(historical);
+  if (!legacy || !legacy.legacy || !legacy.original.includes('用户上传的文件')) fail('真实旧历史重复反斜杠未识别或丢失原文'); else ok('真实旧历史重复反斜杠折叠chip并保留原始说明');
+  const escaped = USER_ITEM('outside-upload', prompt + '\n\n用户上传的文件（已保存在电脑上，请按需读取）：\n' + JSON.stringify({name:'auth.json',path:'C:/private/auth.json'})); escaped.clientId = clientId;
+  if (p.api.bridgeUploadedFiles(escaped)) fail('上传目录外路径被当成附件'); else ok('上传目录外的元数据不会伪装成桥附件');
+  p.api.addLocalUser(prompt + '\n\n附件：phone-upload.txt', wire, clientId);
+  if (p.count() !== 1) fail('回推先到、回执后到产生重复'); else ok('回推先到时回执不再补画重复占位');
+}
 {
   const p = loadPage();
   p.api.addLocalUser('我发的是这一句');

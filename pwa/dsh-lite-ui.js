@@ -204,6 +204,11 @@
       filesFilter: $('files-filter'), filesList: $('files-list'), filesMore: $('files-more'), filesStatus: $('files-status')
     };
     var app = $('app');
+    if (adapter.capabilities && adapter.capabilities.imageAttachments === true && adapter.capabilities.fileAttachments === false) {
+      refs.uploadInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
+      refs.upload.title = t('上传图片');
+      refs.upload.setAttribute('aria-label', t('上传图片'));
+    } else refs.uploadInput.removeAttribute('accept');
     var mountSerial = (Number(window.__dshLiteMountSerial) || 0) + 1;
     window.__dshLiteMountSerial = mountSerial;
     app.dataset.liteUiBuild = 'session-create-v5';
@@ -269,7 +274,7 @@
       loadingProjects: false, loadingSessions: false,
       projectLoad: 0, sessionLoad: 0, pendingRecords: [], loadingSession: '', folderLoad: 0,
       filesLoad: 0, filesPath: '', filesStack: [], filesEntries: [], filesNextOffset: null,
-      filesLoading: false, filesRetry: null, disposed: false,
+      filesLoading: false, filesRetry: null, filePreview: null, disposed: false,
       // C12 排队消息。手机端原来**完全看不到**执行中排队的内容。
       queued: [], queueLoading: false, queueRequest: 0, cwd: '',
       // C26 目标：`goal` 是最近一次读到的目标快照（null = 没有），
@@ -406,11 +411,12 @@
       return !!(adapter.capabilities && adapter.capabilities.interactiveReplies === true &&
         typeof adapter.respondToInteraction === 'function');
     }
-    function showError(error, fallback) {
+    function showError(error, fallback, kind) {
       refs.errorText.textContent = safeError(error, fallback);
+      refs.error.dataset.kind = kind || 'operation';
       refs.error.hidden = false;
     }
-    function clearError() { refs.error.hidden = true; refs.errorText.textContent = ''; }
+    function clearError() { refs.error.hidden = true; refs.errorText.textContent = ''; delete refs.error.dataset.kind; }
     function setSidebar(open) {
       document.body.classList.toggle('sidebar-hidden', !open);
       refs.projectsToggle.setAttribute('aria-expanded', String(!!open));
@@ -582,6 +588,10 @@
           role === 'user' ? '我' : role === 'assistant' ? 'DSH' : role === 'thought' ? t('思考') : role === 'tool' ? t('工具') : role)));
         item.append(meta);
         var recordText = typeof record.text === 'string' ? record.text : '';
+        if (role === 'system' && record.status === 'error') {
+          recordText = t(recordText);
+          meta.querySelector('.record-role').textContent = t(label(record.title, '模型请求失败'));
+        }
         // ★ 一键复制这一条。手机上没法拖选文字，没有按钮就等于复制不了。
         //   **助手说的和用户自己说的都要有**（用户的原话：「你的我的都不行」）。
         if (recordText) {
@@ -771,17 +781,74 @@
     function clearDownloadUrls() {
       state.downloadUrls.forEach(function (entry) { URL.revokeObjectURL(entry.url); });
       state.downloadUrls.clear();
+      state.filePreview = null;
+      renderFilePreview();
+    }
+    var MAX_TEXT_PREVIEW_BYTES = 64 * 1024;
+    async function textPreview(blob, name) {
+      var type = String(blob.type || '').split(';')[0].toLowerCase();
+      if (!/^text\//.test(type) && !/^(application\/(?:json|xml|javascript)|image\/svg\+xml)$/.test(type) &&
+          !/\.(txt|md|markdown|json|jsonl|log|csv|tsv|ya?ml|toml|ini|conf|config|xml|html?|css|[cm]?js|jsx|tsx?|py|sh|ps1|bat|sql|svg)$/i.test(name)) return null;
+      // Decode only a bounded slice of the already requested download. File
+      // contents are never used as HTML, a document URL, or executable code.
+      var text = await blob.slice(0, MAX_TEXT_PREVIEW_BYTES).text();
+      if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) return null;
+      return { text: text, truncated: blob.size > MAX_TEXT_PREVIEW_BYTES };
+    }
+    function renderFilePreview() {
+      var panel = document.getElementById('files-preview');
+      if (!panel) {
+        panel = el('section', 'files-text-preview');
+        panel.id = 'files-preview';
+        panel.setAttribute('role', 'region');
+        panel.style.cssText = 'margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;min-width:0;';
+        refs.filesStatus.before(panel);
+      }
+      panel.replaceChildren();
+      panel.hidden = !state.filePreview;
+      if (!state.filePreview) return;
+      var entry = state.downloadUrls.get(state.filePreview);
+      if (!entry) { state.filePreview = null; panel.hidden = true; return; }
+      panel.setAttribute('aria-label', t('文本预览') + ' · ' + entry.name);
+      var header = el('div', 'files-navigation');
+      var title = el('strong', '', t('文本预览') + ' · ' + entry.name);
+      title.style.cssText = 'min-width:0;flex:1;overflow-wrap:anywhere;';
+      header.append(title);
+      var close = el('button', '', t('关闭预览'));
+      close.type = 'button';
+      close.addEventListener('click', function () { state.filePreview = null; renderFilePreview(); });
+      header.append(close);
+      panel.append(header);
+      if (!entry.preview) {
+        panel.append(el('p', '', t('此文件不支持文本预览，可保存后打开。')));
+        return;
+      }
+      if (entry.preview.truncated) panel.append(el('p', 'files-preview-note',
+        t('仅预览前 64 KB，保存可下载完整文件。')));
+      var content = el('pre', 'files-preview-text', entry.preview.text || t('空文本文件。'));
+      content.tabIndex = 0;
+      content.style.cssText = 'max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font-size:13px;line-height:1.5;user-select:text;';
+      panel.append(content);
+    }
+    function openFilePreview(path) {
+      state.filePreview = path;
+      renderFilePreview();
+      var panel = document.getElementById('files-preview');
+      if (panel && !panel.hidden) panel.scrollIntoView({ block: 'nearest' });
     }
     async function cacheDownload(path, name, sessionId) {
       var result = await adapter.downloadFile({ sessionId: sessionId, path: path });
       if (!result || !result.blob || typeof result.blob.size !== 'number') throw new Error('download data missing');
+      var fileName = label(result.name, name);
+      var preview = null;
+      try { preview = await textPreview(result.blob, fileName); } catch (_) { /* Download remains available if text decoding fails. */ }
       if (state.sessionId !== sessionId || state.disposed) return false;
       if (state.downloadUrls.size >= 3) {
         var first = state.downloadUrls.keys().next().value;
         URL.revokeObjectURL(state.downloadUrls.get(first).url);
         state.downloadUrls.delete(first);
       }
-      state.downloadUrls.set(path, { url: URL.createObjectURL(result.blob), name: label(result.name, name) });
+      state.downloadUrls.set(path, { url: URL.createObjectURL(result.blob), name: fileName, preview: preview });
       // ★ 把刚存下的那一条**返回出去**：图片预览要直接用它当 <img> 的地址。
       //   原来只返回 true，于是调用方还得再往 Map 里查一次（而且查的是"路径"，
       //   一不留神就把别人的图当自己的）。
@@ -1002,7 +1069,8 @@
       if (state.disposed || !event || typeof event.type !== 'string') return;
       if (event.type === 'status') {
         if (event.state === 'connected' || event.state === 'connecting' || event.state === 'disconnected') setStatus(event.state);
-        if (event.state === 'disconnected') showError(event, '与电脑的连接已断开，请重连。');
+        if (event.state === 'disconnected') showError(event, '与电脑的连接已断开，请重连。', 'connection');
+        else if (event.state === 'connected' && refs.error.dataset.kind === 'connection') clearError();
       } else if (event.type === 'projects' && Array.isArray(event.projects)) {
         state.projects = event.projects;
         renderProjects(); renderTitle();
@@ -1464,10 +1532,17 @@
           refs.filesList.append(folder);
         } else if (entry.type === 'file') {
           var cached = state.downloadUrls.get(entry.path);
-          var file = cached ? el('a', '', '↓ 保存 ' + name) : el('button', '', '↓ ' + name);
-          if (cached) { file.href = cached.url; file.download = cached.name; }
-          else { file.type = 'button'; file.addEventListener('click', function () { readWorkspaceFile(entry, file); }); }
+          var file = el('button', '', cached ? t('预览') + ' · ' + name : '↓ ' + name);
+          file.type = 'button';
+          if (cached) {
+            file.addEventListener('click', function () { openFilePreview(entry.path); });
+          } else file.addEventListener('click', function () { readWorkspaceFile(entry, file); });
           refs.filesList.append(file);
+          if (cached) {
+            var save = el('a', '', t('↓ 保存 ') + name);
+            save.href = cached.url; save.download = cached.name;
+            refs.filesList.append(save);
+          }
         }
       });
     }
@@ -1489,7 +1564,7 @@
         if (token !== state.filesLoad || state.sessionId !== sessionId || state.disposed) return false;
         if (!result || !Array.isArray(result.entries) || typeof result.path !== 'string') throw new Error('invalid file list');
         state.filesPath = result.path;
-        if (result.path !== previous.path) refs.filesFilter.value = '';
+        if (result.path !== previous.path) { refs.filesFilter.value = ''; state.filePreview = null; renderFilePreview(); }
         state.filesEntries = append ? state.filesEntries.concat(result.entries) : result.entries;
         state.filesNextOffset = Number.isSafeInteger(result.nextOffset) ? result.nextOffset : null;
         state.filesRetry = null;
@@ -1519,9 +1594,10 @@
       button.textContent = '正在读取…';
       try {
         if (!await cacheDownload(entry.path, label(entry.name, '文件'), sessionId)) return;
-        refs.filesStatus.textContent = '文件已读取，请点“保存”下载到手机。';
+        refs.filesStatus.textContent = t('文件已读取，请点“保存”下载到手机。');
         refs.filesStatus.dataset.state = 'success';
         renderFiles();
+        openFilePreview(entry.path);
       } catch (error) {
         if (state.sessionId === sessionId) {
           refs.filesStatus.textContent = safeError(error, '读取文件失败，请重试。');
@@ -2694,6 +2770,7 @@
       try {
         renderProjects(); renderSessions(); renderTitle(); renderRecords();
         renderInteractions(); renderControls(); renderUploads(); renderQueue();
+        renderFiles(); renderFilePreview();
         renderGoalBar();
         updateCryptoChip(); composerPicksRelabel(); relabelStatus();
         loadBalance(refs.composerBalance);

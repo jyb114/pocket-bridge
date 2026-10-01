@@ -617,90 +617,20 @@ const codex = {
   },
 
   /**
-   * 桌面版是不是开着（它一开着，就可能占着某些会话的独占写锁）。
+   * The configured backend cannot attest which desktop process owns a writer.
+   * Do not use a process-name inventory as authorization to stop that process.
    */
   desktopStatus() {
-    if (process.platform !== 'win32') return { running: false, count: 0 };
-    try {
-      const out = execFileSync('tasklist',
-        ['/FI', 'IMAGENAME eq ChatGPT.exe', '/NH'],
-        { encoding: 'utf8', timeout: 6000, windowsHide: true });
-      const n = (out.match(/ChatGPT\.exe/gi) || []).length;
-      return { running: n > 0, count: n };
-    } catch (err) {
-      return { running: false, count: 0, error: err.message };
-    }
+    return { running: null, count: null, ownerVerified: false, canStop: false, code: 'owner-unverified' };
   },
 
   /**
-   * 关掉电脑上的 Codex 桌面版，把会话的写锁释放出来。
-   *
-   * 这里有个必须小心的地方：**桌面版和我们自己起的 app-server 是同一个二进制**
-   * （都在 LocalAppData\OpenAI\Codex\bin 下，都叫 codex.exe）。
-   * 按进程名 taskkill 会把我们自己也一起杀掉 —— 这个坑我刚踩过：
-   * 命令行里写 taskkill /IM Codex.exe /F，结果两个都没了。
-   *
-   * 所以分开处理：
-   *   - 桌面版的界面进程叫 ChatGPT.exe（MSIX 包里的 Electron 壳），按名字杀没问题
-   *   - codex.exe 要看命令行：带 `--listen` 的是我们的，**不能碰**
+   * Keep the old entry point safe for callers outside the mobile lock route.
+   * No current protocol response proves a desktop PID owns a given thread.
+   * Even an explicit confirmation therefore cannot authorize a global kill.
    */
-  async stopDesktop(lang) {
-    const st = codex.desktopStatus();
-    const mine = readPid('codex');
-    let killed = 0;
-
-    try {
-      if (process.platform === 'win32') {
-        // 1) 界面进程
-        if (st.running) {
-          execFileSync('taskkill', ['/IM', 'ChatGPT.exe', '/F'],
-            { timeout: 10000, windowsHide: true });
-          killed++;
-        }
-        // 2) 桌面版自己的 codex.exe（没有 --listen 的那些），跳过我们的
-        const all = require('child_process').execSync(
-          'wmic process where "name=\'codex.exe\'" get ProcessId,CommandLine /format:csv',
-          { encoding: 'utf8', timeout: 10000, windowsHide: true }
-        );
-        for (const line of all.split('\n')) {
-          if (!/codex\.exe/i.test(line)) continue;
-          if (/--listen/i.test(line)) continue;        // 我们的，别动
-          const m = line.trim().match(/,(\d+)\s*$/);
-          if (!m) continue;
-          const pid = Number(m[1]);
-          if (mine && pid === mine) continue;
-          try {
-            execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'],
-              { timeout: 8000, windowsHide: true });
-            killed++;
-          } catch (err) { /* 可能已经退了 */ }
-        }
-        // 3) 桌面版拉起来的运行时进程（cua_node 下的 node / node_repl）
-        try {
-          const out = execFileSync('tasklist',
-            ['/FI', 'IMAGENAME eq node_repl.exe', '/NH'],
-            { encoding: 'utf8', timeout: 6000, windowsHide: true });
-          if (/node_repl/i.test(out)) {
-            execFileSync('taskkill', ['/IM', 'node_repl.exe', '/F'],
-              { timeout: 8000, windowsHide: true });
-          }
-        } catch (err) { /* 没有就算了 */ }
-      } else {
-        execFileSync('pkill', ['-f', 'ChatGPT'], { timeout: 8000 });
-        killed++;
-      }
-    } catch (err) {
-      if (!killed) return { ok: false, message: fill(T(lang).killFail, { msg: err.message }) };
-    }
-
-    if (!killed) return { ok: false, message: T(lang).cxDesktopNotOpen };
-
-    // 等锁真的释放 —— 进程没了不等于锁立刻没了
-    await sleep(3000);
-
-    // 顺手清掉那个会话残留的锁文件（如果没人持有了）
-    // 不清的话，某些情况下会留下一个谁也进不去的「僵尸会话」
-    return { ok: true, message: T(lang).cxDesktopClosed };
+  async stopDesktop(lang, opts = {}) {
+    return require('./codex-lock.js').desktopTakeoverDenied(opts.threadId, { ...opts, lang });
   }
 };
 

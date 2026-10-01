@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0-preview.4 — Windows preview
+
+- Operated the Codex phone interface at 390 × 844 against the real Codex 0.159.0 runtime. Received GPT-6 Astra, GPT-6 Sol, and GPT-6.1 Sol replies. Continued a separate copy while the source writer stayed held; answered a real choice question and approved a real one-time read of an uploaded file.
+- Removed global Codex termination from phone controls. Explicit handback unsubscribes on the owning connection and pauses reconnection. A controlled test kept the page open and another app-server acquired the same writer after the observed approximately one-minute runtime grace period. Fixed automatic idle release accidentally resuming the writer from a stale loaded-thread list.
+- Clarified saved versus sent instructions, added bounded progress/error feedback, and cleared stale saved-state feedback after server-confirmed removal. Save, cancel, and explicit delivery with a real model reply were operated. Desktop task completion alone does not send a saved instruction.
+- Guarded history-observation results by connection and operation identity, so stale failures cannot close a replacement socket or overwrite a current send. A separate long-running connection failure recovered after the isolated test gateway reconnected; its root cause remains unverified.
+- Improved in-page conversation menus, attachment labels, duplicate-message handling, and one-time approval controls. Restricted file-read scope and blocked credential paths, link escapes, hard links, and alternate data streams. SVG/HTML/XML/script documents use safe text/attachment responses and file cards; raster image previews remain available.
+- Isolated Bridge authentication cookies by instance and supported legacy-cookie migration and stale-session recovery from a valid connection link.
+- Invalidated cached DSH runtime/protocol identity when the service at a fixed port changes, preventing capability results from the previous runtime from being reused.
+- Exercised project/conversation creation, real rejected model requests, failure history, and safe text-file preview against four actual npm DSH runtimes. Legacy image staging/removal and modern file staging/removal were operated. Successful model replies and model-triggered approvals/questions remain blocked by upstream 401; operating-system download completion is unverified.
+- Added runtime-bound legacy pending-request and image-receipt helpers with encrypted remote routes. Generic old-protocol file upload remains unsupported. Old npm setup needed compatible Cordis pins; 0.2.0-rc.2 used an experimental exact-version admission in the test copy. These partial checks do not establish universal or historical desktop support.
+- Added a Dot official-access guide in the Codex menu. It describes the supported official mobile app route; Bridge has no established Dot cloud conversation, activity, or approval interface.
+- Added and bundled English compatibility, session-control, security, and release documentation. Physical iPhone/Android and cellular/tunnel acceptance remain outstanding. See [Manual acceptance](docs/MANUAL-ACCEPTANCE.md) for final checks and limits.
+
 ## 1.0.0-preview.3 — mobile DSH and Codex update
 
 - Added a small bridge-owned DSH phone interface for the DSH 0.1.7-rc.2 desktop build exercised on the test PC. It avoids the official plugin bundle on mobile tunnels and keeps a familiar project, conversation and composer layout. Other desktop builds, npm Web, and older DSH protocols were not operated end to end and are not claimed as supported by this preview.

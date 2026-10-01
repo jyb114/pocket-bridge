@@ -58,7 +58,7 @@ function loadList(threads, lang) {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  const names = ['appendUniqueThreads', 'fillThreadList', 'threadRow', 'readFolded', 'writeFolded', 'isUnread', 'timestampMs', 'relTime', 'baseName', 'esc'];
+  const names = ['displayThreadTitle', 'appendUniqueThreads', 'fillThreadList', 'threadRow', 'readFolded', 'writeFolded', 'isUnread', 'timestampMs', 'relTime', 'baseName', 'esc'];
   for (const n of names) {
     const src = extractFunction(html, n);
     assert.ok(src, `codex.html 里找不到 ${n}() —— 它被改名或删了吗？`);

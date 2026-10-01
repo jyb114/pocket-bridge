@@ -39,7 +39,7 @@ console.log('\n[1] 证明要落盘（重启不再把人踢出去）');
   ok('有写回磁盘的函数', /function saveAuthProven\(/.test(SRC));
   ok('文件名是 logs/auth-proven.json', /auth-proven\.json/.test(SRC));
   ok('启动时读回来（在 listen 成功之后）',
-    /中间层已启动[\s\S]{0,200}loadAuthProven\(\)/.test(SRC));
+    /server\.listen\(PORT,\s*\(\)\s*=>\s*\{\s*loadAuthProven\(\)/.test(SRC));
   ok('证明通过时写回', /authProven\.set\(parts\[0\], Date\.now\(\)\);\s*\n\s*saveAuthProven\(\)/.test(SRC));
   ok('有效期还是 12 小时（没有顺手放宽）',
     /AUTH_PROVEN_TTL_MS = 12 \* 60 \* 60 \* 1000/.test(SRC));
@@ -98,7 +98,7 @@ if (!LIVE) {
 
     const pair = await req(`/pair?code=${readLog('pair-code.txt')}`);
     const cookies = (pair.headers['set-cookie'] || []).map((c) => String(c).split(';')[0]).join('; ');
-    const hasDevice = /dsh-gw-session=/.test(cookies);
+    const hasDevice = /dsh-gw-session(?:-[a-f0-9]{16})?=/.test(cookies);
     ok('配对拿到设备 cookie', pair.status === 200 && hasDevice, `HTTP ${pair.status}`);
 
     // 还没证明：内容必须被拒

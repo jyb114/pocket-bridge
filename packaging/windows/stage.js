@@ -15,9 +15,9 @@ if (fs.existsSync(destination) && fs.readdirSync(destination).length) {
 
 const allowedRoots = new Set([
   'LICENSE', 'README.md', 'SECURITY.md', 'THIRD-PARTY-NOTICES.md',
-  'package.json'
+  'package.json', 'CHANGELOG.md', 'RELEASE_NOTES.md'
 ]);
-const allowedDirs = ['scripts/', 'pwa/', 'desktop/'];
+const allowedDirs = ['scripts/', 'pwa/', 'desktop/', 'docs/'];
 const excludedFiles = new Set([
   'desktop/setup.cmd', 'desktop/双击安装.vbs',
   'desktop/dsh-gateway.bat', 'desktop/fix-firewall.cmd'

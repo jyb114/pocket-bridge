@@ -38,6 +38,8 @@ const SUITE = [
   ['test-dsh-upstream-auth.js', [], 'DSH Web 首次启动及凭据轮换（假凭据和 HTTP）'],
   ['test-dsh-adapter.js', [], 'DSH 桌面及 CLI 版本、协议和严格 HTTP 指纹（隔离夹具）'],
   ['test-dsh-runtime.js', [], 'DSH Web/桌面自动发现、端口归属与缓存（假进程及 HTTP）'],
+  ['test-dsh-explicit-target.js', [], '显式 DSH 端口缓存过期后重新核实原目标，不误判版本变化或切换端口'],
+  ['test-key-cookie-replacement.js', [], '有效配对入口替换旧认证 cookie；不同网关端口互不干扰（隔离 HTTP）'],
   ['test-dsh-targets.js', [], 'DSH Web 安全启动、停止及 IPC 提示（假进程）'],
   ['test-promise-with-resolvers.js', [], '旧手机浏览器的 DSH 授权与提问 Promise 能力（隔离夹具）'],
   ['test-e2ee-request-base.js', [], '手机入口的 fetch/XHR 遵循文档 base URI 且维持加密作用域'],
@@ -63,6 +65,8 @@ const SUITE = [
   ['test-upload-handler.js', [], '上传处理器：路径穿越、来源、大小（自带服务）'],
   ['test-codex-queue.js', [], '队列状态机（自带 mock rpc，不碰真会话）'],
   ['test-codex-lock-ux.js', [], '手机查看、回前台、交还写锁与桌面占用时队列不误送（隔离夹具）'],
+  ['test-codex-first-turn.js', [], '首条消息前尚未落盘的真实协议回归：空会话可发送且不被空闲计时删除（隔离夹具）'],
+  ['test-codex-mobile-control.js', [], '手机内嵌交还确认、控制状态、当前轮预览、标题与正规协作模式（隔离夹具）'],
   ['test-release-lock.js', [], '释放写锁：什么情况下**不许**动手（自带服务与假目标）'],
   ['test-codex-handback-race.js', [], '手机在自动交还期间重连时，旧清理不得取消新会话订阅'],
   ['test-codex-proxy-scope.js', [], '代理配置只作用于托管执行端；启动时不修改用户级 Windows 环境'],
@@ -88,6 +92,10 @@ const SUITE = [
   ['test-codex-echo-dup.js', [], '发一句显示两句：本地占位与服务端回推必须对上'],
   ['test-dsh-api-e2ee.js', [], 'DSH 那套 API 的正文加密：客户端加、网关解、上游一字不差'],
   ['test-codex-private-file.js', [], 'Codex 文件路径经加密 POST 传送，明文及查询参数不能到文件读取器'],
+  ['test-codex-file-content.js', [], 'Active workspace documents stay inert after decryption; raster MIME and encrypted file bytes are preserved (isolated HTTP/files)'],
+  ['test-codex-file-access.js', [], '真实文件系统验证 Codex 项目/上传/生成文件边界，拒绝凭据、junction和硬链接逃逸'],
+  ['test-codex-ws-lifecycle.js', [], '真实 TCP 验证手机关闭只清理配对的 Codex 上游连接，不停止执行端'],
+  ['test-codex-file-path.js', [], 'Relative Codex files resolve inside registered projects without exposing their parents'],
   ['test-dsh-lazy-images.js', [], '已验证 DSH 模块的内嵌图片改为按需取，版本不匹配则原样放行'],
   ['test-dsh-lazy-image-store.js', [], '图片内容哈希、磁盘边界与官方入口改写'],
   ['test-dsh-lite-rpc.js', [], '轻量 DSH RPC 只接受已知方法、加密请求与正确协议参数'],
@@ -97,6 +105,8 @@ const SUITE = [
   ['test-dsh-lite-files.js', [], '手机 DSH 工作区文件单层分页浏览：仅已知会话、加密与路径边界'],
   ['test-dsh-lite-adapter.js', [], '轻量 DSH 项目、对话、发送、审批与提问协议（假连接）'],
   ['test-dsh-lite-legacy-rpc.js', [], '旧版 DSH 点号 RPC 的加密、固定方法与版本门控'],
+  ['test-dsh-legacy-interactions.js', [], '旧版授权与询问绑定真实待处理会话和运行时，跨会话及过期回复拒绝（隔离服务）'],
+  ['test-dsh-legacy-attachments.js', [], '旧版图片上传限制、会话绑定、过期与一次性发送（隔离服务）'],
   ['test-dsh-lite-legacy.js', [], '旧版 DSH 项目、会话、历史分页与文本操作（隔离协议）'],
   ['test-dsh-lite-router.js', [], '手机版按已验证协议选新版/旧版适配，授权失败时不误连'],
   ['test-dsh-lite-code-pin.js', [], '轻量 DSH 脚本指纹、直接打开的初次钉住与旧指纹的手动更新（假 Service Worker）'],
@@ -109,6 +119,7 @@ const SUITE = [
   ['similarity-audit.js', [], '重复代码审计（只看文件）'],
   // 这条需要浏览器 —— runner 上有就用，没有就跳过（见下面的处理）。
   ['test-codex-interactions.js', [], '授权、问题、自填与 MCP 确认（隔离执行端；需要浏览器）'],
+  ['test-codex-queue-mobile-save.js', [], '只读手机按钮保存待办：真实浏览器事件、隔离 HTTP 与队列文件持久化（需要浏览器）'],
   ['test-codex-menus-interactions.js', [], '手机菜单、项目路径、附件、改名归档操作（隔离浏览器）'],
   ['test-codex-thread-list-interactions.js', [], '旧会话分页和搜索的实际浏览器交互（隔离执行端）'],
   ['test-codex-observer.js', ['--expanded', '--attachments', '--queue'],
@@ -140,7 +151,7 @@ for (const [file, args, why] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-codex-observer.js','test-codex-interactions.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-codex-observer.js','test-codex-interactions.js','test-codex-queue-mobile-save.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;

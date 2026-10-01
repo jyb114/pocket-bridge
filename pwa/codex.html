@@ -441,10 +441,8 @@
   <button class="ico" id="back" style="display:none" aria-label="返回" data-i18n-aria="返回">‹</button>
   <h1 id="title">Codex</h1>
   <span class="conn wait" id="conn"><span class="dot"></span><span id="conntext" data-i18n="连接中">连接中</span></span>
-  <!-- 只在「我们正握着这条会话的写锁」时出现（也就是刚发完消息、还没还回去的那一小会儿）。
-       使用者在电脑上打不开同一个会话时，至少能从手机上看出是这边占着。 -->
-  <span id="lockhint" role="button" tabindex="0" title="手机正占着这条会话 —— 点这里可以还回去或让电脑端交出来" data-i18n-title="手机正占着这条会话 —— 点这里可以还回去或让电脑端交出来" data-i18n="🔒 占用中" style="display:none;align-items:center;
-    gap:4px;font-size:11px;color:var(--warn);flex:none;cursor:pointer">🔒 占用中</span>
+  <span id="lockhint" role="button" tabindex="0" title="查看会话控制与手机续聊选项" data-i18n-title="查看会话控制与手机续聊选项" style="display:none;align-items:center;
+    gap:4px;font-size:11px;color:var(--warn);flex:none;cursor:pointer"></span>
   <button class="ico" id="menu" aria-label="菜单">⋯</button>
 </header>
 <section id="task-status" role="status" aria-live="polite" hidden>
@@ -454,6 +452,11 @@
   <div id="task-activity"></div>
 </section>
 
+<div id="phone-observation-paused" hidden style="margin:8px 12px;padding:10px;border:1px solid var(--line);border-radius:12px;font-size:12px">
+  <div data-i18n="实时更新已暂停；已加载的历史仍可查看。恢复手机连接后，仍需明确连接会话或发送已存待办。">实时更新已暂停；已加载的历史仍可查看。恢复手机连接后，仍需明确连接会话或发送已存待办。</div>
+  <div style="margin-top:6px" data-i18n="Codex 可能还要约一分钟才释放空闲会话；稍后在电脑重试。这里只确认手机连接已断开。">Codex 可能还要约一分钟才释放空闲会话；稍后在电脑重试。这里只确认手机连接已断开。</div>
+  <button id="resume-phone-connection" class="btn p" style="margin:8px 0 0;font-size:13px" data-i18n="恢复手机连接">恢复手机连接</button>
+</div>
 <button class="lock-help" id="btn-lock-help" type="button" data-i18n="会话权限 · 查看不占锁，手机可独立续聊">会话权限 · 查看不占锁，手机可独立续聊</button>
 
 <main id="main">
@@ -465,7 +468,15 @@
 </main>
 
 <footer id="footer" style="display:none">
+  <div id="connect-thread-panel" hidden style="margin-bottom:8px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="fork-from-composer" class="btn p" style="flex:1;min-width:140px;margin:0;font-size:13px" data-i18n="复制上下文，在手机独立续聊">复制上下文，在手机独立续聊</button>
+      <button id="connect-current" class="btn" style="flex:1;min-width:140px;margin:0;font-size:13px" data-i18n="连接此会话">连接此会话</button>
+    </div>
+    <div style="font-size:11px;color:var(--dim);padding-top:5px" data-i18n="保存的待办不会因连接自动发送；请明确选择发送已存内容。">保存的待办不会因连接自动发送；请明确选择发送已存内容。</div>
+  </div>
   <div id="queued-messages" aria-live="polite"></div>
+  <div id="queue-save-status" hidden role="status" aria-live="polite" style="font-size:12px;padding:4px 2px;overflow-wrap:anywhere"></div>
   <div id="attachments" aria-live="polite"></div>
   <input type="file" id="pick-images" accept="image/*" multiple hidden>
   <input type="file" id="pick-files" multiple hidden>
@@ -525,6 +536,40 @@ var t = (window.DshI18n && window.DshI18n.t) ? window.DshI18n.t : function (s) {
 var tr = t;
 
 if (window.DshI18n) window.DshI18n.register({
+  "查看会话控制与手机续聊选项": {en:"View conversation control and phone continuation options",es:"Ver el control de la conversación y las opciones para continuar en el móvil"},
+  "手机可发送": {en:"Phone can send",es:"El móvil puede enviar"},
+  "当前仅查看": {en:"Viewing only",es:"Solo lectura"},
+  "连接中 · 仅查看": {en:"Connecting · viewing only",es:"Conectando · solo lectura"},
+  "会话控制": {en:"Conversation control",es:"Control de conversación"},
+  "手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。": {en:"The phone is connected and can send. Codex’s writer lock still determines whether the computer can take over.",es:"El móvil está conectado y puede enviar. El bloqueo de escritura de Codex determina si la computadora puede tomar el control."},
+  "当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。": {en:"You are viewing this conversation. The computer or another executor may control it. Create a separate copy to continue on the phone while keeping the computer open.",es:"Estás viendo esta conversación. La computadora u otro ejecutor puede controlarla. Crea una copia independiente para continuar en el móvil sin cerrar la computadora."},
+  "交还手机控制…": {en:"Hand back phone control…",es:"Devolver el control del móvil…"},
+  "确认交还手机控制": {en:"Confirm handing back phone control",es:"Confirmar la devolución del control del móvil"},
+  "此操作只请求取消桥对此会话的订阅，不关闭电脑 Codex，也不发送停止任务命令。Codex 可能保留占用一段时间；电脑能否接手需要实际确认。": {en:"This only requests that the bridge unsubscribe from this conversation. It does not close desktop Codex or send a stop command. Codex may retain the writer for a while; computer access still needs to be verified.",es:"Solo solicita cancelar la suscripción del puente a esta conversación. No cierra Codex ni envía una orden de detención. Codex puede conservar el bloqueo un tiempo; aún hay que verificar el acceso desde la computadora."},
+  "任务仍在运行，请等它结束后交还。查看或切回列表不会主动停止任务。": {en:"A task is still running. Wait for it to finish before handing back control. Viewing or returning to the list does not actively stop the task.",es:"Una tarea sigue en curso. Espera a que termine antes de devolver el control. Ver la conversación o volver a la lista no envía una orden de detención."},
+  "尚未发送首条消息；交还会丢弃这个空会话。输入的草稿仍会保留在当前页面。": {en:"The first message has not been sent. Handing back control discards this empty conversation. The draft is kept on the current page.",es:"Aún no se envió el primer mensaje. Devolver el control descarta esta conversación vacía. El borrador se conserva en la página actual."},
+  "确认交还": {en:"Confirm handback",es:"Confirmar devolución"},
+  "正在请求交还…": {en:"Requesting handback…",es:"Solicitando devolución…"},
+  "已请求交还；电脑能否接手仍待确认。这里继续只读查看，不会自动重新占用。": {en:"Handback requested. Computer access is not yet verified. This page stays read-only and will not automatically reclaim control.",es:"Devolución solicitada. Aún no se verificó el acceso desde la computadora. Esta página permanece en modo lectura y no recuperará el control automáticamente."},
+  "已确认取消手机订阅；电脑能否接手仍待确认。": {en:"The phone subscription was cancelled. Computer access is not yet verified.",es:"La suscripción del móvil se canceló. Aún no se verificó el acceso desde la computadora."},
+  "尚未确认取消手机订阅；电脑能否接手仍待确认。": {en:"Phone unsubscription is not confirmed. Computer access is not yet verified.",es:"No se confirmó la cancelación de la suscripción del móvil. Aún no se verificó el acceso desde la computadora."},
+  "当前无法验证占用者，不能从手机关闭桌面 Codex。请在电脑结束原任务，或复制上下文独立续聊。": {en:"The writer owner cannot be verified, so desktop Codex cannot be closed from the phone. Finish the original task on the computer or copy its context into a separate phone conversation.",es:"No se puede verificar quién posee el bloqueo, por lo que el móvil no puede cerrar Codex. Termina la tarea en la computadora o copia el contexto a una conversación independiente."},
+  "新建同项目会话": {en:"New conversation in this project",es:"Nueva conversación en este proyecto"},
+  "查看会话控制": {en:"View conversation control",es:"Ver control de conversación"},
+  "协作模式": {en:"Collaboration mode",es:"Modo de colaboración"},
+  "规划（Plan）": {en:"Plan",es:"Planificar"},
+  "执行（Default）": {en:"Default",es:"Ejecutar"},
+  "沿用会话设置": {en:"Use conversation settings",es:"Usar la configuración de la conversación"},
+  "模式将在下一条新任务生效；不会改变电脑配置的审批或沙箱权限。": {en:"The mode applies to the next new task. It does not change the computer’s approval or sandbox permissions.",es:"El modo se aplica a la siguiente tarea nueva. No cambia los permisos de aprobación ni de aislamiento de la computadora."},
+  "服务端没有返回可用协作模式，请使用当前会话设置。": {en:"The server did not return available collaboration modes. Use the current conversation settings.",es:"El servidor no devolvió modos de colaboración disponibles. Usa la configuración actual de la conversación."},
+  "请等待会话模型信息加载后再切换模式": {en:"Wait for the conversation’s model information before changing its mode",es:"Espera a que se cargue la información del modelo antes de cambiar el modo"},
+  "查看原始附件说明": {en:"View original attachment note",es:"Ver la nota original del adjunto"},
+  "连接此会话": {en:"Connect to this conversation",es:"Conectar a esta conversación"},
+  "正在连接此会话…": {en:"Connecting to this conversation…",es:"Conectando a esta conversación…"},
+  "已连接；草稿仍未发送，请检查后点击发送。": {en:"Connected. Your draft has not been sent; review it and tap Send.",es:"Conectado. El borrador no se envió; revísalo y pulsa Enviar."},
+  "连接未成功；草稿和已保存待办均保留：": {en:"Connection failed. Your draft and saved messages are kept: ",es:"Falló la conexión. Se conservaron el borrador y los mensajes guardados: "},
+  "正在执行的任务不会停止；连接后仍需点击发送。": {en:"A running task will continue. Connecting does not send your draft.",es:"La tarea en curso continuará. Conectar no envía el borrador."},
+  "保存的待办不会因连接自动发送；请明确选择发送已存内容。": {en:"Connecting does not send saved messages automatically. Choose to send saved messages explicitly.",es:"Conectar no envía los mensajes guardados automáticamente. Elige enviarlos explícitamente."},
   "会话权限 · 查看不占锁，手机可独立续聊": {en:"Conversation access · Read without a lock, or continue separately on your phone",es:"Acceso a la conversación · Leer sin bloqueo o continuar por separado en el teléfono"},
   "已保存 {n} 条 · 尚未发送；电脑任务结束也不会自动发送": {en:"{n} saved · Not sent; finishing the desktop task will not send them",es:"{n} guardados · No enviados; terminar la tarea del ordenador no los enviará"},
   "尝试连接并发送已存内容（不关闭电脑 Codex）": {en:"Try connecting to send saved messages (keeps desktop Codex open)",es:"Intentar conectar para enviar los mensajes guardados (sin cerrar Codex)"},
@@ -559,6 +604,10 @@ if (window.DshI18n) window.DshI18n.register({
   "请求网络访问": {"en": "Network access requested", "es": "Solicitud de acceso a la red"},
   "请求的额外权限：": {"en": "Additional permissions requested:", "es": "Permisos adicionales solicitados:"},
   "批准并保存命令规则": {"en": "Approve and save the command rule", "es": "Autorizar y guardar la regla de comandos"},
+  "仅批准本次": {en:"Approve once",es:"Autorizar esta vez"},
+  "查看可保存的规则": {en:"View the proposed saved rule",es:"Ver la regla que se propone guardar"},
+  "查看原始规则": {en:"View the original rule",es:"Ver la regla original"},
+  "保存规则会影响后续请求。只想允许这一次，请选择“仅批准本次”。": {en:"Saving a rule affects future requests. To allow this request only, choose Approve once.",es:"Guardar una regla afecta a las solicitudes futuras. Para permitir solo esta solicitud, elige Autorizar esta vez."},
   "保存网络允许规则": {"en": "Save a network allow rule", "es": "Guardar una regla de acceso a la red"},
   "保存网络拒绝规则": {"en": "Save a network deny rule", "es": "Guardar una regla de denegación de red"},
   "已提交规则决定": {"en": "Rule decision sent", "es": "Decisión de regla enviada"},
@@ -586,9 +635,31 @@ if (window.DshI18n) window.DshI18n.register({
   "正在发送：": { en: "Sending: ", es: "Enviando: " },
   "已保存，等待确认执行端；尚未发送。": { en: "Saved. Waiting for the executor to be confirmed; not sent yet.", es: "Guardado. Esperando la confirmación del ejecutor; aún no se envió." },
   "取消": { en: "Cancel", es: "Cancelar" },
+  "正在检查交还，请稍候再操作。": { en: "Checking handback. Please wait before another action.", es: "Comprobando la devolución del control. Espera antes de realizar otra acción." },
+  "连接或会话已改变，未断开手机连接；请重新检查后再交还。": { en: "The connection or conversation changed. The phone connection was kept; check again before handing back control.", es: "La conexión o conversación cambió. Se mantuvo la conexión del teléfono; comprueba de nuevo antes de devolver el control." },
+  "仍有手机任务或连接请求在进行，未断开连接；请等完成后再交还。": { en: "A phone task or connection request is still in progress. The connection was kept; wait for it to finish before handing back control.", es: "Una tarea del teléfono o solicitud de conexión sigue en curso. Se mantuvo la conexión; espera a que termine antes de devolver el control." },
+  "还有授权、选择或提问待处理，未断开连接；请处理后再交还。": { en: "An approval, choice or question still needs an answer. The connection was kept; answer it before handing back control.", es: "Hay una autorización, opción o pregunta pendiente. Se mantuvo la conexión; resuélvela antes de devolver el control." },
+  "仍有待发送内容，未断开连接；请先处理或取消待办后再交还。": { en: "There are messages waiting to be sent. The connection was kept; send or cancel them before handing back control.", es: "Hay mensajes pendientes de envío. Se mantuvo la conexión; envíalos o cancélalos antes de devolver el control." },
+  "无法确认所有手机会话的状态，未断开连接；请稍后重试。": { en: "Could not confirm every phone conversation's status. The connection was kept; try again later.", es: "No se pudo confirmar el estado de todas las conversaciones del teléfono. Se mantuvo la conexión; inténtalo más tarde." },
+  "其他手机会话仍在运行、等待处理或状态未确认，未断开连接；请等完成后再交还。": { en: "A phone conversation is running, waiting for an answer or has an unconfirmed status. The connection was kept; wait for it to finish before handing back control.", es: "Una conversación del teléfono está en curso, espera una respuesta o tiene un estado sin confirmar. Se mantuvo la conexión; espera a que termine antes de devolver el control." },
+  "已请求断开手机控制连接，随后只读重连；电脑能否接手仍待实际确认。": { en: "Requested closure of the phone control connection; it will reconnect for viewing only. Whether the computer can take over still needs to be checked.", es: "Se solicitó cerrar la conexión de control del teléfono; volverá a conectarse solo para lectura. Aún hay que comprobar si el ordenador puede tomar el control." },
+  "交还未完成；已保留手机连接：": { en: "Handback was not completed; the phone connection was kept: ", es: "No se completó la devolución del control; se mantuvo la conexión del teléfono: " },
+  "先确认所有手机会话均已结束、没有待处理请求和待办，再取消当前订阅并断开这条手机连接，随后只读重连。不关闭电脑 Codex，也不发送停止任务命令；电脑能否接手需要实际确认。": { en: "First check that all phone conversations have finished, with no unanswered requests or queued messages. Then cancel the current subscription and close this phone connection before reconnecting for viewing only. Desktop Codex stays open and no task-stop command is sent; whether the computer can take over needs an actual check.", es: "Primero comprueba que todas las conversaciones del teléfono hayan terminado, sin solicitudes ni mensajes pendientes. Después cancela la suscripción actual y cierra esta conexión antes de reconectarte solo para lectura. Codex en el ordenador permanece abierto y no se envía ninguna orden de detener tareas; hay que comprobar si el ordenador puede tomar el control." },
   "已连接，正在确认任务状态；队列只会在任务正常结束后发送。": { en: "Connected. Checking task status; the queue only sends after the task finishes normally.", es: "Conectado. Comprobando el estado de la tarea; la cola solo envía cuando la tarea termina con normalidad." },
   "暂未确认连接，队列仍保存：": { en: "Connection not confirmed yet; the queue is still saved: ", es: "Conexión aún sin confirmar; la cola sigue guardada: " },
   "队列请求失败": { en: "Queue request failed", es: "Falló la solicitud de la cola" },
+  "保存中…": {en:"Saving…",es:"Guardando…"},
+  "恢复手机连接": {en:"Restore phone connection",es:"Restaurar la conexión del teléfono"},
+  "实时更新暂停 · 仅查看": {en:"Live updates paused · View only",es:"Actualizaciones en pausa · Solo lectura"},
+  "已交还手机连接 · 实时更新暂停": {en:"Phone connection handed back · Live updates paused",es:"Conexión del teléfono devuelta · Actualizaciones en pausa"},
+  "这里只显示已经加载的记录。保存待办仍可用，尚未发送；恢复连接后仍需明确发送。": {en:"Only previously loaded records are shown. You can still save messages without sending them; restoring the connection does not send them automatically.",es:"Solo se muestran los registros ya cargados. Puedes guardar mensajes sin enviarlos; restaurar la conexión no los envía automáticamente."},
+  "实时更新已暂停；已加载的历史仍可查看。恢复手机连接后，仍需明确连接会话或发送已存待办。": {en:"Live updates are paused; loaded history remains visible. After restoring the phone connection, explicitly connect the conversation or send saved messages.",es:"Las actualizaciones están en pausa; el historial cargado sigue visible. Tras restaurar la conexión, conecta explícitamente la conversación o envía los mensajes guardados."},
+  "Codex 可能还要约一分钟才释放空闲会话；稍后在电脑重试。这里只确认手机连接已断开。": {en:"Codex may take about another minute to release an idle conversation. Try again on your computer shortly. Only the phone disconnection is confirmed here.",es:"Codex puede tardar aproximadamente otro minuto en liberar una conversación inactiva. Vuelve a intentarlo en el ordenador dentro de poco. Aquí solo se confirma que el teléfono se ha desconectado."},
+  "已请求断开手机控制连接，实时更新已暂停；电脑能否接手仍待实际确认。Codex 可能还要约一分钟才释放空闲会话，请稍后在电脑重试。需要时请明确恢复手机连接。": {en:"Requested closure of the phone control connection; live updates are paused. Whether the computer can take over still needs an actual check. Codex may take about another minute to release an idle conversation; try again on your computer shortly. Restore the phone connection explicitly when needed.",es:"Se solicitó cerrar la conexión de control del teléfono; las actualizaciones están en pausa. Aún hay que comprobar si el ordenador puede tomar el control. Codex puede tardar aproximadamente otro minuto en liberar una conversación inactiva; vuelve a intentarlo en el ordenador dentro de poco. Restaura la conexión explícitamente cuando sea necesario."},
+  "先确认所有手机会话均已结束、没有待处理请求和待办，再取消当前订阅并断开这条手机连接。页面保留已加载的历史，实时更新暂停，只有你点击恢复后才重连。不关闭电脑 Codex，也不发送停止任务命令；电脑能否接手需要实际确认。": {en:"First check that all phone conversations have finished, with no unanswered requests or queued messages. Then cancel the current subscription and close this phone connection. Loaded history stays visible, live updates pause, and the phone reconnects only when you choose Restore. Desktop Codex stays open and no task-stop command is sent; whether the computer can take over needs an actual check.",es:"Primero comprueba que todas las conversaciones del teléfono hayan terminado, sin solicitudes ni mensajes pendientes. Después cancela la suscripción actual y cierra esta conexión. El historial cargado sigue visible, las actualizaciones se pausan y el teléfono solo se reconecta cuando eliges Restaurar. Codex en el ordenador permanece abierto y no se envía ninguna orden de detener tareas; hay que comprobar si el ordenador puede tomar el control."},
+  "正在保存到电脑；尚未发送…": {en:"Saving to your computer; not sent yet…",es:"Guardando en el ordenador; aún no se ha enviado…"},
+  "已保存，尚未发送。": {en:"Saved, not sent yet.",es:"Guardado; aún no se ha enviado."},
+  "保存请求超时；结果未确认，输入仍保留，可重试。": {en:"The save request timed out. Its result is unconfirmed; your input is kept and you can retry.",es:"La solicitud de guardado agotó el tiempo. Su resultado no está confirmado; se conserva el texto y puedes reintentar."},
   "队列不可用": { en: "Queue unavailable", es: "Cola no disponible" },
   "正在确认当前任务，稍后再加入队列": { en: "Checking the current task — try adding to the queue again in a moment", es: "Comprobando la tarea actual; vuelve a añadir a la cola en un momento" },
   "已保存到电脑队列，尚未送达 Codex；确认连接且任务完成后才发送": { en: "Saved to the computer queue. Not delivered to Codex yet; it is sent once the connection is confirmed and the task finishes.", es: "Guardado en la cola de la computadora. Aún no se entregó a Codex; se enviará cuando se confirme la conexión y termine la tarea." },
@@ -747,6 +818,8 @@ if (window.DshI18n) window.DshI18n.register({
   "文件": { en: "Files", es: "Archivos" },
   "{n} 个文件有改动": { en: "{n} file(s) changed", es: "{n} archivo(s) modificados" },
   "其他": { en: "Other", es: "Otros" },
+  "Dot · 官方使用指南": { en: "Dot · Official access guide", es: "Dot · Guía de acceso oficial" },
+  "通过官方 ChatGPT App": { en: "Through the official ChatGPT app", es: "A través de la app oficial de ChatGPT" },
   "{n} 个文件": { en: "{n} file(s)", es: "{n} archivo(s)" },
   "（没有明细）": { en: "(no details)", es: "(sin detalles)" },
   "计划": { en: "Plan", es: "Plan" },
@@ -1054,11 +1127,11 @@ var state = {
   listCursor: null, listReady: false, listPending: false, listError: '', listMorePending: false,
   searchThreads: [], searchCursor: null, searchPending: false, searchReady: false,
   searchError: '', searchMorePending: false,
-  thread: null, threadInfo: null, resumed: false, forking: false,
+  thread: null, threadInfo: null, resumed: false, forking: false, handingBack: null, handoffPaused: false, handedBackThreads: Object.create(null),
   items: {}, order: [],      // itemId → {el, item, acc}
-  running: false, turnId: null,
+  running: false, turnId: null, awaitingFirstTurn: false,
   retry: 0,
-  models: [], account: null, limits: null, usage: null, projects: [],
+  models: [], collaborationModes: [], uploadedFiles: Object.create(null), account: null, limits: null, usage: null, projects: [],
   pick: { model: null, effort: null },   // 使用者显式选的，没选就用会话自己的
   approvals: {}
 };
@@ -1093,7 +1166,17 @@ function clearSubmittedTextDraft(tid, text) {
     if (box.value.trim() === text) { box.value = ''; box.style.height = 'auto'; }
   }
 }
-var queueEntries=[],queueFetchBusy=false,queueDraft=null;
+var queueEntries=[],queueFetchBusy=false,queueDraft=null,queueSaveNotices=Object.create(null);
+function setQueueSaveNotice(tid,phase,text,id){
+  queueSaveNotices[tid]={phase:phase,text:text,id:id||null};renderQueueSaveNotice();
+}
+function renderQueueSaveNotice(){
+  var el=$('queue-save-status');if(!el)return;
+  var note=state.thread && queueSaveNotices[state.thread.id];
+  el.hidden=state.view!=='thread'||!note;
+  el.textContent=note?note.text:'';
+  el.style.color=note && note.phase==='error'?'var(--bad)':'var(--dim)';
+}
 function queueOnly(){return !state.ready || ['checking','unlinked','unknown','offline'].indexOf(task.kind)>=0;}
 // 使用者自己选的「排队发送 / 立即补充」。和界面当前的显示值是两件事：
 // saveOnly 的时候界面要临时显示「排队」，但选择本身不能被改掉 ——
@@ -1118,27 +1201,42 @@ function renderQueue(){
     :t('待发送 {n} 条 · 保存在电脑端', {n:queueEntries.length});box.appendChild(title);
   if(task.kind==='unlinked'){
     var connect=document.createElement('button');connect.id='queue-connect';connect.textContent=t('尝试连接并发送已存内容（不关闭电脑 Codex）');
-    connect.disabled=!state.ready||state.resuming;connect.onclick=connectQueuedThread;box.appendChild(connect);
+    connect.disabled=!state.ready||state.resuming||!!state.handingBack;connect.onclick=connectQueuedThread;box.appendChild(connect);
   }
   queueEntries.forEach(function(e){
     var row=document.createElement('div');row.className='queued-row';
     var text=document.createElement('span');text.textContent=(e.state==='error'?t('已暂停：')+e.error+'\n':e.state==='sending'?t('正在发送：'):(e.note||t('已保存，等待确认执行端；尚未发送。'))+'\n')+e.label;row.appendChild(text);
     var cancel=document.createElement('button');cancel.textContent=t('取消');cancel.disabled=e.state==='sending';
-    cancel.onclick=function(){if(!state.thread)return;queueRequest({action:'cancel',threadId:state.thread.id,id:e.id}).then(refreshQueue).catch(function(err){toast(err.message);});};
+    cancel.onclick=function(){
+      if(!state.thread)return;var tid=state.thread.id;
+      queueRequest({action:'cancel',threadId:tid,id:e.id}).then(function(){
+        if(queueSaveNotices[tid] && queueSaveNotices[tid].id===e.id)delete queueSaveNotices[tid];
+        if(state.thread && state.thread.id===tid)renderQueueSaveNotice();
+        refreshQueue();
+      }).catch(function(err){toast(err.message);});
+    };
     row.appendChild(cancel);box.appendChild(row);
   });
   if (window.DshI18n) window.DshI18n.apply(box);
 }
-function connectQueuedThread(){
-  if(!state.ready||!state.thread||state.resuming)return;
+function connectQueuedThread(){ return connectCurrentThread(true); }
+function connectCurrentThread(sendSaved){
+  if(!state.ready||!state.thread||state.resuming||state.handingBack)return Promise.resolve(false);
   var thread=state.thread;state.resuming=true;renderFooter();
-  call('thread/resume',{threadId:thread.id,excludeTurns:true},15000).then(function(){
-    if(state.thread!==thread)return;
-    state.resumed=true;scheduleRelease();setTask('checking',t('已连接，正在确认任务状态；只有桥持有此会话且当前任务正常结束才会发送。'));
+  return call('thread/resume',{threadId:thread.id,excludeTurns:true},15000).then(function(r){
+    if(state.thread!==thread){call('thread/unsubscribe',{threadId:thread.id}).catch(function(){});return false;}
+    if(state.handedBackThreads)delete state.handedBackThreads[thread.id];
+    state.resumed=true;if(r && r.model)thread.model=r.model;
+    if(r && r.reasoningEffort)thread.reasoningEffort=r.reasoningEffort;
+    applyObservedStatus(r && r.thread,null);scheduleRelease();
+    toast(t('已连接；草稿仍未发送，请检查后点击发送。'));
+    if(sendSaved)return queueRequest({action:'activate',threadId:thread.id}).then(function(){refreshQueue();return true;});
+    return true;
   }).catch(function(e){
-    if(state.thread!==thread)return;
+    if(state.thread!==thread)return false;
     if(/active writer/i.test(e.message))showWriterConflict(thread, e.message);
-    else toast(t('暂未确认连接，队列仍保存：')+e.message);
+    else toast(t('连接未成功；草稿和已保存待办均保留：')+e.message);
+    return false;
   }).finally(function(){if(state.thread===thread){state.resuming=false;renderFooter();refreshObservedThread();}});
 }
 /**
@@ -1184,14 +1282,27 @@ function plainLocalOrigin() {
   return !!(lan172 && Number(lan172[1]) >= 16 && Number(lan172[1]) <= 31);
 }
 
-function queueRequest(body){return privateFetch('/codex/queue',{method:'POST',headers:{'content-type':'application/json','x-dsh-queue':'1'},body:JSON.stringify(body)})
-  .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||t('队列请求失败'));return j;});});}
+function queueRequest(body){
+  var controller=new AbortController(),timeout=setTimeout(function(){controller.abort();},20000);
+  return Promise.resolve().then(function(){return privateFetch('/codex/queue',{method:'POST',headers:{'content-type':'application/json','x-dsh-queue':'1'},body:JSON.stringify(body),signal:controller.signal});})
+    .then(function(r){return r.json().then(function(j){if(!r.ok || j.ok!==true)throw new Error(j.error||t('队列请求失败'));return j;});})
+    .catch(function(e){if(e.name==='AbortError')throw new Error(t('保存请求超时；结果未确认，输入仍保留，可重试。'));throw e;})
+    .finally(function(){clearTimeout(timeout);});
+}
 function refreshQueue(){
   if(queueFetchBusy || !state.thread || state.view!=='thread')return;
-  var tid=state.thread.id;queueFetchBusy=true;
+  var tid=state.thread.id,notice=queueSaveNotices[tid];queueFetchBusy=true;
   return privateFetch('/codex/queue?threadId='+encodeURIComponent(tid),{cache:'no-store'})
     .then(function(r){if(!r.ok)throw Error(t('队列不可用'));return r.json();})
-    .then(function(j){if(state.thread && state.thread.id===tid){queueEntries=j.entries||[];renderQueue();}})
+    .then(function(j){
+      if(!j || !Array.isArray(j.entries))throw Error(t('队列不可用'));
+      // Clear only this saved entry's notice, after a successful server snapshot
+      // no longer includes it. A GET started before the save acknowledgement, or
+      // before a newer save, must not erase that newer confirmation.
+      if(notice && notice.phase==='saved' && notice.id && queueSaveNotices[tid]===notice &&
+        !j.entries.some(function(e){return e.id===notice.id;}))delete queueSaveNotices[tid];
+      if(state.thread && state.thread.id===tid){queueEntries=j.entries;renderQueue();renderQueueSaveNotice();}
+    })
     .catch(function(){})
     .finally(function(){queueFetchBusy=false;});
 }
@@ -1199,13 +1310,29 @@ function enqueueDraft(text,box,attachments,options){
   options=options||{};
   var deferred=queueOnly()||!!options.deferred;
   if(!deferred&&!state.turnId){toast(t('正在确认当前任务，稍后再加入队列'));refreshObservedThread();return;}
-  var tid=state.thread.id,input=attachmentInput(text,attachments),signature=tid+JSON.stringify(input);
-  if(!queueDraft||queueDraft.signature!==signature)queueDraft={signature:signature,id:crypto.randomUUID?crypto.randomUUID():'queue-'+Date.now()+'-'+Math.random().toString(16).slice(2)};
-  state.sending=true;renderFooter();
-  queueRequest({action:'enqueue',id:queueDraft.id,threadId:tid,waitForTurnId:deferred?'':state.turnId,input:input,label:attachmentLabel(text,attachments),model:state.pick.model,effort:state.pick.effort})
-    .then(function(){attachmentSent(tid,attachments);queueDraft=null;clearSubmittedTextDraft(tid,text);if(state.thread && state.thread.id===tid){toast(options.savedNotice||t('已保存在电脑，尚未送达。电脑端完成任务不等于自动发送；需由桥连接此会话。'));refreshQueue();}})
-    .catch(function(e){toast(t('未确认加入队列，文字和附件已保留：')+e.message);})
-    .finally(function(){state.sending=false;renderFooter();});
+  var tid=state.thread.id,input,mode;
+  try {
+    input=attachmentInput(text,attachments);mode=selectedCollaborationMode();
+    var signature=tid+JSON.stringify(input)+JSON.stringify(mode);
+    if(!queueDraft||queueDraft.signature!==signature)queueDraft={signature:signature,id:crypto.randomUUID?crypto.randomUUID():'queue-'+Date.now()+'-'+Math.random().toString(16).slice(2)};
+  }catch(e){setQueueSaveNotice(tid,'error',t('未确认加入队列，文字和附件已保留：')+e.message);toast(e.message);return Promise.resolve(false);}
+  var draft=queueDraft,label=attachmentLabel(text,attachments);
+  state.sending=true;state.queueSavingThreadId=tid;
+  setQueueSaveNotice(tid,'saving',t('正在保存到电脑；尚未发送…'));renderFooter();
+  var payload={action:'enqueue',id:draft.id,threadId:tid,waitForTurnId:deferred?'':state.turnId,input:input,label:label,model:state.pick.model,effort:state.pick.effort,collaborationMode:mode,requiresConfirmation:deferred};
+  var request;try{request=queueRequest(payload);}catch(e){request=Promise.reject(e);}
+  return Promise.resolve(request)
+    .then(function(j){
+      attachmentSent(tid,attachments);if(queueDraft===draft)queueDraft=null;clearSubmittedTextDraft(tid,text);
+      setQueueSaveNotice(tid,'saved',t('已保存，尚未发送。'),j && j.id || draft.id);
+      if(state.thread && state.thread.id===tid){
+        if(!queueEntries.some(function(e){return e.id===(j && j.id || draft.id);}))queueEntries.push({id:j && j.id || draft.id,label:label,state:'queued',note:t('已保存，等待确认执行端；尚未发送。')});
+        renderQueue();toast(options.savedNotice||t('已保存在电脑，尚未送达。电脑端完成任务不等于自动发送；需由桥连接此会话。'));refreshQueue();
+      }
+      return true;
+    })
+    .catch(function(e){setQueueSaveNotice(tid,'error',t('未确认加入队列，文字和附件已保留：')+e.message);toast(t('未确认加入队列，文字和附件已保留：')+e.message);return false;})
+    .finally(function(){state.sending=false;if(state.queueSavingThreadId===tid)state.queueSavingThreadId=null;renderFooter();});
 }
 function draftAttachments(tid) {
   tid=tid || (state.thread && state.thread.id);
@@ -1272,7 +1399,7 @@ function uploadAttachment(a) {
   var timeout=setTimeout(function(){a.controller.abort();},90000);
   return privateFetch('/codex/upload?name='+encodeURIComponent(a.name),{method:'POST',headers:{'content-type':'application/octet-stream','x-dsh-upload':'1'},body:a.file,signal:a.controller.signal})
     .then(function(r){return r.json().catch(function(){throw new Error(r.status===403&&r.headers&&r.headers.get&&r.headers.get('x-dsh-need-proof')==='1'?t('正在验证这台设备，几秒后自动重试…'):(r.status===403?t('登录已过期，请重新配对'):t('上传服务暂不可用')));}).then(function(data){if(!r.ok)throw new Error(data.error||t('上传失败'));return data;});})
-    .then(function(data){if(a.removed)return;if(!data.path)throw new Error(t('服务器没有返回文件位置'));a.upload=data;a.status='ready';})
+    .then(function(data){if(a.removed)return;if(!data.path)throw new Error(t('服务器没有返回文件位置'));a.upload=data;a.status='ready';if(!state.uploadedFiles)state.uploadedFiles=Object.create(null);state.uploadedFiles[data.path]=data.name;})
     .catch(function(e){
       if(a.removed)return;
       // 取消和超时都是 AbortError，但**后果不一样**，不能混成一句：
@@ -1326,13 +1453,13 @@ function renderTaskStatus() {
   var panel = $('task-status');
   panel.hidden = state.view !== 'thread';
   if (panel.hidden) return;
-  var kind = !state.ready ? 'offline' : task.kind;
+  var kind = state.handoffPaused ? 'paused' : !state.ready ? 'offline' : task.kind;
   var labels = {checking:t('正在确认任务状态…'),running:t('执行中'),thinking:t('思考中'),
     waitingApproval:t('等待审批'),waitingInput:t('等待你回复'),completed:t('已完成'),
-    interrupted:t('已停止'),failed:t('执行失败'),idle:t('尚未开始'),unlinked:t('未连接执行端 · 实时状态未知'),unknown:t('暂时无法确认任务状态'),offline:t('连接中断 · 任务状态未知')};
+    interrupted:t('已停止'),failed:t('执行失败'),idle:t('尚未开始'),unlinked:t('未连接执行端 · 实时状态未知'),unknown:t('暂时无法确认任务状态'),offline:t('连接中断 · 任务状态未知'),paused:t('已交还手机连接 · 实时更新暂停')};
   panel.dataset.kind = kind;
   $('task-label').textContent = labels[kind] || labels.unknown;
-  var detail = kind === 'offline' ? t('正在重连。手机断线不代表电脑任务已结束。') : task.detail;
+  var detail = kind === 'paused' ? t('这里只显示已经加载的记录。保存待办仍可用，尚未发送；恢复连接后仍需明确发送。') : kind === 'offline' ? t('正在重连。手机断线不代表电脑任务已结束。') : task.detail;
   if (task.syncedAt) detail += (detail ? ' · ' : '') + t('上次同步 ') + new Date(task.syncedAt).toLocaleTimeString();
   // ── C19：状态区只留一行 ────────────────────────────────────────────────────
   //
@@ -1379,7 +1506,7 @@ function startObserving() {
 function subscribeIfAlreadyLoaded(ids, tid, epoch) {
   // Only attach to a thread already owned by this app-server. Never acquire a
   // desktop writer lock to observe a thread from a different process.
-  if (state.resumed || state.resuming || resumeSubscription || ids.indexOf(tid) < 0) return;
+  if (state.resumed || state.resuming || state.handingBack || resumeSubscription || ids.indexOf(tid) < 0 || (state.handedBackThreads && state.handedBackThreads[tid])) return;
   var token = {}; resumeSubscription = token;
   call('thread/resume',{threadId:tid,excludeTurns:true},10000).then(function() {
     if (epoch !== observerEpoch || !state.thread || state.thread.id !== tid) return;
@@ -1393,10 +1520,17 @@ function subscribeIfAlreadyLoaded(ids, tid, epoch) {
   }).finally(function(){if(resumeSubscription === token)resumeSubscription=null;});
 }
 function statusKind(status) { return status && (status.type || status) || ''; }
+function beforeFirstTurn(error) {
+  return /not materialized yet.*before first user message/i.test(String(error || ''));
+}
 function applyObservedStatus(thread, turn) {
   var st = statusKind(thread && thread.status);
   var flags = thread && thread.status && thread.status.activeFlags || [];
   if (turn && turn.id) state.turnId = turn.id;
+  if (state.handedBackThreads && state.thread && state.handedBackThreads[state.thread.id]) {
+    setTask('unlinked',t('已请求交还；电脑能否接手仍待确认。这里继续只读查看，不会自动重新占用。'));
+    return;
+  }
   if (st === 'notLoaded') {
     // A persisted turn describes history, not the current desktop writer.
     // Keep it visible as history without enabling live steering or resume.
@@ -1423,8 +1557,11 @@ function applyObservedStatus(thread, turn) {
   else setTask('unknown',t('尚未获得明确的任务结束或运行状态，稍后自动重试。'));
   if(state.resumed && !state.running && !state.releaseTimer)scheduleRelease();
 }
-function noteActivity(item) {
+function noteActivity(item, turnId) {
   if (!item) return;
+  // Paged items contain older turns too. Their last reply must not look like
+  // progress for a newly submitted turn while its first event is still pending.
+  if (state.running && (!turnId || turnId !== state.turnId)) return;
   if (item.type === 'reasoning') {
     var text = reasoningText(item, state.items[item.id]);
     if (text) task.activity = t('思考摘要：') + text.replace(/\*\*/g,'').slice(0,180);
@@ -1433,13 +1570,29 @@ function noteActivity(item) {
   else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') task.activity = t('调用工具：') + (item.tool || item.toolName || t('处理中'));
   else if (item.type === 'fileChange') task.activity = t('正在处理文件改动');
 }
+function syncThreadIdentity(thread) {
+  if (!thread || !state.thread || thread.id !== state.thread.id) return;
+  if (typeof thread.name === 'string' && thread.name.trim()) state.thread.name = thread.name;
+  else if (thread.name === null) state.thread.name = '';
+  if (typeof thread.preview === 'string' && thread.preview.trim()) state.thread.preview = thread.preview;
+  $('title').textContent = displayThreadTitle(state.thread,t('新会话'));
+}
+
+function displayThreadTitle(thread, fallback) {
+  var raw=(thread && (thread.name || thread.preview)) || '';
+  if(raw.indexOf('用户上传的文件（已保存在电脑上，请按需读取）：\n')>=0){
+    var uploads=bridgeUploadedFiles({content:[{type:'text',text:raw}]});
+    if(uploads)return uploads.text || uploads.files.map(function(file){return file.name;}).join(', ');
+  }
+  return raw || fallback || '';
+}
 function refreshObservedThread() {
   if (state.view !== 'thread' || !state.thread || !state.ready || document.hidden || observerBusy) return;
   clearTimeout(observerTimer);
-  var epoch = observerEpoch, tid = state.thread.id, version = activityVersion;
+  var epoch = observerEpoch, tid = state.thread.id, version = activityVersion, ws = state.ws;
   observerBusy = true;
   refreshQueue();
-  var read = function(method,params) { return call(method,params,8000).then(function(r){return {ok:true,value:r};},function(){return {ok:false};}); };
+  var read = function(method,params) { return call(method,params,8000).then(function(r){return {ok:true,value:r};},function(e){return {ok:false,error:e && e.message || ''};}); };
   // Turn pagination recovers the last lifecycle even when this server has not loaded the desktop thread.
   Promise.all([
     read('thread/read',{threadId:tid,includeTurns:false}),
@@ -1447,17 +1600,31 @@ function refreshObservedThread() {
     read('thread/items/list',{threadId:tid,limit:PAGE_SIZE,sortDirection:'desc'}),
     read('thread/loaded/list',{})
   ]).then(function(results) {
-    if (epoch !== observerEpoch || !state.thread || state.thread.id !== tid) return;
+    if (epoch !== observerEpoch || !state.thread || state.thread.id !== tid || state.ws !== ws ||
+      version !== activityVersion || state.resuming || state.sending || state.handingBack) return;
     var meta = results[0], turns = results[1], items = results[2];
     if (!meta.ok && !turns.ok && !items.ok) {
+      if(state.handedBackThreads && state.handedBackThreads[tid]){setTask('unlinked',t('已请求交还；电脑能否接手仍待确认。这里继续只读查看，不会自动重新占用。'));return;}
       setTask('unknown',t('同步失败，正在重新连接。'));
       if(state.ws)state.ws.close();
       return;
     }
     if (results[3].ok) subscribeIfAlreadyLoaded(results[3].value.data || [],tid,epoch);
+    if (meta.ok && version === activityVersion) syncThreadIdentity(meta.value.thread);
     if (version === activityVersion && !state.resuming && !state.sending) {
-      if (meta.ok && turns.ok) applyObservedStatus(meta.value.thread, (turns.value.data || [])[0]);
+      if(state.handedBackThreads && state.handedBackThreads[tid])applyObservedStatus(meta.ok?meta.value.thread:null,null);
+      else if (meta.ok && turns.ok) {
+        if ((turns.value.data || []).length) state.awaitingFirstTurn = false;
+        applyObservedStatus(meta.value.thread, (turns.value.data || [])[0]);
+      }
       else if (meta.ok && statusKind(meta.value.thread && meta.value.thread.status) === 'active') applyObservedStatus(meta.value.thread,null);
+      else if (meta.ok && statusKind(meta.value.thread && meta.value.thread.status) === 'idle' && beforeFirstTurn(turns.error)) {
+        // Codex returns authoritative idle metadata before it writes the first
+        // rollout. Turn pagination is unavailable until the first user message;
+        // treating that specific response as an unknown task traps Send in Queue.
+        state.awaitingFirstTurn = true;
+        setTask('idle',t('可以发送消息开始任务。'));
+      }
       else setTask('unknown',t('同步失败，暂时无法确认是否完成；将自动重试。'));
     }
     if (items.ok && version === activityVersion) {
@@ -1469,11 +1636,11 @@ function refreshObservedThread() {
           upsertItem(item,true);
           if (state.items[item.id]) state.items[item.id].snapshot = snapshot;
         }
-        noteActivity(item);
+        noteActivity(item,row.turnId);
       });
       if (!rows.length && !state.order.length) task.activity = '';
       if (rows.length) tidyItems();
-    } else if (!items.ok) task.detail += t(' 进度内容暂未同步。');
+    } else if (!items.ok && !state.awaitingFirstTurn) task.detail += t(' 进度内容暂未同步。');
     renderTaskStatus();
   }).finally(function() {
     if (epoch !== observerEpoch) return;
@@ -1740,7 +1907,15 @@ function scrollDown(force) {
 function updateJump() {
   var b = $('jump');
   if (!b) return;
-  b.style.display = stick ? 'none' : 'flex';
+  b.style.display = state.view !== 'thread' || !state.order.length || stick ? 'none' : 'flex';
+}
+
+function resetConversationScroll() {
+  if(state.anchorStop)state.anchorStop();
+  clearTimeout(scrollDown._t);
+  stick=true;
+  $('main').scrollTop=0;
+  updateJump();
 }
 
 function initScrollWatch() {
@@ -1779,6 +1954,7 @@ function initScrollWatch() {
 
 // ── WebSocket ────────────────────────────────────────────────────────────────
 function connect() {
+  if(state.handoffPaused)return;
   if (!window.__dshE2eeSecret && !plainLocalOrigin()) {
     setConn('bad', '连不上');
     toast(t('隧道地址缺少加密密钥，请用完整的手机地址重新打开。'));
@@ -1800,6 +1976,7 @@ function connect() {
         state.ready = true;
         setConn('ok', '桥已连接');
         loadModels();
+        loadCollaborationModes();
         loadAccount();
         if (state.view === 'list') loadThreads();
         else { renderFooter(); startObserving(); }
@@ -1836,6 +2013,7 @@ function connect() {
   ws.onclose = function () {
     if (state.ws !== ws) return;
     state.ready = false;
+    state.handingBack = null;
     resumeSubscription = null;
     state.resumed = false;      // 连接断了，写权限也没了，下次发之前要重新加载
     setConn('bad', t('已断开'));
@@ -1846,10 +2024,21 @@ function connect() {
     state.approvals = {};
     Object.keys(state.pending).forEach(function(id) { state.pending[id].reject(new Error(t('连接中断'))); delete state.pending[id]; });
     renderFooter();
+    if(state.handoffPaused)return;
     var wait = Math.min(1000 * Math.pow(1.6, state.retry++), 15000);
     setTimeout(connect, wait);
   };
   ws.onerror = function () { if(state.ws === ws){setConn('bad', t('连接出错'));renderTaskStatus();} };
+}
+
+function restorePhoneConnection() {
+  if(!state.handoffPaused)return;
+  state.handoffPaused=false;
+  state.handingBack=null;
+  // This only restores the observer socket. Explicitly handed-back threads
+  // keep their markers; do not resume a writer, send a draft or enable a queue.
+  renderFooter();
+  connect();
 }
 
 /**
@@ -1862,9 +2051,10 @@ function connect() {
  */
 function call(method, params, timeoutMs) {
   return new Promise(function (resolve, reject) {
+    if(state.handingBack && /^(thread\/(start|fork|resume)|turn\/(start|steer))$/.test(method)) { reject(new Error(t('正在检查交还，请稍候再操作。'))); return; }
     if (!state.ws || state.ws.readyState !== 1) { reject(new Error(t('连接没就绪'))); return; }
     var id = state.nextId++;
-    state.pending[id] = { resolve: resolve, reject: reject };
+    state.pending[id] = { resolve: resolve, reject: reject, method: method };
     state.ws.send(JSON.stringify({ jsonrpc: '2.0', id: id, method: method, params: params || {} }));
     setTimeout(function () {
       if (state.pending[id]) { delete state.pending[id]; reject(new Error(t('{method} 超时', {method:method}))); }
@@ -1973,7 +2163,7 @@ function showApproval(o) {
   var choices = o.style === 'legacy'
     ? [[t('批准'), 'approved', 'p', t('已批准')], [t('本次会话都批准'), 'approved_for_session', '', t('本会话已批准')],
        [t('拒绝'), 'legacy-deny', 'd', t('已拒绝')], [t('中止'), 'abort', 'd', t('已中止')]]
-    : [[t('批准'), 'accept', 'p', t('已批准')], [t('本次会话都批准'), 'acceptForSession', '', t('本会话已批准')],
+    : [[t('仅批准本次'), 'accept', 'p', t('已批准')], [t('本次会话都批准'), 'acceptForSession', '', t('本会话已批准')],
        [t('拒绝'), 'decline', 'd', t('已拒绝')], [t('拒绝并中止'), 'cancel', 'd', t('已拒绝并中止')]];
 
   if(o.style==='perm')choices=choices.slice(0,3);
@@ -1989,15 +2179,22 @@ function showApproval(o) {
         label=rule.action==='allow'?t('保存网络允许规则'):t('保存网络拒绝规则');
       }else return;
       choices.push([label,decision,'',t('已提交规则决定')]);
-      var detail=document.createElement('div');detail.className='c';
-      detail.textContent=label+'\n'+JSON.stringify(decision,null,2);el.insertBefore(detail,btns);
+       var detail=document.createElement('details');detail.className='approval-rule';
+       var summary=document.createElement('summary');summary.textContent=t('查看可保存的规则');detail.appendChild(summary);
+       var readable=document.createElement('div');readable.className='c';
+       var amendment=decision.acceptWithExecpolicyAmendment && decision.acceptWithExecpolicyAmendment.execpolicy_amendment;
+       readable.textContent=label+'\n'+(Array.isArray(amendment)?amendment.join(' '):rule?rule.action+' · '+rule.host:t('查看原始规则'));detail.appendChild(readable);
+       var raw=document.createElement('details'),rawSummary=document.createElement('summary');rawSummary.textContent=t('查看原始规则');raw.appendChild(rawSummary);
+       var rawText=document.createElement('pre');rawText.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';rawText.textContent=JSON.stringify(decision,null,2);raw.appendChild(rawText);detail.appendChild(raw);
+       el.insertBefore(detail,btns);
     });
   }
-  var done = false;
+  var done = false,persistentButtons=null;
   choices.forEach(function (c) {
     var b = document.createElement('button');
     b.textContent = c[0];
     if (c[2]) b.className = c[2];
+    b.setAttribute('data-scope',typeof c[1]==='object'?'saved-rule':c[1]==='acceptForSession'?'session':c[1]==='accept'?'once':'decline');
     b.onclick = function () {
       if (done) return;
       if(!state.ready){toast(t('连接已断开，请等重连后再处理'));return;}
@@ -2013,7 +2210,7 @@ function showApproval(o) {
       }
       if(!reply(o.id,payload))return;
       done=true;
-      Array.prototype.forEach.call(btns.querySelectorAll('button'),function(x){x.disabled=true;});
+       Array.prototype.forEach.call(el.querySelectorAll('button'),function(x){x.disabled=true;});
       b.textContent=c[3]||c[0];
       delete state.approvals[o.id];
       if(state.thread && state.thread.id===o.threadId) { setTask('running',t('已提交审批，等待任务继续。')); refreshObservedThread(); }
@@ -2022,7 +2219,13 @@ function showApproval(o) {
       el.querySelector('.h').textContent = (c[3] || c[0]) + t('：') + o.title;
       setTimeout(function () { el.remove(); }, 1200);
     };
-    btns.appendChild(b);
+    if(typeof c[1]==='object'){
+      if(!persistentButtons){
+        persistentButtons=document.createElement('div');persistentButtons.className='btns';persistentButtons.style.cssText='margin-top:14px;padding-top:10px;border-top:1px solid var(--line)';
+        var note=document.createElement('div');note.className='w';note.textContent=t('保存规则会影响后续请求。只想允许这一次，请选择“仅批准本次”。');el.appendChild(note);el.appendChild(persistentButtons);
+      }
+      persistentButtons.appendChild(b);
+    }else btns.appendChild(b);
   });
 
   // 挂到独立容器：切会话/返回列表时 #body 会被清空，混在一起的话这张卡会被抹掉，
@@ -2168,6 +2371,8 @@ function onNotify(method, p) {
       else refreshObservedThread();
       break;
     case 'turn/started':
+      state.awaitingFirstTurn = false;
+      task.activity = '';
       state.running = true; state.turnId = (p.turn && p.turn.id) || null;
       setTask('running',t('任务已开始，正在接收进度。'));
       renderFooter(); break;
@@ -2189,10 +2394,10 @@ function onNotify(method, p) {
       break;
 
     case 'item/started':
-      if (p.item) { upsertItem(p.item); noteActivity(p.item); setTask(p.item.type === 'reasoning' ? 'thinking' : 'running',t('正在接收最新进度。')); } break;
+      if (p.item) { upsertItem(p.item); noteActivity(p.item,p.turnId); setTask(p.item.type === 'reasoning' ? 'thinking' : 'running',t('正在接收最新进度。')); } break;
 
     case 'item/completed':
-      if (p.item) { upsertItem(p.item, true); noteActivity(p.item); renderTaskStatus(); } break;
+      if (p.item) { upsertItem(p.item, true); noteActivity(p.item,p.turnId); renderTaskStatus(); } break;
 
     case 'item/agentMessage/delta':
       appendDelta(p.itemId, p.delta, 'text'); break;
@@ -2340,7 +2545,7 @@ function upsertItem(item, isComplete) {
     //   现在：把先画的那条**改名**成服务端的 id、节点留在原位（不闪、不跳），
     //   内容用服务端那份重建（附件、图片都在里面）。
     if (item.type === 'userMessage') {
-      var ph = takePendingLocal(userTextOf(item));
+      var ph = takePendingLocal(userTextOf(item),item.clientId);
       if (ph) {
         var old = state.items[ph.id];
         delete state.items[ph.id];
@@ -2432,9 +2637,34 @@ function el(cls, html) {
   return d;
 }
 
+function bridgeUploadedFiles(item) {
+  var raw=userTextOf(item),marker='用户上传的文件（已保存在电脑上，请按需读取）：\n';
+  var at=raw.lastIndexOf(marker);
+  if(at<0 || (at>0 && raw.slice(at-2,at)!=='\n\n'))return null;
+  var lines=raw.slice(at+marker.length).trim().split('\n');
+  if(!lines.length || lines.length>5)return null;
+  var files=[];
+  try { lines.forEach(function(line){
+    var file=JSON.parse(line),keys=Object.keys(file||{}).sort().join(',');
+    if(keys!=='name,path'||typeof file.name!=='string'||typeof file.path!=='string'||!file.name||/[\u0000-\u001f\\/]/.test(file.name)||
+       !/^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(file.path)||!/[\\/]+uploads[\\/]+codex[\\/]+[a-f0-9-]{16,}[\\/]+[^\\/]+$/i.test(file.path)||baseName(file.path)!==file.name)throw Error('shape');
+    files.push(file);
+  }); } catch(e) {return null;}
+  // Recognize our own submissions, never turn arbitrary pasted JSON into files.
+  var ours=/^pocket-bridge-upload-/.test(item.clientId||'') || files.every(function(file){return state.uploadedFiles && state.uploadedFiles[file.path]===file.name;});
+  // Older bridge messages had no client ID. The strict marker and upload-path
+  // shape are recognizable, but keep their original note available to inspect.
+  return {text:raw.slice(0,at).trimEnd(),files:files,legacy:!ours,original:raw.slice(at)};
+}
+function uploadedFileButtonHtml(file) {
+  return '<button type="button" class="filecite" data-filecite="'+esc(file.path)+'">'+esc(file.name)+'<span class="fc-go">'+esc(t('打开文件'))+'</span></button>';
+}
 function buildUser(item) {
   var txt = (item.content || []).map(function (c) { return asText(c.text); }).join('');
+  var uploads=bridgeUploadedFiles(item);if(uploads)txt=uploads.text;
   var node=el('msg user', '<div class="who">' + t('你') + '</div><div class="bub">' + fmt(txt) + '</div>');
+  if(uploads){var chips=document.createElement('div');chips.className='uploaded-files';chips.innerHTML=uploads.files.map(uploadedFileButtonHtml).join('');node.appendChild(chips);}
+  if(uploads && uploads.legacy){var original=document.createElement('details');original.className='tool';original.innerHTML='<summary>'+esc(t('查看原始附件说明'))+'</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(uploads.original)+'</pre>';node.appendChild(original);}
   (item.content||[]).forEach(function(c){
     if(c.type==='localImage' && c.path)node.appendChild(buildImageView(c.path));
     else if(c.type==='image' && /^data:image\/(png|jpeg|gif|webp);base64,/.test(c.url||'')){
@@ -2666,7 +2896,9 @@ function fileRequest(path, width) {
   return privateFetch(fileUrl(path, width), { cache: 'no-store' });
 }
 
-var IMG_RE = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
+// Only raster formats are previews. Active document formats are downloaded as
+// inert files by the gateway, even when a tool labels them as an image.
+var IMG_RE = /\.(png|jpe?g|gif|webp|bmp|ico)$/i;
 var DOC_RE = /\.(pdf|docx?|xlsx?|pptx?|md|txt|json|csv|log|ya?ml|xml)$/i;
 
 function fileIcon(p) {
@@ -2719,6 +2951,7 @@ function watchImageBlob(img, url) {
 }
 
 function buildImageView(p, caption) {
+  if (p && !IMG_RE.test(p)) return buildFileCard(p, caption);
   var d = document.createElement('div');
   d.className = 'imgbox';
   if (!p) { d.innerHTML = '<div class="tool"><div style="padding:9px 13px">🖼 ' + t('（没有路径）') + '</div></div>'; return d; }
@@ -3367,7 +3600,7 @@ function isUnread(t) {
 function threadRow(t) {
   var b = document.createElement('button');
   b.className = 'item';
-  var title = t.name || t.preview || tr('（没有标题）');
+  var title = displayThreadTitle(t,tr('（没有标题）'));
   var st = t.status && (t.status.type || t.status);
   var running = st === 'running' || st === 'active' || st === 'inProgress';
   var flags = (t.status && t.status.activeFlags) || [];
@@ -3425,6 +3658,7 @@ function openNewThreadPicker() {
   $('sheet').classList.add('on');
 }
 function newThread(cwd) {
+  if(state.handingBack){toast(t('正在检查交还，请稍候再操作。'));return;}
   if (typeof cwd !== 'string' || !absoluteProjectPath(cwd.trim())) { openNewThreadPicker(); return; }
   cwd = cwd.trim();
   setConn('wait', t('创建中'));
@@ -3438,9 +3672,9 @@ function newThread(cwd) {
     if (!th.id) throw new Error(t('服务端没返回会话 id'));
     // 新建的会话本来就是加载好的，不用再 resume
     openThread({
-      id: th.id, name: t('新会话'), cwd: (r && r.cwd) || cwd,
+      id: th.id, name: th.name || '', preview: th.preview || t('新会话'), cwd: (r && r.cwd) || cwd,
       model: (r && r.model) || null, reasoningEffort: (r && r.reasoningEffort) || null
-    });
+    }, {firstTurnPending:true});
     state.resumed = true;
     scheduleRelease();
   }).catch(function (e) {
@@ -3454,7 +3688,7 @@ function newThread(cwd) {
  * user's behalf: the child is opened with the draft visible for review. */
 function forkCurrentThread(source) {
   source=source || state.thread;
-  if(!source || !source.id || !state.ready || state.forking)return Promise.resolve(false);
+  if(!source || !source.id || !state.ready || state.forking || state.handingBack)return Promise.resolve(false);
   if(!state.thread || state.thread.id!==source.id)return Promise.resolve(false);
   var pending=draftAttachments(source.id).slice();
   if(pending.some(function(a){return a.status!=='ready';})){
@@ -3516,7 +3750,7 @@ function forkCurrentThread(source) {
  */
 var PAGE_SIZE = 30;
 
-function openThread(t) {
+function openThread(t, options) {
   stopObserving();
   if(detachedHandbacks[t.id]){
     clearTimeout(detachedHandbacks[t.id]);delete detachedHandbacks[t.id];
@@ -3535,19 +3769,21 @@ function openThread(t) {
   markSeen(t);       // 记下「这条我看过了」，列表里的未读点靠它消掉
   queueEntries=[];renderQueue();refreshQueue();
   state.items = {}; state.order = [];
+  resetConversationScroll();
   // 换会话时把「等回推的占位」也清掉：它们属于上一条会话，留着会认错人
   state.pendingLocal = [];
   state.running = false;
   state.turnId = null;
+  state.awaitingFirstTurn = !!(options && options.firstTurnPending);
   state.resuming = false;
-  task = {kind:'checking',detail:tr('正在读取最近一轮任务的状态。'),activity:'',syncedAt:0};
-  state.resumed = false;
+  task = {kind:state.awaitingFirstTurn?'idle':'checking',detail:state.awaitingFirstTurn?tr('可以发送消息开始任务。'):tr('正在读取最近一轮任务的状态。'),activity:'',syncedAt:0};
+  state.resumed = state.awaitingFirstTurn;
   state.olderCursor = null;
   state.loadingOlder = false;
   state.noMore = false;
   renderPendingApprovals();
 
-  $('title').textContent = t.name || t.preview || tr('会话');
+  $('title').textContent = displayThreadTitle(t,tr('会话'));
   $('back').style.display = '';
   $('footer').style.display = '';
   $('body').innerHTML = '<div class="skel"></div><div class="skel"></div>';
@@ -3613,12 +3849,17 @@ function warmUpThread() { /* 不再预加载：翻看会话不该占电脑的写
 /** A short follow-up grace period, scoped to this exact conversation. */
 function scheduleRelease() {
   clearTimeout(state.releaseTimer);
-  if(!state.resumed || !state.thread)return;
+  state.releaseTimer = null;
+  if(!state.resumed || !state.thread || state.handingBack || state.renameEditingId===state.thread.id)return;
+  // An empty thread has no persisted rollout yet. Unsubscribing after 30 seconds
+  // destroys it, so a person still writing their first message cannot resume it.
+  // Leaving the page still releases it; after the first turn, normal handback resumes.
+  if(state.awaitingFirstTurn)return;
   var tid=state.thread.id;
   state.releaseTimer = setTimeout(function () {
     state.releaseTimer=null;
     if(!state.thread || state.thread.id!==tid)return;
-    if (state.running || state.resuming) { scheduleRelease(); return; }
+    if (state.running || state.resuming || state.handingBack) { scheduleRelease(); return; }
     releaseThread();
     renderFooter();
   }, 30 * 1000);
@@ -3781,7 +4022,7 @@ function firstVisibleBlock() {
 /** 离开当前会话：把写锁还回去 */
 function releaseThread() {
   var t = state.thread;
-  if (!state.resumed || state.resuming) return;
+  if (!state.resumed || state.resuming || state.handingBack) return;
   if (state.running) {
     // The task must finish, but leaving its page must not hold the desktop
     // writer forever. Observe this exact thread until it becomes idle.
@@ -3791,6 +4032,11 @@ function releaseThread() {
   clearTimeout(state.releaseTimer);state.releaseTimer=null;
   state.resumed = false;
   if (!t || !state.ready) return;
+  // The server may keep this ID in loaded/list during its idle grace period.
+  // Mark observation-only before unsubscribe so an in-flight observer response
+  // cannot reacquire the writer. Only an explicit Connect clears this marker.
+  if(!state.handedBackThreads)state.handedBackThreads=Object.create(null);
+  state.handedBackThreads[t.id]=true;
   // 不等结果 —— 使用者已经在往外走了，卡在这里只会让他觉得卡顿
   call('thread/unsubscribe', { threadId: t.id }).catch(function () { });
 }
@@ -3821,7 +4067,14 @@ function scheduleDetachedHandback(tid) {
 function updateLockHint() {
   var el = document.getElementById('lockhint');
   if (!el) return;
-  el.style.display = state.resumed ? 'flex' : 'none';
+  el.style.display = state.view === 'thread' ? 'flex' : 'none';
+  el.textContent = state.handoffPaused ? t('实时更新暂停 · 仅查看') : !state.ready ? t('连接中 · 仅查看') : state.resumed ? t('手机可发送') : t('当前仅查看');
+  ['session-control-hint','lock-control-status'].forEach(function(id){
+    var hint=$(id);if(!hint)return;
+    hint.textContent=state.handoffPaused ? t('实时更新暂停 · 仅查看') : !state.ready ? t('连接中 · 仅查看') : state.resumed
+      ?tr('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。')
+      :tr('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
+  });
   // 点它 = 打开「会话写入锁」面板（也是一个入口，见 openLockPanel 的说明）
   if (!el.onclick) {
     el.onclick = function () { openLockPanel(); };
@@ -3870,7 +4123,7 @@ function showWriterConflict(t, why) {
   btns.appendChild(b3);
 
   var b4 = document.createElement('button');
-  b4.textContent = tr('接管原会话…（会关闭整个电脑 Codex）');
+  b4.textContent = tr('查看会话控制');
   b4.onclick = openLockPanel;
   btns.appendChild(b4);
 
@@ -3880,151 +4133,89 @@ function showWriterConflict(t, why) {
   scrollDown(true);
 }
 
-/**
- * 请电脑端把这条会话交出来（服务端动作见 scripts/codex-lock.js）。
- *
- * 两条规矩：
- *   1. **先确认再做**。确认框必须把代价写全 —— 尤其是「电脑上正在跑的任务
- *      可能会被终止」。这跟更换密钥、换地址那两个危险按钮是同一条规矩：
- *      后果说清楚了，使用者才有资格决定要不要按。
- *   2. 做完**自动重试**加载这条会话。使用者按这个按钮的目的就是「接着下指令」，
- *      让他再手动点一次「重试」是把我们的内部分工摊给他看。
- *
- * 服务端回的是 code（不是一句拼好的中文）：文案在这儿出三种语言，
- * 服务端那边的 message 只进日志/排查用。
- */
-var LOCK_RESULT_TEXT = {
-  'app-server': '现在能拿到这条会话了 —— 占着它的不是电脑那边（多半是手机自己之前占着）。已经还回去，正在重试…',
-  'none': '这条会话的锁本来就是空的。正在重试…',
-  'desktop-closed': '电脑端占用已解除。正在重新连接，连接成功后可以从手机发送新指令…',
-  'not-desktop': '会话被另一个 Codex 占着，但电脑上的 Codex 没开着 —— 不是它占的，我没有动任何东西。请稍等再试一次。',
-  'still-locked': '电脑上的 Codex 已经关掉，但这条会话还是拿不到。请稍等再试，或在电脑上重开一次 Codex。',
-  'stop-failed': '没能关掉电脑上的 Codex —— 锁没释放，什么都没变。',
-  'unclear': '没问出锁在谁手里，所以**没有动电脑上的任何东西**。',
-  'bad-thread': '会话编号不对，请回到列表重新打开这条会话。',
-  'no-confirm': '释放没做成（没有确认）。'
-};
-
-/** 手机上次撞上「被占用」时看到的原文 —— 只随释放请求发给服务端进日志，用来诊断 */
+/** Request only the bridge phone subscription handback. */
 var lastWriterError = '';
 
-function releaseDesktopLock(t, card, btn) {
-  var tid = t && t.id;
-  if (!tid) { toast(tr('会话编号不对，请回到列表重新打开这条会话。')); return; }
-  if (!confirm(tr('释放电脑端的锁？\n\n· 如果这条会话由电脑端占用，将关闭电脑上的 Codex，正在执行的电脑端任务会被终止\n· 已保存的会话记录会保留\n· 锁释放成功后，手机可以发送新指令\n\n确定吗？'))) return;
+function phoneHandbackIssue(ws, tid) {
+  if(!state.ready || !ws || state.ws!==ws || ws.readyState!==1 || !state.thread || state.thread.id!==tid)
+    return tr('连接或会话已改变，未断开手机连接；请重新检查后再交还。');
+  if(state.running || state.sending || state.resuming || state.forking || resumeSubscription ||
+     Object.keys(state.pending || {}).some(function(id){return /^(thread\/(start|fork|resume)|turn\/(start|steer))$/.test(state.pending[id].method || '');}))
+    return tr('仍有手机任务或连接请求在进行，未断开连接；请等完成后再交还。');
+  if(Object.keys(state.approvals || {}).length)
+    return tr('还有授权、选择或提问待处理，未断开连接；请处理后再交还。');
+  if(typeof queueEntries!=='undefined' && queueEntries.length || queueDraft)
+    return tr('仍有待发送内容，未断开连接；请先处理或取消待办后再交还。');
+  return '';
+}
 
-  var label = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
-  toast(tr('正在释放电脑端的锁…'));
-  askReleaseLock(tid, function (text, ok) {
-    if (btn) { btn.disabled = false; btn.textContent = label; }
-    if (!ok) {
-      // ★ 失败要**留在屏幕上**，不能只飘一条 toast。
-      //   操作结果需要留在屏幕上，否则结果一闪而过、
-      //   而界面看起来和按之前一模一样。
-      showLockResult(text, t);
-      return;
-    }
-    toast(text);
-    if (card) card.remove();
-    var old = document.getElementById('lock-result');
-    if (old) old.remove();
-    openThread(t);
+function verifyPhoneHandbackIdle(ws, tid, requireCurrent) {
+  var issue=phoneHandbackIssue(ws,tid);
+  if(issue)return Promise.reject(new Error(issue));
+  return call('thread/loaded/list',{},10000).then(function(r){
+    var ids=r && (r.data || r.threadIds);
+    if(!Array.isArray(ids) || r.nextCursor || ids.some(function(id){return typeof id!=='string' || !id;}))
+      throw new Error(tr('无法确认所有手机会话的状态，未断开连接；请稍后重试。'));
+    ids=ids.slice();
+    if(requireCurrent && ids.indexOf(tid)<0)ids.push(tid);
+    Object.keys(detachedHandbacks).forEach(function(id){if(ids.indexOf(id)<0)ids.push(id);});
+    return Promise.all(ids.map(function(id){
+      return call('thread/read',{threadId:id,includeTurns:false},10000).then(function(meta){
+        var thread=meta && meta.thread,kind=statusKind(thread && thread.status);
+        if(!thread || thread.id!==id || (kind!=='idle' && kind!=='notLoaded') || (id===tid && requireCurrent && kind!=='idle'))
+          throw new Error(tr('其他手机会话仍在运行、等待处理或状态未确认，未断开连接；请等完成后再交还。'));
+      });
+    })).then(function(){
+      var changed=phoneHandbackIssue(ws,tid);if(changed)throw new Error(changed);
+      return ids;
+    });
   });
 }
 
-/**
- * 释放失败时留下的一张卡片：说清发生了什么、并且能再试一次。
- * 不自动消失 —— 使用者需要看到它才会知道「这一下到底做了没有」。
- */
-function showLockResult(text, t) {
-  var old = document.getElementById('lock-result');
-  if (old) old.remove();
-  var card = document.createElement('div');
-  card.className = 'appr';
-  card.id = 'lock-result';
-  card.innerHTML = '<div class="h">' + tr('释放电脑端的锁：没成功') + '</div>' +
-    '<div class="w" style="margin-top:0"></div><div class="btns"></div>';
-  card.querySelector('.w').textContent = text;
-  var btns = card.querySelector('.btns');
-
-  var again = document.createElement('button');
-  again.className = 'p';
-  again.textContent = tr('再试一次');
-  again.onclick = function () { card.remove(); releaseDesktopLock(t, null, null); };
-  btns.appendChild(again);
-
-  var ok = document.createElement('button');
-  ok.textContent = tr('知道了');
-  ok.onclick = function () { card.remove(); };
-  btns.appendChild(ok);
-
-  $('body').insertBefore(card, $('body').firstChild);
-  scrollDown(true);
-}
-
-/**
- * 真的去发那一枪。
- *
- * 从 releaseDesktopLock() 里拆出来是因为**它现在有两个入口**：
- *   · 「被占用」那张卡片上的按钮（做完自动重试打开会话）
- *   · 设置面板里的「会话写入锁」（做完只留一句提示，人还在面板里）
- * 确认框、请求头、code→人话的映射只能有一份 —— 两份迟早会走样，
- * 而这条路的走样代价是「按了没反应」或者「代价没说清就动手」。
- */
-/**
- * 释放**手机这边**的锁 —— 一个电脑程序都不碰。
- *
- * 和 askReleaseLock 的区别（使用者 2026-09-27 要的第二个按钮）：
- *   前者找的是**电脑端**占着的锁，最后一招是关掉电脑上的 Codex（有代价）
- *   这个只收手机自己的摊子：把我们 app-server 对这条会话的占用还回去，
- *   再把我们自己起的那个服务停掉（桌面版不在它范围内）
- *
- * 代价为零，所以服务端**不要求** confirm；界面上仍然问一句，是为了让人
- * 知道「接下来手机要重连一次」。
- */
 function askReleasePhone(tid, done) {
-  privateFetch('/codex/lock', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dsh-lock': '1' },
-    body: JSON.stringify({ action: 'phone', threadId: tid })
-  }).then(function (r) {
-    return r.json().then(function (j) { return j || {}; },
-      function () { throw Error('HTTP ' + r.status); });
-  }).then(function (j) {
-    if (j.ok) { done(tr('手机端的锁已经松开（电脑上的 Codex 没被动过）。'), true, j); return; }
-    done(tr('释放手机端的锁：没成功') + (j.error || j.message ? '：' + (j.error || j.message) : ''), false, j);
-  }).catch(function (e) {
-    done(tr('释放手机端的锁：没成功') + '：' + e.message, false);
+  // Current Codex may retain an idle writer for roughly a minute after its last
+  // subscriber leaves. Socket closure does not prove the computer can resume.
+  // Never close a socket with active or unanswered work, and never restart an
+  // app-server or the desktop process.
+  var ws=state.ws,token={},ids=[],j={writerReleaseVerified:false,writerReleased:null,writerAvailability:'unknown',handoffStatus:'requested'};
+  var issue=state.handingBack ? tr('正在检查交还，请稍候再操作。') : phoneHandbackIssue(ws,tid);
+  if(issue){done(issue,false,j);return Promise.resolve(false);}
+  state.handingBack=token;clearTimeout(state.releaseTimer);state.releaseTimer=null;renderFooter();
+  return verifyPhoneHandbackIdle(ws,tid,true).then(function(loaded){
+    ids=loaded;
+    // This is the encrypted socket that owns the phone subscription, not a new
+    // HTTP helper's independent RPC connection.
+    return call('thread/unsubscribe',{threadId:tid},15000);
+  }).then(function(r){
+    j.subscriptionStatus=r && r.status;
+    if(['unsubscribed','notSubscribed','notLoaded'].indexOf(j.subscriptionStatus)<0)
+      throw new Error(tr('尚未确认取消手机订阅；电脑能否接手仍待确认。'));
+    // A background turn or question may arrive during unsubscribe. Check again
+    // before closing the shared phone socket, including all other loaded threads.
+    return verifyPhoneHandbackIdle(ws,tid,false);
+  }).then(function(after){
+    var changed=phoneHandbackIssue(ws,tid);if(changed)throw new Error(changed);
+    if(!state.handedBackThreads)state.handedBackThreads=Object.create(null);
+    ids.concat(after,[tid]).forEach(function(id){state.handedBackThreads[id]=true;});
+    state.resumed=false;state.awaitingFirstTurn=false;state.handoffPaused=true;
+    setTask('unlinked',tr('已请求交还；电脑能否接手仍待确认。这里继续只读查看，不会自动重新占用。'));
+    // Map first, then keep the socket disconnected. A persistent observer may
+    // retain Codex's writer; only the user can restore this phone connection.
+    ws.close(1000,'phone-handoff');
+    j.phoneConnectionCloseRequested=true;
+    done(tr('已请求断开手机控制连接，实时更新已暂停；电脑能否接手仍待实际确认。Codex 可能还要约一分钟才释放空闲会话，请稍后在电脑重试。需要时请明确恢复手机连接。'),true,j);
+    return true;
+  }).catch(function(e){
+    done(tr('交还未完成；已保留手机连接：')+e.message,false,j);
+    return false;
+  }).finally(function(){
+    state.handingBack=null;
+    renderFooter();
+    if(state.ready && state.resumed)scheduleRelease();
   });
 }
 
-function askReleaseLock(tid, done) {
-  privateFetch('/codex/lock', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-dsh-lock': '1' },
-    body: JSON.stringify({
-      threadId: tid, confirm: true,
-      // 把「手机看到的原文」一并报上去（只进服务端日志）。下次「点不动」时，
-      // 日志里就有第一手材料，不用再靠猜。
-      seenError: lastWriterError || undefined
-    })
-  }).then(function (r) {
-    // 409 也带 JSON（ok:false + code），所以两种状态都往下读
-    return r.json().then(function (j) { return j || {}; },
-      function () { throw Error('HTTP ' + r.status); });
-  }).then(function (j) {
-    if (j.ok) {
-      var m = LOCK_RESULT_TEXT[j.method];
-      done(tr(m || '这条会话的锁本来就是空的。正在重试…'), true);
-      return;
-    }
-    var key = j.code && LOCK_RESULT_TEXT[j.code] ? j.code : null;
-    done(key ? tr(LOCK_RESULT_TEXT[key]) : tr('释放失败：') + (j.error || j.message || '未知原因'), false);
-  }).catch(function (e) {
-    done(tr('释放失败：') + e.message, false);
-  });
-}
+
 
 /**
  * 拉一次「账户 / 额度 / 模型 / 项目」。
@@ -4042,6 +4233,28 @@ function loadModels() {
   return call('model/list', {}).then(function (r) {
     state.models = (r && r.data) || [];
   }).catch(function () { state.models = []; });
+}
+function loadCollaborationModes() {
+  return call('collaborationMode/list',{}).then(function(r){
+    state.collaborationModes=((r && r.data)||[]).filter(function(m){return m && ['plan','default'].indexOf(m.mode)>=0;});
+  }).catch(function(){state.collaborationModes=[];});
+}
+function selectedCollaborationMode() {
+  if(!state.pick.mode)return null;
+  var preset=state.collaborationModes.filter(function(m){return m.mode===state.pick.mode;})[0];
+  if(!preset)throw Error(t('服务端没有返回可用协作模式，请使用当前会话设置。'));
+  var model=state.pick.model || (state.thread && state.thread.model) || preset.model;
+  if(!model)throw Error(t('请等待会话模型信息加载后再切换模式'));
+  return {mode:preset.mode,settings:{model:model,
+    reasoning_effort:state.pick.effort || preset.reasoning_effort || null,developer_instructions:null}};
+}
+function collaborationLabel(mode) { return mode==='plan'?t('规划（Plan）'):mode==='default'?t('执行（Default）'):t('沿用会话设置'); }
+function openCollaborationPicker() {
+  var choices=[{label:t('沿用会话设置'),mode:null}].concat(state.collaborationModes.map(function(m){return {label:collaborationLabel(m.mode),mode:m.mode};}));
+  pickList(t('协作模式'),choices,collaborationLabel(state.pick.mode),function(choice){state.pick.mode=choice.mode;openSheet();});
+  var info=document.createElement('div');info.className='info';
+  info.textContent=state.collaborationModes.length?t('模式将在下一条新任务生效；不会改变电脑配置的审批或沙箱权限。'):t('服务端没有返回可用协作模式，请使用当前会话设置。');
+  $('sheetInner').appendChild(info);
 }
 
 /** 从会话列表里攒出「最近用过的项目目录」—— 没有专门的项目接口，这是最实在的来源 */
@@ -4066,9 +4279,11 @@ function baseName(p) {
 
 // ── 输入区 ───────────────────────────────────────────────────────────────────
 function renderFooter() {
+  var paused=$('phone-observation-paused');if(paused)paused.hidden=!state.handoffPaused;
   renderTaskStatus();
   renderAttachments();
   renderQueue();
+  renderQueueSaveNotice();
   updateLockHint();   // 「占用中」的提示跟着写锁状态走
   var f = $('footer');
   if (state.view !== 'thread') { f.style.display = 'none'; return; }
@@ -4080,6 +4295,13 @@ function renderFooter() {
   var uncertain = !state.ready || ['checking','unknown','offline'].indexOf(task.kind) >= 0;
   var saveOnly=queueOnly();
   var readOnlySave=task.kind==='unlinked';
+  var connectionPanel=$('connect-thread-panel');
+  if(connectionPanel){
+    connectionPanel.hidden=!!state.resumed||!state.thread;
+    $('connect-current').disabled=!state.ready||!!state.resuming||!!state.handingBack;
+    $('connect-current').textContent=state.resuming?t('正在连接此会话…'):t('连接此会话');
+    $('fork-from-composer').disabled=!state.ready||!!state.forking||!!state.handingBack;
+  }
   $('send-mode').style.display=(state.running||saveOnly)&&!readOnlySave?'':'none';
   // ★ 不再因为「状态没确认」就禁用「立即补充」，也不再把它改回「排队发送」。
   //   原来那样做的后果（使用者实测）：任务进行中，他只能排队，而且界面上
@@ -4096,12 +4318,13 @@ function renderFooter() {
   // unconfirmed. For a completed or idle task, send() starts a new turn even
   // when the saved running-task preference is Queue, so the button must say Send.
   var queuing=readOnlySave||((state.running||saveOnly)&&$('send-mode').value==='queue');
-  $('send').disabled = !!state.sending || !!(state.thread && state.forking===state.thread.id) || draftAttachments().some(function(a){return a.status!=='ready';});
+  $('send').disabled = !!state.sending || !!state.handingBack || !!(state.thread && state.forking===state.thread.id) || draftAttachments().some(function(a){return a.status!=='ready';});
   $('send').classList.toggle('queue',queuing);
   $('send').textContent=readOnlySave?t('保存待办'):queuing?t('排队'):'↑';
   $('send').style.fontSize=queuing?'13px':'';
   $('send').title = readOnlySave?t('仅保存到电脑，尚未执行'):queuing ? t('保存到电脑队列，不打断任务') : uncertain ? t('状态未确认：发送时会先确认一次当前任务') : state.running ? t('发送补充意见') : t('发送');
   $('send').setAttribute('aria-label',readOnlySave?t('保存待办'):queuing ? t('加入队列') : state.running ? t('发送补充意见') : t('发送'));
+  if(state.queueSavingThreadId===state.thread.id){$('send').textContent=t('保存中…');$('send').setAttribute('aria-label',t('保存中…'));}
   $('input').placeholder = readOnlySave?t('此会话只读；可以保存待办，或复制上下文到手机独立续聊…'):saveOnly ? t('先保存要求，等待接通执行端…') : queuing ? t('输入下一项要求，完成后依次执行…') : state.running ? t('补充要求，不会停止当前任务…') : t('说点什么…');
 
   // 正在加载会话时，把发送键换成一个明确的「加载中」——
@@ -4143,6 +4366,7 @@ function renderFooter() {
  * 大会话（实测有 3.3GB 的）要几分钟。读历史不需要它，所以不该一进来就付这个代价。
  */
 function send() {
+  if(state.handingBack){toast(t('正在检查交还，请稍候再操作。'));return;}
   var box = $('input');
   var text = box.value.trim();
   if (!state.thread) return;
@@ -4237,16 +4461,21 @@ function send() {
   var submittedThread=state.thread;
   state.sending = true;
   activityVersion++;
+  task.activity = '';
+  state.turnId = null;
   state.running = true;
   setTask('running',t('消息正在发送，等待任务回执。'));
   renderFooter();
 
   var params = {
     threadId: state.thread.id,
-    input: attachmentInput(text,attachments)
+    input: attachmentInput(text,attachments),
+    clientUserMessageId:'pocket-bridge-'+(attachments.some(function(a){return a.upload.kind!=='image';})?'upload-':'msg-')+(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(16).slice(2))
   };
   if (state.pick.model) params.model = state.pick.model;
   if (state.pick.effort) params.effort = state.pick.effort;
+  try { var mode=selectedCollaborationMode();if(mode)params.collaborationMode=mode; }
+  catch(e){state.sending=false;state.running=false;setTask('idle',e.message);toast(e.message);return;}
 
   // 回执里也带着这一轮的 id —— 不能只依赖 turn/started 通知，
   // 那条一旦没收到，后面的「停止」就会因为缺 turnId 而失败。
@@ -4254,7 +4483,12 @@ function send() {
     state.sending = false;
     attachmentSent(submittedThread.id,attachments);
     if(state.thread!==submittedThread)return;
-    addLocalUser(attachmentLabel(text,attachments));
+    state.awaitingFirstTurn = false;
+    if(!submittedThread.name && text && (!submittedThread.preview || submittedThread.preview===t('新会话'))){
+      submittedThread.preview=text.replace(/\s+/g,' ').slice(0,72);
+      $('title').textContent=submittedThread.preview;
+    }
+    addLocalUser(attachmentLabel(text,attachments),userTextOf({content:params.input}),params.clientUserMessageId);
     clearSubmittedTextDraft(submittedThread.id,text);
     var id = r && (r.turnId || (r.turn && r.turn.id));
     if (id) state.turnId = id;
@@ -4318,14 +4552,14 @@ function steerTurn(text,box,attachments) {
     sendWhenUncertain(text,box,attachments);
     return;
   }
-  var tid=state.thread.id, turnId=state.turnId;
+  var tid=state.thread.id, turnId=state.turnId,input=attachmentInput(text,attachments);
   state.sending=true;
   renderFooter();
-  call('turn/steer',{threadId:tid,expectedTurnId:turnId,input:attachmentInput(text,attachments)},15000).then(function(){
+  call('turn/steer',{threadId:tid,expectedTurnId:turnId,input:input},15000).then(function(){
     attachmentSent(tid,attachments);
     clearSubmittedTextDraft(tid,text);
     if(state.thread && state.thread.id===tid){
-      addLocalUser(attachmentLabel(text,attachments));
+      addLocalUser(attachmentLabel(text,attachments),userTextOf({content:input}));
       toast(t('补充意见已发送，任务继续执行'));
     }
   }).catch(function(e){
@@ -4337,7 +4571,8 @@ function steerTurn(text,box,attachments) {
 }
 
 /** 本地先把用户这条画出来，不等服务端回推 —— 手感差别很大 */
-function addLocalUser(text) {
+function addLocalUser(text,wireText,clientId) {
+  if(clientId && Object.keys(state.items).some(function(key){var item=state.items[key].item;return item && item.type==='userMessage' && item.clientId===clientId;}))return;
   var id = 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2, 6);
   var rec = state.items[id] = { item: { id: id, type: 'userMessage' }, acc: text, created: true };
   state.order.push(id);
@@ -4345,7 +4580,7 @@ function addLocalUser(text) {
   $('body').appendChild(rec.el);
   // 记进「等回推」的名单：服务端那条一到，就把它对上（见 upsertItem），
   // 否则同一句话会被画两遍。
-  rememberPendingLocal(id, text);
+  rememberPendingLocal(id, wireText===undefined?text:wireText,clientId);
   scrollDown(true);
 }
 
@@ -4370,9 +4605,9 @@ function userTextOf(item) {
   return String((item && item.text) || '');
 }
 
-function rememberPendingLocal(id, raw) {
+function rememberPendingLocal(id, raw, clientId) {
   state.pendingLocal = state.pendingLocal || [];
-  state.pendingLocal.push({ id: id, raw: normalizeSaid(raw), at: Date.now() });
+  state.pendingLocal.push({ id: id, raw: normalizeSaid(raw), clientId:clientId||'', at: Date.now() });
   while (state.pendingLocal.length > PENDING_LOCAL_MAX) state.pendingLocal.shift();
 }
 
@@ -4384,15 +4619,15 @@ function rememberPendingLocal(id, raw) {
  * 「刚发出去、还没等到回推」的这几条里做，而且先到先配，所以不会张冠李戴到
  * 会话里别的消息上。
  */
-function takePendingLocal(serverText) {
+function takePendingLocal(serverText, clientId) {
   var list = state.pendingLocal || [];
   var want = normalizeSaid(serverText);
   var now = Date.now();
   list = list.filter(function (p) { return now - p.at < PENDING_LOCAL_TTL; });
   state.pendingLocal = list;
-  if (!want) return null;
+  if (!want && !clientId) return null;
   var i;
-  for (i = 0; i < list.length; i++) if (list[i].raw === want) break;
+  for (i = 0; i < list.length; i++) if ((clientId && list[i].clientId===clientId) || (want && list[i].raw === want)) break;
   if (i >= list.length) {
     for (i = 0; i < list.length; i++) {
       var a = list[i].raw;
@@ -4578,11 +4813,13 @@ function openRenameThreadPanel() {
   if (state.view !== 'thread' || !state.thread) return;
   var target = state.thread;
   var tid = target.id;
-  var current = target.name || target.preview || '';
+  var current = displayThreadTitle(target,'');
+  state.renameEditingId=tid;clearTimeout(state.releaseTimer);state.releaseTimer=null;
+  function finishRename(){if(state.renameEditingId===tid)state.renameEditingId=null;scheduleRelease();}
   var inner = $('sheetInner'); inner.innerHTML = '';
   var back = document.createElement('button');
   back.className = 'shead'; back.textContent = '‹ ' + tr('重命名这个会话');
-  back.onclick = openSheet; inner.appendChild(back);
+  back.onclick = function(){finishRename();openSheet();}; inner.appendChild(back);
   var label = document.createElement('div');
   label.className = 'stitle'; label.textContent = tr('当前名称'); inner.appendChild(label);
   var shown = document.createElement('div');
@@ -4600,16 +4837,17 @@ function openRenameThreadPanel() {
   save.onclick = function () {
     var name = input.value.trim();
     if (!name) { error.textContent = tr('请输入会话名称'); error.hidden = false; input.focus(); return; }
-    if (name === current) { openSheet(); return; }
+    if (name === current) { finishRename();closeSheet();return; }
     error.hidden = true; save.disabled = true; save.textContent = tr('正在保存…');
     call('thread/name/set', { threadId: tid, name: name }).then(function () {
       target.name = name;
       state.threads.forEach(function (th) { if (th.id === tid) th.name = name; });
       state.searchThreads.forEach(function (th) { if (th.id === tid) th.name = name; });
       writeThreadCache(state.threads);
-      if (state.thread && state.thread.id === tid) $('title').textContent = name;
+      if (state.thread && state.thread.id === tid) $('title').textContent = displayThreadTitle(target);
       toast(tr('已改名'));
-      if (inner.contains(save)) openSheet();
+      finishRename();
+      if (inner.contains(save)) closeSheet();
     }).catch(function (e) {
       error.textContent = tr('改名失败：') + e.message;
       error.hidden = false; save.disabled = false; save.textContent = tr('保存名称');
@@ -4619,7 +4857,7 @@ function openRenameThreadPanel() {
   inner.appendChild(save);
   var cancel = document.createElement('button');
   cancel.className = 'sclose'; cancel.textContent = tr('取消');
-  cancel.onclick = openSheet; inner.appendChild(cancel);
+  cancel.onclick = function(){finishRename();openSheet();}; inner.appendChild(cancel);
   $('sheet').classList.add('on');
   input.focus({ preventScroll: true }); input.select();
 }
@@ -4633,7 +4871,7 @@ function openArchiveThreadPanel() {
   back.className = 'shead'; back.textContent = '‹ ' + tr('归档这个会话');
   back.onclick = openSheet; inner.appendChild(back);
   var name = document.createElement('div');
-  name.className = 'stitle'; name.textContent = target.name || target.preview || tr('（没有标题）');
+  name.className = 'stitle'; name.textContent = displayThreadTitle(target,tr('（没有标题）'));
   name.style.overflowWrap = 'anywhere';
   inner.appendChild(name);
   var note = document.createElement('p');
@@ -4746,6 +4984,8 @@ function openSheet() {
         });
       }));
 
+    inner.appendChild(sheetRow(tr('协作模式'),collaborationLabel(state.pick.mode),openCollaborationPicker));
+
     var sec2 = document.createElement('div');
     sec2.className = 'stitle';
     sec2.textContent = tr('操作');
@@ -4776,14 +5016,14 @@ function openSheet() {
 
   inner.appendChild(sheetRow(tr('会话写入锁'),
     // 值里给**会话名**，别只写「（这条会话）」—— 让人一眼看出这一下会动到哪一条
-    state.thread ? (state.thread.name || state.thread.preview || tr('（没有标题）')) : tr('先打开一条会话'),
+    state.thread ? displayThreadTitle(state.thread,tr('（没有标题）')) : tr('先打开一条会话'),
     function () { openLockPanel(); }));
 
   var lockHintRow = document.createElement('div');
-  lockHintRow.className = 'info';
+  lockHintRow.className = 'info';lockHintRow.id='session-control-hint';
   lockHintRow.textContent = state.resumed
-    ? tr('手机现在正占着这条会话（标题栏那个 🔒）—— 电脑上可能打不开它。')
-    : tr('同一个会话同时只能有一个地方写。发消息时报「会话由另一个执行服务占用」时，用这里释放。');
+    ? tr('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。')
+    : tr('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
   inner.appendChild(lockHintRow);
 
   var sec3 = document.createElement('div');
@@ -4802,6 +5042,10 @@ function openSheet() {
   langRow.appendChild(langKey);
   if (window.DshI18n && window.DshI18n.makeSwitcher) langRow.appendChild(window.DshI18n.makeSwitcher());
   inner.appendChild(langRow);
+
+  inner.appendChild(sheetRow(tr('Dot · 官方使用指南'), tr('通过官方 ChatGPT App'), function () {
+    location.href = '/dot-guide' + location.hash;
+  }));
 
   inner.appendChild(sheetRow(tr('换一个目标（DSH / Codex）'), '', function () {
     // 带上 location.hash（加密密钥），否则换一次目标就变明文
@@ -4834,7 +5078,10 @@ function modelLabel(id) {
   return m ? (m.displayName || m.id) : id;
 }
 
-function closeSheet() { $('sheet').classList.remove('on'); }
+function closeSheet() {
+  $('sheet').classList.remove('on');
+  if(state.renameEditingId){state.renameEditingId=null;scheduleRelease();}
+}
 
 /**
  * 「会话写入锁」面板：为释放写入锁提供固定入口。
@@ -4854,7 +5101,7 @@ function openLockPanel() {
 
   var head = document.createElement('button');
   head.className = 'shead';
-  head.textContent = '‹ ' + tr('会话写入锁');
+  head.textContent = '‹ ' + tr('会话控制');
   head.onclick = openSheet;
   inner.appendChild(head);
 
@@ -4869,14 +5116,14 @@ function openLockPanel() {
     var row = document.createElement('div');
     row.className = 'srow';
     row.innerHTML = '<span class="k">' + esc(tr('这条会话')) + '</span>' +
-      '<span class="v">' + esc(th.name || th.preview || tr('（没有标题）')) + '</span>';
+      '<span class="v">' + esc(displayThreadTitle(th,tr('（没有标题）'))) + '</span>';
     inner.appendChild(row);
 
     var st = document.createElement('div');
-    st.className = 'info';
+    st.className = 'info';st.id='lock-control-status';
     st.textContent = state.resumed
-      ? tr('手机现在占着它 —— 这期间电脑上可能打不开这条会话。')
-      : tr('手机没有占用这条会话。若发送时报「会话由另一个执行服务占用」，请检查是否由电脑 Codex 或其他执行服务占用。');
+      ? tr('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。')
+      : tr('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
     inner.appendChild(st);
 
     if(!state.resumed){
@@ -4887,6 +5134,11 @@ function openLockPanel() {
       var forkHelp=document.createElement('div');forkHelp.className='info';
       forkHelp.textContent=tr('电脑原会话继续运行。副本只包含已保存的上下文；正在执行的步骤可能不完整。同一项目目录的并行文件修改可能冲突。');
       inner.appendChild(forkHelp);
+      var connect=document.createElement('button');connect.className='btn';connect.id='lock-connect-current';
+      connect.textContent=tr('连接此会话');connect.disabled=!state.ready||!!state.resuming;
+      connect.onclick=function(){closeSheet();connectCurrentThread(false);};inner.appendChild(connect);
+      var connectHelp=document.createElement('div');connectHelp.className='info';
+      connectHelp.textContent=tr('正在执行的任务不会停止；连接后仍需点击发送。');inner.appendChild(connectHelp);
     }
 
     // ★ 先摆「没代价的那一个」：只松开手机这边占的会话，不碰电脑上的 Codex。
@@ -4896,63 +5148,22 @@ function openLockPanel() {
     var safe = document.createElement('button');
     safe.className = 'btn';
     safe.id = 'lock-release-phone';
-    safe.textContent = tr('释放手机端的锁');
+    safe.textContent = tr('交还手机控制…');
     safe.style.display=state.resumed?'':'none';
     safe.onclick = function () {
-      if (!confirm(tr('释放手机端的锁？\n\n· 只松开手机这边占的会话\n· 不会关闭电脑上的 Codex，也不会主动发送停止任务命令\n· 若手机任务仍在运行，建议等它结束后再操作\n· 手机下次发消息会自动重新接上\n\n确定吗？'))) return;
-      var safeLabel = safe.textContent;
-      safe.disabled = true;
-      safe.textContent = tr('正在释放手机端的锁…');
-      askReleasePhone(th.id, function (text, ok) {
-        safe.disabled = false;
-        safe.textContent = safeLabel;
-        toast(text);
-        if (ok) { closeSheet(); openThread(th); }
-      });
+      openPhoneReleasePanel(th);
     };
     inner.appendChild(safe);
 
     var safeCost = document.createElement('div');
     safeCost.className = 'info';
-    safeCost.textContent = tr('只松开手机这边占的会话：不会关闭电脑上的 Codex，也不会主动发送停止任务命令。手机关掉或断开一会儿之后会自动松开，所以通常不用点它。');
+    safeCost.textContent = tr('此操作只请求取消桥对此会话的订阅，不关闭电脑 Codex，也不发送停止任务命令。Codex 可能保留占用一段时间；电脑能否接手需要实际确认。');
     safeCost.style.display=state.resumed?'':'none';
     inner.appendChild(safeCost);
 
-    // Taking the original writer is an emergency path. The normal, visible
-    // action is the independent fork above, which leaves desktop running.
-    var advanced=document.createElement('details');advanced.className='lock-advanced';
-    var advancedTitle=document.createElement('summary');
-    advancedTitle.textContent=tr('紧急接管原会话（关闭整个电脑 Codex）');
-    advanced.appendChild(advancedTitle);
-    var danger = document.createElement('div');
-    danger.className = 'warn-red';
-    danger.innerHTML = '<b>' + esc(tr('⚠️ 会关掉电脑上的 Codex，正在执行的电脑端任务会被终止')) + '</b><br>' +
-      esc(tr('它让电脑端交出写权限，代价是关掉电脑上的 Codex（已保存的会话记录会保留，但电脑端正在执行的任务会终止）。只有「电脑上确实开着这条会话、而你现在必须用手机接着下指令」时才点它。只是想松开手机这边，用上面那颗。'));
-    advanced.appendChild(danger);
-
-    var btn = document.createElement('button');
-    btn.className = 'btn d';
-    btn.id = 'lock-release';
-    btn.textContent = tr('关闭电脑 Codex 并接管原会话');
-    btn.onclick = function () {
-      if (!confirm(tr('释放电脑端的锁？\n\n· 如果这条会话由电脑端占用，将关闭电脑上的 Codex，正在执行的电脑端任务会被终止\n· 已保存的会话记录会保留\n· 锁释放成功后，手机可以发送新指令\n\n确定吗？'))) return;
-      var label = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = tr('正在释放电脑端的锁…');
-      askReleaseLock(th.id, function (text, ok) {
-        btn.disabled = false;
-        btn.textContent = label;
-        toast(text);
-        if (ok) { closeSheet(); openThread(th); }
-      });
-    };
-    advanced.appendChild(btn);
-
-    var cost = document.createElement('div');
-    cost.className = 'info';
-    cost.textContent = tr('会关掉电脑上的 Codex，正在执行的电脑端任务会被终止；已保存的会话记录会保留。');
-    advanced.appendChild(cost);
-    inner.appendChild(advanced);
+    var ownerNote=document.createElement('div');ownerNote.className='info';
+    ownerNote.textContent=tr('当前无法验证占用者，不能从手机关闭桌面 Codex。请在电脑结束原任务，或复制上下文独立续聊。');
+    inner.appendChild(ownerNote);
   } else {
     var none = document.createElement('div');
     none.className = 'info';
@@ -4968,6 +5179,47 @@ function openLockPanel() {
 
   $('sheet').classList.add('on');
   if (window.DshI18n) window.DshI18n.apply($('sheetInner'));
+}
+
+function openPhoneReleasePanel(th) {
+  var inner=$('sheetInner');inner.innerHTML='';
+  var head=document.createElement('button');head.className='shead';
+  head.textContent='‹ '+tr('确认交还手机控制');head.onclick=openLockPanel;inner.appendChild(head);
+  var name=document.createElement('div');name.className='stitle';
+  name.textContent=displayThreadTitle(th,tr('（没有标题）'));inner.appendChild(name);
+  var note=document.createElement('div');note.className='info';
+  note.textContent=tr('先确认所有手机会话均已结束、没有待处理请求和待办，再取消当前订阅并断开这条手机连接。页面保留已加载的历史，实时更新暂停，只有你点击恢复后才重连。不关闭电脑 Codex，也不发送停止任务命令；电脑能否接手需要实际确认。');inner.appendChild(note);
+  if(state.running){var running=document.createElement('div');running.className='info';running.textContent=tr('任务仍在运行，请等它结束后交还。查看或切回列表不会主动停止任务。');inner.appendChild(running);}
+  if(state.awaitingFirstTurn){var empty=document.createElement('div');empty.className='info';empty.textContent=tr('尚未发送首条消息；交还会丢弃这个空会话。输入的草稿仍会保留在当前页面。');inner.appendChild(empty);}
+  var result=document.createElement('div');result.id='phone-release-result';result.className='info';result.setAttribute('role','status');result.hidden=true;inner.appendChild(result);
+  var confirmButton=document.createElement('button');confirmButton.className='btn';confirmButton.id='phone-release-confirm';
+  confirmButton.textContent=tr('确认交还');confirmButton.disabled=state.running;
+  confirmButton.onclick=function(){
+    if(!state.thread||state.thread.id!==th.id||state.running)return;
+    confirmButton.disabled=true;confirmButton.textContent=tr('正在请求交还…');
+    askReleasePhone(th.id,function(text,ok,j){
+      result.hidden=false;result.textContent=text;
+      confirmButton.textContent=ok?tr('确认交还'):tr('重试');confirmButton.disabled=ok;confirmButton.hidden=ok;
+      if(!ok)return;
+      cancel.textContent=tr('关闭');cancel.onclick=closeSheet;
+      if(state.thread&&state.thread.id===th.id){
+        state.resumed=false;state.awaitingFirstTurn=false;
+        if(!state.handedBackThreads)state.handedBackThreads=Object.create(null);
+        state.handedBackThreads[th.id]=true;
+        clearTimeout(state.releaseTimer);state.releaseTimer=null;
+        setTask('unlinked',tr('已请求交还；电脑能否接手仍待确认。这里继续只读查看，不会自动重新占用。'));
+      }
+      var fork=document.createElement('button');fork.className='btn p';fork.textContent=tr('复制上下文，在手机独立续聊');
+      fork.disabled=!!state.handoffPaused||!state.ready;
+      fork.onclick=function(){closeSheet();forkCurrentThread(th);};inner.appendChild(fork);
+      var fresh=document.createElement('button');fresh.className='btn';fresh.textContent=tr('新建同项目会话');
+      fresh.disabled=!!state.handoffPaused||!state.ready;
+      fresh.onclick=function(){closeSheet();newThread(th.cwd||null);};inner.appendChild(fresh);
+    });
+  };
+  inner.appendChild(confirmButton);
+  var cancel=document.createElement('button');cancel.className='sclose';cancel.textContent=tr('取消');cancel.onclick=openLockPanel;inner.appendChild(cancel);
+  $('sheet').classList.add('on');
 }
 
 /**
@@ -5018,6 +5270,8 @@ window.addEventListener('beforeunload', releaseThread);
 $('menu').onclick = openSheet;
 $('sheet').onclick = function (e) { if (e.target === $('sheet')) closeSheet(); };
 $('send').onclick = send;
+$('connect-current').onclick=function(){connectCurrentThread(false);};
+$('fork-from-composer').onclick=function(){forkCurrentThread(state.thread);};
 $('send-mode').onchange=function(){setSendModePref(this.value);renderFooter();};
 $('send-mode').value=sendModePref();
 
@@ -5094,6 +5348,7 @@ try {
 // also avoids sending a plaintext thread ID through a relay.
 
 $('btn-lock-help').onclick = openLockPanel;
+$('resume-phone-connection').onclick = restorePhoneConnection;
 
 // 🎤 语音输入。
 //

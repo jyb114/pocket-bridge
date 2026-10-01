@@ -262,7 +262,7 @@ function testConflictChoices() {
     buttons.some(x => /续聊|继续|独立|分支|fork/i.test(x.textContent)), labels);
   check('conflict exposes new conversation in the same project',
     buttons.some(x => /同项目|同一个项目|当前项目|same project/i.test(x.textContent)), labels);
-  const closeAt = buttons.findIndex(x => /释放电脑|关闭电脑|接管|锁|take over|lock|desktop/i.test(x.textContent));
+  const closeAt = buttons.findIndex(x => /释放电脑|关闭电脑|接管|锁|控制|take over|lock|desktop|control/i.test(x.textContent));
   const firstSafeAt = buttons.findIndex(x => /续聊|继续|独立|分支|fork|同项目|同一个项目|当前项目|same project/i.test(x.textContent));
   check('lock-management action appears after the safe choices',
     closeAt >= 0 && firstSafeAt >= 0 && closeAt > firstSafeAt, labels);

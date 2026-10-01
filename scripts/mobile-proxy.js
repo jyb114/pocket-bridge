@@ -35,6 +35,7 @@ const sessions = require('./sessions.js');
 const e2eeBridge = require('./ws-e2ee-bridge.js');
 const e2ee = require('./e2ee.js');
 const dshRuntime = require('./dsh-runtime.js');
+const codexFileAccess = require('./codex-file-access.js');
 const dshLazyImages = require('./dsh-lazy-images.js');
 const dshLazyImageStore = require('./dsh-lazy-image-store.js');
 const dictTrim = require('./dict-trim.js');   // 按语言裁剪页面（省语言包体积）
@@ -78,6 +79,13 @@ const codexLock = require('./codex-lock.js').createLockService(BASE, {
   logger: (m) => log(m)
 });
 
+// Legacy target-control clients must use the same per-thread confirmation and
+// verified-owner boundary as /codex/lock. No target action may bypass it with a
+// global desktop process-name shutdown.
+function requestCodexDesktopTakeover(body, lang) {
+  return codexLock.release(body.threadId, { confirm: body.confirm, lang, log });
+}
+
 // ── 三条携带正文的 HTTP 通道，统一套上端到端加密 ─────────────────────────────
 //
 // 处理器本身一行都不用改：加解密在它们外面（见 e2eeWrap 的说明）。
@@ -112,15 +120,18 @@ const serveDshLiteAddressesE2ee = e2eeWrap(serveDshLiteAddresses);
 // supplies an upstream URL; this transport always targets the verified local
 // DSH listener and leaves the full desktop application untouched.
 function callDshLiteUpstream(call) {
-  return refreshDshRuntime().then(running => {
-    if (!running || DSH_UPSTREAM_AUTH_OK === false) throw new Error('dsh-unavailable');
+  return refreshDshRuntimeState().then(state => {
+    if (!state.ready || DSH_UPSTREAM_AUTH_OK === false) throw new Error('dsh-unavailable');
+    if (call.verifiedRuntime && legacyRuntimeIdentity(call.verifiedRuntime) !== legacyRuntimeIdentity(state.runtime))
+      throw new Error('legacy-runtime-changed');
+    const upstreamPort = call.verifiedRuntime ? call.verifiedRuntime.port : TARGET_PORT;
     markActivity();
     return new Promise((resolve, reject) => {
       const headers = Object.assign({}, call.headers, {
         host: INTERNAL_HOST, origin: `http://${INTERNAL_HOST}`
       });
       if (UPSTREAM_COOKIE) headers.cookie = `${UPSTREAM_COOKIE.name}=${UPSTREAM_COOKIE.value}`;
-      const upstream = http.request({ host: TARGET_HOST, port: TARGET_PORT,
+      const upstream = http.request({ host: TARGET_HOST, port: upstreamPort,
         method: 'POST', path: call.path, headers, signal: call.signal,
         timeout: 15000 }, response => {
         const chunks = [];
@@ -162,14 +173,87 @@ const serveDshLiteFilesE2ee = e2eeWrap(require('./dsh-lite-files.js')
 // 走同一道门（E2EE_CONTENT_PATHS），而且每抓一次都写日志，事后可查。
 const serveDshLiteScreenE2ee = e2eeWrap(require('./dsh-lite-screen.js')
   .createDshLiteScreen({ log: (line) => log(`抓屏：${line}`) }));
+const dshLegacyAttachments = require('./dsh-legacy-attachments.js').createDshLegacyAttachments({
+  getRuntime: async force => { const state = await refreshDshRuntimeState(force); return state.ready ? state.runtime : null; }
+});
+const serveDshLegacyUploadE2ee = e2eeWrap(dshLegacyAttachments.handle);
 const serveDshLiteLegacyRpcE2ee = e2eeWrap(require('./dsh-lite-legacy-rpc.js')
   .createDshLiteLegacyRpc({ callUpstream: callDshLiteUpstream,
+    resolveAttachments: async (sessionId, receipts) => {
+      const state = await refreshDshRuntimeState(true);
+      return { ...dshLegacyAttachments.resolveForPrompt(sessionId, receipts, state.ready ? state.runtime : null), runtime: state.runtime };
+    },
     runtimeProfile: async (method) => {
       const mutates = ['workspace.create', 'session.create', 'session.prompt', 'session.cancel'].includes(method);
-      await refreshDshRuntime(mutates);
-      const runtime = dshRuntime.peekRuntime();
-      return runtime && runtime.profile;
+      const state = await refreshDshRuntimeState(mutates);
+      return state.ready && state.runtime ? state.runtime.profile : null;
     } }));
+const legacyRuntimeIdentity = require('./dsh-legacy-interactions.js').runtimeIdentity;
+function openDshLegacyWebSocket(runtime) {
+  if (UPSTREAM_COOKIE) return Promise.reject(new Error('legacy-websocket-auth-unavailable'));
+  return new Promise((resolve, reject) => {
+    const stream = new (require('node:stream').PassThrough)();
+    stream.on('error', () => {});
+    // Official rc.8/rc.2 client-connection exposes its event downlink as
+    // WebSocket; its pure ApiProxy fetch seam exposes the same frames as SSE.
+    // This socket remains loopback-only. The phone gets filtered E2EE JSON.
+    const ws = new WebSocket(`ws://${TARGET_HOST}:${runtime.port}/api/events.mux`);
+    let opened = false;
+    const timer = setTimeout(() => { reject(new Error('legacy-stream-timeout')); ws.close(); }, 3000);
+    ws.addEventListener('open', () => { opened = true; clearTimeout(timer); stream.write(': connected\n\n'); resolve(stream); });
+    ws.addEventListener('message', event => {
+      if (stream.destroyed) return;
+      if (typeof event.data !== 'string' || Buffer.byteLength(event.data) > 1024 * 1024) {
+        stream.destroy(new Error('legacy-event-invalid')); return;
+      }
+      stream.write('data: ' + event.data + '\n\n');
+    });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('legacy-stream-unavailable'));
+      if (!stream.destroyed) stream.destroy(new Error('legacy-stream-unavailable')); });
+    ws.addEventListener('close', () => { clearTimeout(timer);
+      if (!opened) reject(new Error('legacy-stream-unavailable'));
+      if (!stream.destroyed) stream.destroy(new Error('legacy-stream-unavailable')); });
+    stream.once('close', () => { clearTimeout(timer); if (ws.readyState < 2) ws.close(); });
+  });
+}
+async function openDshLegacyEvents(runtime) {
+  const state = await refreshDshRuntimeState();
+  if (!state.ready || legacyRuntimeIdentity(runtime) !== legacyRuntimeIdentity(state.runtime))
+    throw new Error('legacy-runtime-changed');
+  return new Promise((resolve, reject) => {
+    const headers = { host: INTERNAL_HOST, origin: `http://${INTERNAL_HOST}`,
+      accept: 'text/event-stream', 'accept-encoding': 'identity' };
+    if (UPSTREAM_COOKIE) headers.cookie = `${UPSTREAM_COOKIE.name}=${UPSTREAM_COOKIE.value}`;
+    const request = http.get({ host: TARGET_HOST, port: runtime.port, path: '/api/events.mux', headers,
+      timeout: 3000 }, response => {
+      if (response.statusCode === 426 && /^websocket$/i.test(response.headers.upgrade || '')) {
+        response.destroy();
+        openDshLegacyWebSocket(runtime).then(resolve, reject);
+        return;
+      }
+      if (response.statusCode !== 200 || !/^text\/event-stream(?:;|$)/i.test(response.headers['content-type'] || '')) {
+        response.destroy(); reject(new Error('legacy-stream-unavailable')); return;
+      }
+      response.once('close', () => request.destroy());
+      resolve(response);
+    });
+    request.on('timeout', () => request.destroy(new Error('legacy-stream-timeout')));
+    request.on('error', reject);
+  });
+}
+const serveDshLegacyInteractionsE2ee = e2eeWrap(require('./dsh-legacy-interactions.js')
+  .createDshLegacyInteractions({
+    getRuntime: async force => { const state = await refreshDshRuntimeState(force); return state.ready ? state.runtime : null; },
+    openEvents: openDshLegacyEvents,
+    respond: async (runtime, message) => {
+      const body = Buffer.from(JSON.stringify(message));
+      const upstream = await callDshLiteUpstream({ verifiedRuntime: runtime, path: '/api/respond', method: 'POST', body,
+        maxResponseBytes: 65536, headers: { 'content-type': 'application/json', 'content-length': String(body.length),
+          accept: 'application/json', 'accept-encoding': 'identity' }, signal: AbortSignal.timeout(10000) });
+      if (upstream.statusCode !== 200) throw new Error('legacy-response-unavailable');
+      return JSON.parse(upstream.body.toString('utf8'));
+    }
+  }));
 const COOKIE_MAX_AGE = 2592000; // 30 天
 
 /**
@@ -257,8 +341,11 @@ const ACCESS_KEY_EPOCH = crypto.createHash('sha256').update(ACCESS_KEY).digest('
 //   Lax 会在**顶级导航**时带上 cookie（正是主屏启动、点链接进来这两种），
 //   而 POST、iframe、子资源这些跨站请求仍然不带 —— 挡 CSRF 的那部分作用保留了。
 UPSTREAM_COOKIE = { name: COOKIE_NAME, value: COOKIE_VALUE };
-const SET_COOKIE_VALUE =
-  `${COOKIE_NAME}=${COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`;
+// Browser cookies are shared across ports on one host. Keep DSH's upstream
+// cookie separate from the browser login so two gateways cannot log each
+// other out. The final listener port is added before server.listen below.
+let GATEWAY_AUTH_COOKIE = '';
+let SET_COOKIE_VALUE = '';
 
 // ── 设备会话（第二道门）───────────────────────────────────────────────────────
 //
@@ -268,11 +355,42 @@ const SET_COOKIE_VALUE =
 //
 // 为什么不能只留这一道：DSH 自己会校验它那个 cookie 的值（伪造值返回 401，
 // 实测见 scripts/probe-cookie-authority.js），所以浏览器仍然必须持有它。
-const DEVICE_COOKIE = 'dsh-gw-session';
+const LEGACY_DEVICE_COOKIE = 'dsh-gw-session';
+let DEVICE_COOKIE = '';
 // SameSite 用 Lax 而不是 Strict —— 理由见上面 SET_COOKIE_VALUE 那段注释：
 // Strict 会让 iOS 从主屏幕图标启动时不带 cookie，主屏入口直接变成
 // 「access key required」。
 const DEVICE_COOKIE_ATTRS = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`;
+
+function configureAuthCookieScope(port) {
+  const scope = crypto.createHmac('sha256', ACCESS_KEY)
+    .update('gateway-cookie-scope-v1\n' + BASE + '\n' + String(port)).digest('hex').slice(0, 16);
+  GATEWAY_AUTH_COOKIE = `${COOKIE_NAME}-${scope}`;
+  DEVICE_COOKIE = `${LEGACY_DEVICE_COOKIE}-${scope}`;
+  SET_COOKIE_VALUE = `${GATEWAY_AUTH_COOKIE}=${COOKIE_VALUE}; ${DEVICE_COOKIE_ATTRS}`;
+}
+
+function readNamedCookie(req, name) {
+  for (const segment of String(req.headers.cookie || '').split(';')) {
+    const pair = segment.trim();
+    if (pair.startsWith(`${name}=`)) return pair.slice(name.length + 1);
+  }
+  return null;
+}
+
+function hasLegacyAuthCookie(req) {
+  const value = readNamedCookie(req, COOKIE_NAME);
+  return value !== null && safeEqualStr(value, COOKIE_VALUE);
+}
+
+/** Migrate a matching old login without deleting other gateways' cookies. */
+function migrateLegacyRequestCookies(req, res) {
+  if (readNamedCookie(req, GATEWAY_AUTH_COOKIE) !== null || !hasLegacyAuthCookie(req)) return;
+  const token = readNamedCookie(req, LEGACY_DEVICE_COOKIE);
+  const issued = authCookies(token);
+  res.__pendingCookies.push(...issued);
+  replaceIssuedRequestCookies(req, issued);
+}
 
 function deviceCookieValue(token) {
   return `${DEVICE_COOKIE}=${token}; ${DEVICE_COOKIE_ATTRS}`;
@@ -283,14 +401,25 @@ function authCookies(token) {
   return token ? [SET_COOKIE_VALUE, deviceCookieValue(token)] : [SET_COOKIE_VALUE];
 }
 
-function readDeviceToken(req) {
-  const raw = req.headers.cookie;
-  if (!raw) return null;
-  for (const seg of raw.split(';')) {
-    const s = seg.trim();
-    if (s.startsWith(`${DEVICE_COOKIE}=`)) return s.slice(DEVICE_COOKIE.length + 1);
+/** Reflect freshly issued cookies in an internally redispatched request. */
+function replaceIssuedRequestCookies(req, issued) {
+  const fresh = new Map();
+  for (const cookie of issued) {
+    const pair = String(cookie).split(';')[0].trim();
+    const separator = pair.indexOf('=');
+    if (separator > 0) fresh.set(pair.slice(0, separator), pair);
   }
-  return null;
+  const retained = String(req.headers.cookie || '').split(';').map(pair => pair.trim())
+    .filter(pair => pair && !fresh.has(pair.slice(0, pair.indexOf('='))));
+  req.headers.cookie = retained.concat([...fresh.values()]).join('; ');
+}
+
+function readDeviceToken(req) {
+  const scoped = readNamedCookie(req, DEVICE_COOKIE);
+  if (scoped !== null) return scoped || null;
+  // A scoped login must never inherit an unrelated port's old device token.
+  if (readNamedCookie(req, GATEWAY_AUTH_COOKIE) !== null || !hasLegacyAuthCookie(req)) return null;
+  return readNamedCookie(req, LEGACY_DEVICE_COOKIE) || null;
 }
 
 // ── 配对码 ────────────────────────────────────────────────────────────────────
@@ -1336,6 +1465,7 @@ async function pushNotification(title, body) {
 
 // ── 认证之前就要能取到的资源 ──────────────────────────────────────────────────
 const PWA_ROUTES = {
+  '/dot-guide': { file: 'dot-guide.html', type: 'text/html; charset=utf-8', noCache: true },
   '/manifest.webmanifest': { file: 'manifest.webmanifest', type: 'application/manifest+json', noCache: true },
   '/sw.js': { file: 'sw.js', type: 'application/javascript; charset=utf-8', noCache: true, swAllowed: true },
   '/polyfill.js': { file: 'polyfill.js', type: 'application/javascript; charset=utf-8', noCache: true },
@@ -1578,14 +1708,8 @@ function safeEqualStr(a, b) {
  *   （票据兑换、设备令牌）保持一致的口径。
  */
 function hasAuthCookie(req) {
-  const raw = req.headers.cookie;
-  if (!raw) return false;
-  for (const seg of raw.split(';')) {
-    const s = seg.trim();
-    if (!s.startsWith(`${COOKIE_NAME}=`)) continue;
-    return safeEqualStr(s.slice(COOKIE_NAME.length + 1), COOKIE_VALUE);
-  }
-  return false;
+  const scoped = readNamedCookie(req, GATEWAY_AUTH_COOKIE);
+  return scoped !== null ? safeEqualStr(scoped, COOKIE_VALUE) : hasLegacyAuthCookie(req);
 }
 
 /**
@@ -2033,7 +2157,7 @@ function buildUpstreamHeaders(req) {
   delete headers['sec-fetch-site'];
   if (UPSTREAM_COOKIE) {
     const otherCookies = String(headers.cookie || '').split(';').map(v => v.trim())
-      .filter(v => v && !/^dsh-auth-|^pocket-bridge-auth=/.test(v));
+      .filter(v => v && !/^dsh-auth-|^pocket-bridge-auth(?:-|=)|^dsh-gw-session(?:-|=)/.test(v));
     otherCookies.push(UPSTREAM_COOKIE.name + '=' + UPSTREAM_COOKIE.value);
     headers.cookie = otherCookies.join('; ');
   }
@@ -2164,20 +2288,35 @@ function refreshDshPort() {
   return current && current.running ? current.port : TARGET_PORT;
 }
 
-async function refreshDshRuntime(force = false) {
-  if (EXPLICIT_TARGET_PORT) return portAlive(TARGET_PORT);
-  const runtime = await dshRuntime.resolveRuntime(cfg.loadConfig(), { force });
+async function refreshDshRuntimeState(force = false) {
+  const config = cfg.loadConfig();
+  const runtime = await dshRuntime.resolveRuntime(EXPLICIT_TARGET_PORT
+    ? { ...config, dshPort: EXPLICIT_TARGET_PORT } : config, { force });
+  // A fixed target still needs live protocol and upstream-auth discovery.
+  // Checking only TCP left legacy RPC with an expired five-second cache and
+  // falsely reported a protocol upgrade. Never substitute another listener
+  // when the explicitly selected application is unavailable.
+  if (!runtime.running || (EXPLICIT_TARGET_PORT && runtime.port !== EXPLICIT_TARGET_PORT)) {
+    DSH_UPSTREAM_AUTH_OK = null;
+    UPSTREAM_COOKIE = null;
+    return { ready: false, runtime: null };
+  }
   if (runtime.running && (runtime.profile === 'remote-mux' || runtime.profile === 'legacy-events'))
     DSH_LAST_CONFIRMED_PROFILE = runtime.profile;
-  if (runtime.running && runtime.port && runtime.port !== TARGET_PORT) {
+  if (!EXPLICIT_TARGET_PORT && runtime.port && runtime.port !== TARGET_PORT) {
     log(`DSH 端口变化: ${TARGET_PORT} -> ${runtime.port} (${runtime.kind}, ${runtime.version || 'unknown'})`);
     TARGET_PORT = runtime.port;
   }
-  if (!runtime.running) { DSH_UPSTREAM_AUTH_OK = null; return false; }
   const authenticated = await dshUpstreamAuth.resolve(runtime, { force });
   DSH_UPSTREAM_AUTH_OK = authenticated.ok;
   UPSTREAM_COOKIE = authenticated.ok ? authenticated.cookie : null;
-  return authenticated.ok;
+  // Return the result actually verified by this request, rather than reading
+  // peekRuntime after auth I/O may have outlasted its cache lifetime.
+  return { ready: authenticated.ok, runtime };
+}
+
+async function refreshDshRuntime(force = false) {
+  return (await refreshDshRuntimeState(force)).ready;
 }
 
 /**
@@ -2188,7 +2327,6 @@ async function refreshDshRuntime(force = false) {
  * DSH 中途重启过。这正是「重启后连不上」要根治的地方。
  */
 function startDshWatchdog() {
-  if (EXPLICIT_TARGET_PORT) return;
   let probing = false;
   const timer = setInterval(async () => {
     if (dshStarting || probing) return;
@@ -4087,6 +4225,9 @@ const E2EE_CONTENT_PATHS = new Set([
   '/__dsh/lite-files', // 轻量 DSH：限定会话工作区内的单层文件列表
   '/__dsh/screen-shot', // 抓电脑屏幕给手机看 —— 画面本身就是敏感内容，必须加密
   '/__dsh/legacy-rpc', // 旧版 DSH：仅已验证的点号 RPC，密文包裹
+  '/__dsh/legacy-interactions', // Official legacy pending requests, never raw SSE to the phone
+  '/__dsh/legacy-response', // Responses bound to an observed, still-pending Session/rpcId
+  '/__dsh/legacy-upload', // In-memory, session/runtime-bound raster image receipts
   // 原版 DSH 界面也能发提示词和附件。旧版脚本的加密失败回退
   // 可能重新发明文；经中继时必须在网关拒绝这种回退。
   '/api/session/prompt',
@@ -4337,6 +4478,7 @@ function handleRequest(req, res) {
 function handleRequestInner(req, res, proofDeadline) {
   // 先把 cookie 合并器装上，之后无论哪个分支调用 writeHead 都不会丢掉要种的 cookie
   installCookieMerger(res);
+  migrateLegacyRequestCookies(req, res);
 
   let u;
   try {
@@ -4784,7 +4926,10 @@ function handleRequestInner(req, res, proofDeadline) {
     // 拿着密钥进来的，就是一次完整的认证 —— 给它登记一台设备。
     // 本机（自己打开控制台）和自检不登记，否则设备列表里全是自己。
     const cookies = (isLocalRequest(req) || isSelfCheck(req) || isSelfClientRequest(req))
-      ? [SET_COOKIE_VALUE]
+      // A valid local key login does not use a device identity. Clear a token
+      // left by another bridge on this host before redispatch, and in the
+      // browser, rather than letting that stale token reject this fresh login.
+      ? [SET_COOKIE_VALUE, `${DEVICE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`]
       : (() => {
         const made = sessions.create({
           ua: req.headers['user-agent'],
@@ -4836,8 +4981,10 @@ function handleRequestInner(req, res, proofDeadline) {
     res.setHeader('set-cookie', jar);
     // 把新 cookie 也塞进**请求头**：重新分发时会再过一次认证门，而那道门读的是
     // `req.headers.cookie`，不是响应里待发的 cookie。带上它，这次请求就已经是登录状态。
-    const kv = jar.map((c) => String(c).split(';')[0]).join('; ');
-    if (kv) req.headers.cookie = req.headers.cookie ? `${req.headers.cookie}; ${kv}` : kv;
+    // Browser cookies are shared across ports. An old bridge session can thus
+    // arrive first under the same name. Replace all matching pairs, including
+    // the device token, so redispatch reads the credentials just issued here.
+    replaceIssuedRequestCookies(req, jar);
     // ★ 把「这次是从密钥路径进来的」这件事传下去。
     //
     //   下面按根路径重新分发时，地址栏里其实还停在 /k/<密钥>。而「选目标」那一段
@@ -5234,6 +5381,15 @@ function handleRequestInner(req, res, proofDeadline) {
     return;
   }
 
+  if (u.pathname === '/__dsh/legacy-interactions' || u.pathname === '/__dsh/legacy-response') {
+    serveDshLegacyInteractionsE2ee(req, res);
+    return;
+  }
+  if (u.pathname === '/__dsh/legacy-upload') {
+    serveDshLegacyUploadE2ee(req, res);
+    return;
+  }
+
   if (u.pathname === '/__targets/action' && req.method === 'POST') {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
@@ -5254,7 +5410,7 @@ function handleRequestInner(req, res, proofDeadline) {
         const tLang = pickLang(req);
         if (body.action === 'start') result = await t.start(tLang);
         else if (body.action === 'stop') result = await t.stop(tLang);
-        else if (body.action === 'stop-desktop' && t.stopDesktop) result = await t.stopDesktop(tLang);
+        else if (body.action === 'stop-desktop' && t.id === 'codex') result = await requestCodexDesktopTakeover(body, tLang);
         else result = { ok: false, message: `不认识的操作: ${body.action}` };
       } catch (err) {
         result = { ok: false, message: `操作出错: ${err.message}` };
@@ -5836,6 +5992,13 @@ function codexProxyInfo() {
   };
 }
 
+/** Close only the two sockets belonging to this phone connection. A TCP close
+ * need not emit end (for example during refresh or a handshake failure). */
+function wireCodexWsLifecycle(socket, upstream) {
+  socket.once('close', () => { if (!upstream.destroyed) upstream.destroy(); });
+  upstream.once('close', () => { if (!socket.destroyed) socket.destroy(); });
+}
+
 async function proxyCodexWs(req, socket, head) {
   if (!await codexPhoneEntering(socket)) return;
   const t = require('./targets.js');
@@ -5856,7 +6019,9 @@ async function proxyCodexWs(req, socket, head) {
     log(`Codex 已就绪：${started.message || '本机服务已启动'}`);
   }
 
+  if (socket.destroyed) return;
   const upstream = net.connect(port, '127.0.0.1', () => {
+    if (socket.destroyed) { upstream.destroy(); return; }
     const key = req.headers['sec-websocket-key'] || '';
     const version = req.headers['sec-websocket-version'] || '13';
     const proto = req.headers['sec-websocket-protocol'];
@@ -5938,6 +6103,8 @@ async function proxyCodexWs(req, socket, head) {
 
     log('WS → Codex app-server 已接通');
   });
+
+  wireCodexWsLifecycle(socket, upstream);
 
   upstream.on('error', async (err) => {
     log(`WS Codex 上游错误: ${err.message}`);
@@ -6046,7 +6213,9 @@ server.on('error', (err) => {
 const FILE_MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-  '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  // SVG is an active XML document when opened as a top-level blob. Keep it
+  // inert even after encryptedFetch rebuilds the browser response.
+  '.svg': 'text/plain; charset=utf-8', '.ico': 'image/x-icon',
   '.pdf': 'application/pdf',
   '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
   '.log': 'text/plain; charset=utf-8', '.csv': 'text/plain; charset=utf-8',
@@ -6083,75 +6252,32 @@ function sessionWorkDirs() {
   return Array.from(out);
 }
 
-/** 允许读取的根目录。**服务端自己算**，请求方说不了话（理由见上面那段）。 */
-function allowedRoots() {
-  const roots = [path.join(BASE, 'uploads', 'codex')];
-  // Codex 自己的目录：生成的图片、会话存档都在这儿
-  try { roots.push(path.join(os.homedir(), '.codex')); } catch (err) { }
-  // 已知会话的工作目录（服务端自己算的，不是请求方说了算）
-  for (const d of sessionWorkDirs()) roots.push(d);
-  // ★ 工作目录的**父目录**也放行（2026-09-29 加）。
-  //
-  //   为什么必须加：Codex 常常在**同一个开发根目录下的多个项目**之间干活。
-  //   实测（使用者报「还是无法看到图片，以前都可以」，日志里一串
-  //   `拒绝越界读文件`）：会话的工作目录记的是
-  //       D:\my_games\Ashen_Covenant_V0.50.0_M7
-  //   而 Codex 生成的报告图片在
-  //       D:\my_games\AshenCovenant3D\Reports\reality_overview_02.png
-  //   —— 后者**从来没被登记成工作目录**（Codex 的 config.toml 里也没有它），
-  //   于是那张图一律 403，手机上永远是「这张图没取回来」。
-  //
-  //   "以前可以"是因为旧版会让**客户端**用 `?root=` 自己划边界，那个参数在安全
-  //   加固时被故意忽略了（见 serveCodexFile 里的说明）—— 所以这是个**取舍**：
-  //   要么让手机能看自己项目里的图，要么只认那几个精确目录。
-  //   取前者，但加一道下限，别把整块盘放开。
-  for (const p of workspaceParents()) roots.push(p);
-  // 使用者显式允许的额外目录
+/** File roots come from server-observed projects and explicit local configuration. */
+function codexFileAccessOptions() {
+  const homes = [process.env.CODEX_HOME, path.join(os.homedir(), '.codex')]
+    .filter(value => typeof value === 'string' && path.isAbsolute(value));
+  let extraRoots = [];
   try {
     const conf = cfg.loadConfig();
-    for (const r of (conf.fileRoots || [])) {
-      if (typeof r === 'string' && path.isAbsolute(r)) roots.push(r);
-    }
-  } catch (err) { }
-  return roots;
+    if (Array.isArray(conf.fileRoots)) extraRoots = conf.fileRoots;
+  } catch (_) { }
+  return {
+    projectRoots: sessionWorkDirs(), uploadRoot: path.join(BASE, 'uploads', 'codex'),
+    codexHomes: homes, extraRoots, forbiddenRoots: [LOG_DIR],
+    forbiddenFiles: [cfg.CONFIG_FILE || path.join(BASE, 'config.json')]
+  };
 }
 
-/**
- * 已知工作目录的父目录。
- *
- * 边界（**必须留着，不要图省事去掉**）：
- *   · 父目录本身不能是**盘根**（`D:\`、`/`）—— 那等于放开整块盘；
- *   · 父目录至少要有 2 层（`D:\a\b` 的父目录 `D:\a` 合条件；`D:\a` 的父目录 `D:\` 不合）。
- * 于是放行的是"开发根目录"这一级（实测里是 `D:\my_games`、`…\Documents\ChatGPT`），
- * 而不是用户的主目录或整个磁盘。
- */
-function workspaceParents() {
-  const out = new Set();
-  const root = (p) => { try { return path.parse(p).root; } catch (err) { return p; } };
-  for (const dir of sessionWorkDirs()) {
-    let abs;
-    try { abs = path.resolve(dir); } catch (err) { continue; }
-    const parent = path.dirname(abs);
-    if (!parent || parent === abs) continue;
-    if (parent === root(parent)) continue;                    // 盘根 → 不放
-    const depth = parent.split(/[\\/]+/).filter(Boolean).length;
-    if (depth < 2) continue;                                  // 太浅 → 不放
-    out.add(parent);
-  }
-  return Array.from(out);
+function allowedRoots() {
+  return codexFileAccess.allowedRoots(codexFileAccessOptions());
 }
 
-/** 这个路径允不允许读？ */
+function resolveCodexFileAccess(abs) {
+  return codexFileAccess.checkPath(abs, codexFileAccessOptions());
+}
+
 function fileAllowed(abs) {
-  const norm = (p) => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase();
-  const target = norm(abs);
-
-  for (const r of allowedRoots()) {
-    const rr = norm(r);
-    if (target === rr || target.startsWith(rr + path.sep) ||
-        target.startsWith(rr + '/')) return true;
-  }
-  return false;
+  return !!resolveCodexFileAccess(abs);
 }
 
 /**
@@ -6373,7 +6499,8 @@ function serveCodexFile(req, res, u) {
     return;
   }
 
-  if (!fileAllowed(abs)) {
+  const access = resolveCodexFileAccess(abs);
+  if (!access) {
     // 日志里**不能写完整路径**。
     //
     // 原来这里写的是 `拒绝越界读文件: ${abs}` —— 而那个路径长这样：
@@ -6389,6 +6516,9 @@ function serveCodexFile(req, res, u) {
     res.end('这个路径不在允许范围内');
     return;
   }
+
+  // Serve the authorized canonical target, never follow the original junction.
+  abs = access.realPath;
 
   fs.stat(abs, (err, st) => {
     if (err || !st.isFile()) {
@@ -6443,6 +6573,18 @@ function sendFile(res, file, type, encrypt) {
     return;
   }
 
+  // A downloaded workspace document is untrusted content, even when Codex
+  // created it. noopener does not prevent an active blob document from using
+  // its creator's origin. The MIME retained after decryption must be inert:
+  // Content-Disposition/CSP alone are not inherited by a newly created blob.
+  const activeDocument = /\.(?:svgz?|html?|xhtml|xht|xml|xsl|xslt|mhtml|mht|[cm]?js|jsx|tsx?)$/i.test(file) ||
+    /^(?:image\/svg\+xml|text\/html|application\/xhtml\+xml|(?:application|text)\/(?:xml|javascript|ecmascript))(?:\s*;|\s*$)/i.test(type);
+  if (activeDocument) type = 'text/plain; charset=utf-8';
+  const disposition = activeDocument ? 'attachment' :
+    /^(image\/|application\/pdf|text\/)/.test(type) ? 'inline' : 'attachment';
+  const contentSafetyHeaders = { 'x-content-type-options': 'nosniff' };
+  if (activeDocument) contentSafetyHeaders['content-security-policy'] = "default-src 'none'; sandbox";
+
   // 加密时整个文件要读进内存再加密（AES-GCM 需要一次性拿到全部明文）。
   // 所以设个上限。**超上限不发明文** —— 计划 D 要求「大文件明确拒绝或分块加密」，
   // 原来说的是「超过就直接明文发」，那等于绕开闸门：只要你发个大文件，
@@ -6477,13 +6619,16 @@ function sendFile(res, file, type, encrypt) {
         return;
       }
       res.writeHead(200, {
+        ...contentSafetyHeaders,
         'content-type': 'application/octet-stream',
         'content-length': ct.length,
         // 浏览器要靠这个头知道「这段是密文，得解开才能用」
         'x-dsh-e2ee': '1',
         // 原来的类型也带上 —— 解开之后浏览器才知道该怎么显示
         'x-dsh-e2ee-type': type,
-        'content-disposition': 'inline',
+        // No filename in encrypted headers: names stay inside the protected
+        // request, rather than becoming visible to a TLS-terminating relay.
+        'content-disposition': disposition,
         'cache-control': 'private, no-store'
       });
       res.end(ct);
@@ -6494,11 +6639,11 @@ function sendFile(res, file, type, encrypt) {
   // 走到这里的只有「客户端没要求加密」这一种情况 —— 要求了加密的话
   // 上面那个分支一定会 return（成功发密文 / 太大拒绝 / 加密失败拒绝），
   // 不会掉下来发明文。
-  const disp = /^(image\/|application\/pdf|text\/)/.test(type) ? 'inline' : 'attachment';
   res.writeHead(200, {
+    ...contentSafetyHeaders,
     'content-type': type,
     'content-length': st.size,
-    'content-disposition': `${disp}; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`,
+    'content-disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`,
     // 缩略图按内容寻址，可以放心长缓存 —— 这样翻回去看同一张图不再重复下载
     'cache-control': 'private, max-age=86400'
   });
@@ -6789,6 +6934,7 @@ refresh();
     log(`端口 ${preferred} 已被占用，改用 ${chosen}`);
   }
   PORT = chosen;
+  configureAuthCookieScope(PORT);
 
   try {
     fs.mkdirSync(cfg.LOG_DIR, { recursive: true });

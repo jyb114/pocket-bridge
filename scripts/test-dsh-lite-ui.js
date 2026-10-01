@@ -174,6 +174,8 @@ async function run() {
     state = await page.eval(`({link:document.querySelector('#files-list a')?.href,status:document.getElementById('files-status').textContent})`);
     assert.ok(state.link.startsWith('blob:'));
     assert.match(state.status, /点“保存”/);
+    assert.equal(await page.eval(`document.querySelector('#files-preview pre')?.textContent`), 'ok',
+      'a clicked text file should be readable before saving');
     await page.eval(`document.getElementById('files-close').click()`);
     await page.eval(`window.__fake.failFiles=true;document.getElementById('files-open').click()`);
     await new Promise(resolve => setTimeout(resolve, 30));
@@ -1022,6 +1024,70 @@ async function run() {
     assert.match(await regress.eval(`document.getElementById('files-list').textContent`), /report.txt/);
     assert.equal(await regress.eval(`document.getElementById('files-retry').hidden`), true);
     regress.close();
+
+    // File preview is a DOM safety regression, not an npm compatibility test.
+    const previewPage = await browser.newPage();
+    await previewPage.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await previewPage.goto('http://127.0.0.1:' + server.address().port + '/dsh-lite.html', 300);
+    await waitForSessionList(previewPage);
+    await previewPage.eval(`document.querySelector('#session-list button').click()`);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await previewPage.eval(`(() => {
+      window.__previewExecuted = false;
+      window.__previewPayload = '<img src=x onerror="window.__previewExecuted=true"></pre><script>window.__previewExecuted=true</script>';
+      window.DshLiteAdapter.listWorkspaceFiles = async () => ({path:'',entries:[{name:'payload.html',path:'payload.html',type:'file'}],nextOffset:null});
+      window.DshLiteAdapter.downloadFile = async () => {
+        window.__fake.calls.push(['previewDownload']);
+        return {blob:new Blob([window.__previewPayload],{type:'text/html'}),name:'payload.html'};
+      };
+      document.getElementById('files-open').click();
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    await previewPage.eval(`document.querySelector('#files-list button').click()`);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    state = await previewPage.eval(`({text:document.querySelector('#files-preview pre')?.textContent,
+      expected:window.__previewPayload,active:window.__previewExecuted,
+      executable:!!document.querySelector('#files-preview img,#files-preview script,#files-preview iframe'),
+      save:document.querySelector('#files-list a')?.download})`);
+    assert.equal(state.text, state.expected, 'HTML and script file contents must stay literal text');
+    assert.equal(state.active, false);
+    assert.equal(state.executable, false);
+    assert.equal(state.save, 'payload.html');
+    await previewPage.eval(`document.querySelector('#files-preview button').click();document.querySelector('#files-list button').click()`);
+    assert.equal(await previewPage.eval(`window.__fake.calls.filter(c=>c[0]==='previewDownload').length`), 1,
+      'reopening a preview must not download the file again');
+    await previewPage.eval(`(() => {
+      document.getElementById('files-close').click();
+      window.DshLiteAdapter.listWorkspaceFiles = async () => ({path:'',entries:[{name:'large.txt',path:'large.txt',type:'file'}],nextOffset:null});
+      window.DshLiteAdapter.downloadFile = async () => {
+        const blob = new Blob(['x'.repeat(2*1024*1024)]);
+        blob.text = () => {throw new Error('must never decode the full large file');};
+        return {blob,name:'large.txt'};
+      };
+      document.getElementById('files-open').click();
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    await previewPage.eval(`document.querySelector('#files-list button').click()`);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    state = await previewPage.eval(`({length:document.querySelector('#files-preview pre')?.textContent.length,
+      notice:document.querySelector('#files-preview .files-preview-note')?.textContent,
+      save:document.querySelector('#files-list a')?.href})`);
+    assert.equal(state.length, 64*1024, 'large text preview must decode only its bounded 64 KB slice');
+    assert.match(state.notice, /64 KB/);
+    assert.ok(state.save.startsWith('blob:'), 'the full download remains available after preview truncation');
+    await previewPage.eval(`(() => {
+      document.getElementById('files-close').click();
+      window.DshLiteAdapter.listWorkspaceFiles = async () => ({path:'',entries:[{name:'binary.txt',path:'binary.txt',type:'file'}],nextOffset:null});
+      window.DshLiteAdapter.downloadFile = async () => ({blob:new Blob([new Uint8Array([0,1,2,3])]),name:'binary.txt'});
+      document.getElementById('files-open').click();
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    await previewPage.eval(`document.querySelector('#files-list button').click()`);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(await previewPage.eval(`!!document.querySelector('#files-preview pre')`), false,
+      'binary controls in a renamed text file must not be rendered as text');
+    assert.match(await previewPage.eval(`document.getElementById('files-preview').textContent`), /不支持文本预览/);
+    previewPage.close();
 
     const race = await browser.newPage();
     await race.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

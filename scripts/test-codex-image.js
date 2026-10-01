@@ -57,7 +57,8 @@ console.log('\n[1] 静态：图片必须走加密那条路');
 function mkEl(tag) {
   const el = {
     tagName: String(tag).toUpperCase(), className: '', isConnected: true,
-    src: '', listeners: {}, attrs: {}, _html: '',
+    src: '', listeners: {}, attrs: {}, _html: '', children: [], style: {},
+    appendChild(child) { this.children.push(child); return child; },
     setAttribute(k, v) { this.attrs[k] = v; },
     addEventListener(ev, fn) { this.listeners[ev] = fn; },
     querySelector(sel) {
@@ -128,12 +129,14 @@ function run(opts) {
   };
   box.window.DshE2EE = { secretSource: () => (opts.secret ? 'stored' : null) };
   vm.createContext(box);
+  vm.runInContext(SRC.match(/var IMG_RE = [^\n]+/)[0], box);
   vm.runInContext(extractFunction(SRC, 'plainLocalOrigin'), box);
   vm.runInContext(extractFunction(SRC, 'fileRequest'), box);
   vm.runInContext(extractFunction(SRC, 'releaseImageBlob'), box);
   vm.runInContext(extractFunction(SRC, 'watchImageBlob'), box);
+  vm.runInContext(extractFunction(SRC, 'buildFileCard'), box);
   vm.runInContext(extractFunction(SRC, 'buildImageView'), box);
-  const el = box.buildImageView('C:/x/y.png', '');
+  const el = box.buildImageView(opts.path || 'C:/x/y.png', '');
   return { el, requested, created, revoked, opened, timers, observers,
     resolveFetch: (response) => resolveFetch(response) };
 }
@@ -141,6 +144,29 @@ const tick = () => new Promise((r) => setTimeout(r, 40));
 
 console.log('\n[2] 行为：谁在什么时候被请求');
 (async () => {
+  for (const file of ['drawing.svg', 'drawing.svgz', 'page.html', 'page.xhtml', 'data.xml']) {
+    const active = run({ secret: true, path: 'D:/Project/' + file });
+    await tick();
+    ok(file + ' is a file card even when the tool calls it an image',
+      active.el.tagName === 'BUTTON' && active.el.attrs['data-filecite'] === 'D:/Project/' + file &&
+      !/<img/.test(active.el.innerHTML) && active.requested.length === 0 && active.created.length === 0);
+  }
+  {
+    const previews = [];
+    const render = { document: { createElement: mkEl }, t: (x) => x, esc: String,
+      shortPath: (p) => p.split('/').pop(),
+      buildImageView(p) { previews.push(p); return mkEl('img'); } };
+    vm.createContext(render);
+    vm.runInContext(SRC.match(/var IMG_RE = [^\n]+/)[0], render);
+    vm.runInContext(extractFunction(SRC, 'fileIcon'), render);
+    vm.runInContext(extractFunction(SRC, 'buildFileCard'), render);
+    vm.runInContext(extractFunction(SRC, 'buildFileChange'), render);
+    const changed = render.buildFileChange({ changes: [{ path: 'D:/Project/chart.svg' }, { path: 'D:/Project/photo.png' }] });
+    const files = changed.children.find((node) => node.tagName === 'DETAILS').children[0].children;
+    ok('mixed file changes preview PNG and retain SVG as a download card',
+      previews.join(',') === 'D:/Project/photo.png' && files.length === 1 &&
+      files[0].tagName === 'BUTTON' && files[0].attrs['data-filecite'] === 'D:/Project/chart.svg');
+  }
   // 有钥匙：第一次请求就得是 privateFetch 那条，而且 HTML 里不能有明文 src
   const enc = run({ secret: true });
   ok('有钥匙时：HTML 里没有明文 src（否则那次请求必被网关拒）',
@@ -253,6 +279,7 @@ console.log('\n[2] 行为：谁在什么时候被请求');
     () => ok('加密模块缺失时绝不明文发送', sent.length === 0));
   let sockets = 0;
   const socketGuard = {
+    state: { handoffPaused: false },
     window: { __dshE2eeSecret: null }, plainLocalOrigin: () => false,
     setConn() {}, toast() {}, t: (x) => x,
     WebSocket: function () { sockets++; }, location: { protocol: 'https:', host: 'relay.example.test' }
@@ -261,6 +288,10 @@ console.log('\n[2] 行为：谁在什么时候被请求');
   vm.runInContext(extractFunction(SRC, 'connect'), socketGuard);
   socketGuard.connect();
   ok('缺密钥的隧道页不建立明文 Codex WebSocket', sockets === 0);
+  socketGuard.state.handoffPaused = true;
+  socketGuard.window.__dshE2eeSecret = 'S'.repeat(24);
+  socketGuard.connect();
+  ok('主动交还手机控制后不会悄悄重建 Codex WebSocket', sockets === 0);
 
   // 取不回来：给「重试」，并且不许把「还没验证完」说成「图坏了」
   const bad = run({ secret: true, fail: true });

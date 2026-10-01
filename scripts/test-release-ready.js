@@ -111,12 +111,17 @@ const codexScope = rdPlain.split('## Codex phone view')[1]?.split(/\n## /)[0] ||
 ok('README names the operated, signed-in DSH desktop build',
   /DSH 0\.1\.7-rc\.2 desktop build installed on the test PC/i.test(dshScope) &&
   /DeepSeek Harness[^\n|]*desktop build[^\n|]*installed and signed in/i.test(rdPlain));
-ok('README says npm Web and older DSH were not verified or claimed supported',
-  /`npx @deepseek-ai\/dsh web`[^\n]*not been operated end to end[^\n]*not claimed as supported/i.test(dshScope) &&
-  /older DSH protocols[^\n]*not exercised as running products[^\n]*remains unverified/i.test(dshScope));
+ok('README reports partial npm acceptance without claiming full or historical support',
+  /Other desktop versions are unverified/i.test(dshScope) &&
+  /complete end-to-end acceptance has not been achieved[^\n]*not claimed as fully supported/i.test(dshScope) &&
+  ['0.1.0-rc.8', '0.1.1-rc.2', '0.1.7-rc.2', '0.2.0-rc.2'].every(version => dshScope.includes(version)) &&
+  /credentials with 401[^\n]*real approval\/question completion remain unverified/i.test(dshScope) &&
+  /operating-system download completion remains unverified/i.test(dshScope) &&
+  /not a claim that an ordinary old npx install works today[^\n]*every historical desktop release is supported/i.test(dshScope) &&
+  /docs\/MANUAL-ACCEPTANCE\.md/.test(dshScope));
 ok('README scopes Codex to the operated desktop installation',
   /current OpenAI Codex desktop installation tested for this preview, signed in/i.test(rdPlain) &&
-  /Codex phone interface was exercised[^.\n]*Codex installation on the test PC/i.test(codexScope) &&
+  /Codex phone interface was operated[^\n]*real Codex 0\.159\.0 runtime/i.test(codexScope) &&
   /does not establish compatibility with every Codex release/i.test(codexScope));
 ok('明确不是安装两个产品才可使用，也不随安装包提供它们',
   /do not have to install both products/i.test(rd0) &&

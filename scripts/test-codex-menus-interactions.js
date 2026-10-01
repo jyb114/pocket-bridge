@@ -111,10 +111,11 @@ function bootstrap() {
       document.getElementById('rename-error').textContent.includes('temporary rename error'));
     await E(() => document.getElementById('rename-save').click());
     await wait(() => fixture.renameCount === 2 && state.thread.name === 'Better name');
-    await check('rename retry updates title and returns to menu', () =>
+    await check('rename retry updates title and closes the sheet', () =>
       document.getElementById('title').textContent === 'Better name' &&
-      !document.getElementById('rename-input') && fixture.nativeDialogs.length === 0);
+      !document.getElementById('sheet').classList.contains('on') && fixture.nativeDialogs.length === 0);
 
+    await E(() => document.getElementById('menu').click());
     await clickRow('项目');
     await check('project sub-menu offers a manually entered folder', () =>
       !!document.getElementById('project-other-folder') &&
