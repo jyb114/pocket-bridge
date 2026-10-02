@@ -69,7 +69,7 @@ function Reset {
   $script:PendingGatewayStopProof=$null; $script:PendingGatewayStopHandle=$null
   $script:fakeStartCount=0; $script:tunnelHandleMode='same'; $script:waitResult=$true
   $script:gatewayHandleBirthChanged=$false
-  $script:reparsePath=$null
+  $script:reparsePath=$null; $script:reparseReads=0
   $script:leaseUnreadable=$false; $script:releaseLeaseOnPump=0
   $script:lateTunnel=$null; $script:leaseOnTunnelCapture=$false; $script:leaseOnTunnelKill=$false
   $script:otherGatewayList=@(); $script:gatewayScanUnreadable=$false
@@ -177,7 +177,12 @@ function Get-Item { param($LiteralPath,[switch]$Force,$ErrorAction)
   if ($LiteralPath -eq $LeasePath -and $script:leaseUnreadable) {
     throw [UnauthorizedAccessException]::new('synthetic lease metadata unavailable')
   }
-  if ($script:reparsePath -and $LiteralPath -eq $script:reparsePath) {
+  # .NET Framework expands 8.3 paths such as the Windows runner's RUNNER~1
+  # TEMP. Match the same literal directory after normalization, not its raw
+  # spelling, or the fake reparse metadata never reaches the source guard.
+  if ($script:reparsePath -and [string]::Equals([IO.Path]::GetFullPath($LiteralPath),
+      [IO.Path]::GetFullPath($script:reparsePath), [StringComparison]::OrdinalIgnoreCase)) {
+    $script:reparseReads++
     return [pscustomobject]@{ PSIsContainer=(Test-Path -LiteralPath $LiteralPath -PathType Container); Attributes=[IO.FileAttributes]::ReparsePoint }
   }
   return Microsoft.PowerShell.Management\Get-Item -LiteralPath $LiteralPath -Force -ErrorAction Stop
@@ -351,6 +356,7 @@ foreach ($location in @('base','logs','instance')) {
     $script:reparsePath = if ($location -eq 'base') { $Base } elseif ($location -eq 'logs') { $LogDir } else { Join-Path $LogDir 'instance.json' }
     $result=Stop-Gateway
     Assert (-not $result.ok -and $script:requestCount -eq 0 -and -not (Test-Path -LiteralPath $StopFlag)) 'Reparse path was used for stop'
+    Assert ($script:reparseReads -gt 0) 'Synthetic reparse metadata was not exercised'
   }
 }
 Check 'orphan daemon lease prevents completion even when the gateway has physically exited' {
@@ -521,10 +527,15 @@ Write-Output ('Passed ' + $script:passes + ' isolated tray lifecycle cases; no U
 try {
   fs.writeFileSync(fixturePath, '\uFEFF' + fixture, 'utf8');
   const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  const output = execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixturePath,
-    '-SourcePath',path.join(root,'desktop/tray.ps1'),'-FixtureBase',path.join(scratch,'fixture bridge [literal]')],
-  { encoding:'utf8', windowsHide:true, timeout:30000, maxBuffer:1024*1024 });
-  process.stdout.write(output);
+  const fixtureBase = path.join(scratch,'fixture bridge [literal]');
+  // The second spelling denotes the same owned directory but canonicalizes
+  // differently, reproducing short-name TEMP handling without touching C:.
+  for (const base of [fixtureBase, fixtureBase + path.sep + '.']) {
+    const output = execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixturePath,
+      '-SourcePath',path.join(root,'desktop/tray.ps1'),'-FixtureBase',base],
+    { encoding:'utf8', windowsHide:true, timeout:30000, maxBuffer:1024*1024 });
+    process.stdout.write(output);
+  }
 } finally {
   const resolved = path.resolve(scratch);
   assert(resolved.startsWith(tempBase + path.sep) && path.basename(resolved).startsWith('pb-tray-stop-'));
