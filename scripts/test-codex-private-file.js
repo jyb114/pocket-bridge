@@ -88,7 +88,7 @@ function invoke({ body, encrypted = true, url = '/codex/file', type = 'applicati
   assert.match(route, /else if \(req\.method === 'GET'\) serveCodexFile\(req, res, u\)/,
     'legacy direct LAN GET must remain available');
   assert.match(source, /'\/codex\/file',\s*\/\/ 图片与附件字节/);
-  assert.match(source, /const wantE2ee = clientWantsE2ee\(req, u\) && !!e2eeBridge\.readSecret\(\)/);
+  assert.match(source, /const wantE2ee = req\.__dshRequireE2ee === true \|\|\s*\(clientWantsE2ee\(req, u\) && !!e2eeBridge\.readSecret\(\)\)/);
   // The private POST intentionally skips e2eeWrap's generic response writer:
   // the existing sendFile encryptor must actually seal the returned bytes.
   const sendFileSource = extractFunction(source, 'sendFile');
@@ -98,7 +98,9 @@ function invoke({ body, encrypted = true, url = '/codex/file', type = 'applicati
     fs: { statSync() { return { size: payload.length }; }, readFile(_file, callback) { callback(null, payload); } },
     e2eeBridge: { readSecret() { return secret; } }
   });
-  const sendFile = vm.runInContext(`${sendFileSource}; sendFile`, fileContext);
+  const keyFunctions = ['e2eeSecretOrNull', 'refuseEncryptionUnavailable']
+    .map(name => extractFunction(source, name)).join('\n');
+  const sendFile = vm.runInContext(`${keyFunctions}\n${sendFileSource}; sendFile`, fileContext);
   const encryptedFile = await new Promise(resolve => {
     const res = {
       writeHead(status, headers) { this.status = status; this.headers = headers; return this; },
@@ -119,7 +121,8 @@ function invoke({ body, encrypted = true, url = '/codex/file', type = 'applicati
     };
     sendFile(res, 'D:\\work\\figure.png', 'image/png', true);
   });
-  assert.equal(failedFile.status, 500);
+  assert.equal(failedFile.status, 503);
+  assert.equal(JSON.parse(failedFile.body).code, 'encryption-unavailable');
   assert.ok(!String(failedFile.body).includes(payload.toString('utf8')));
   console.log('PASS Codex file POST keeps paths in authenticated ciphertext, rejects plaintext/query/invalid bodies, and retains encrypted file response');
 })().catch(error => { console.error(error); process.exitCode = 1; });

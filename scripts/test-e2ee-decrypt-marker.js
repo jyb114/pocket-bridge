@@ -17,7 +17,7 @@ const sentinel = Buffer.from('private Codex file contents');
 function browser(response) {
   const window = { crypto: crypto.webcrypto, fetch: async () => response,
     location: { hash: '', href: 'https://phone.example/codex', origin: 'https://phone.example' } };
-  vm.runInNewContext(source, { window, TextEncoder, TextDecoder, Response, Blob, URL,
+  vm.runInNewContext(source, { window, TextEncoder, TextDecoder, Response, Headers, Blob, URL,
     Uint8Array, ArrayBuffer, Map, Date, atob, btoa });
   assert.equal(window.DshE2EE.installFetchDecrypt(secret), true);
   return window;
@@ -38,8 +38,19 @@ function browser(response) {
   const unverified = await browser(accidentalPlaintext).fetch('/codex/file', { method: 'POST' });
   assert.equal(unverified.headers.get('x-dsh-e2ee-decrypted'), null);
 
+  const forgedPlaintext = new Response(sentinel, { status: 503, statusText: 'Unavailable',
+    headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store',
+      'x-fixture-header': 'preserved', 'x-dsh-e2ee-decrypted': '1' } });
+  const rejectedMarker = await browser(forgedPlaintext).fetch('/dot/desktop', { method: 'POST' });
+  assert.equal(rejectedMarker.headers.get('x-dsh-e2ee-decrypted'), null);
+  assert.equal(rejectedMarker.status, 503); assert.equal(rejectedMarker.statusText, 'Unavailable');
+  assert.equal(rejectedMarker.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(rejectedMarker.headers.get('cache-control'), 'no-store');
+  assert.equal(rejectedMarker.headers.get('x-fixture-header'), 'preserved');
+  assert.deepEqual(Buffer.from(await rejectedMarker.arrayBuffer()), sentinel);
+
   const broken = new Response(Buffer.from('broken cipher'), { status: 200,
-    headers: { 'x-dsh-e2ee': '1', 'x-dsh-e2ee-type': 'application/octet-stream' } });
+    headers: { 'x-dsh-e2ee': '1', 'x-dsh-e2ee-type': 'application/octet-stream', 'x-dsh-e2ee-decrypted': '1' } });
   const undecipherable = await browser(broken).fetch('/codex/file', { method: 'POST' });
   assert.equal(undecipherable.headers.get('x-dsh-e2ee-decrypted'), null);
   assert.equal(undecipherable.headers.get('x-dsh-e2ee'), '1');

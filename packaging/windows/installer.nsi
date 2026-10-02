@@ -20,6 +20,9 @@ Unicode true
 Name "Pocket Bridge"
 OutFile "${OUTPUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\Pocket Bridge"
+; Reuse the directory recorded by this per-user installation. An explicit /D
+; still overrides it, including the build's isolated marked smoke directory.
+InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PocketBridge" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 SetOverwrite on
@@ -39,7 +42,8 @@ VIAddVersionKey "LegalCopyright" "Pocket Bridge contributors"
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "SimpChinese"
+; A single installer language also avoids Windows choosing another language
+; automatically from its UI locale. Phone interface languages are independent.
 !insertmacro MUI_LANGUAGE "English"
 
 Section "Pocket Bridge" SecMain

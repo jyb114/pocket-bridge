@@ -64,9 +64,14 @@
   }
   header h1{font-size:16.5px;margin:0;font-weight:640;flex:1;min-width:0;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+  .ico{width:44px;height:44px;border-radius:10px;display:grid;place-items:center;
     background:var(--card);flex:none;font-size:16px;line-height:1}
   .ico:active{background:var(--card2)}
+  body.thread-view header h1{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;
+    -webkit-box-orient:vertical;line-height:1.3;font-size:15px}
+  body.thread-view #conntext{position:absolute;width:1px;height:1px;padding:0;
+    margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  body.desktop-relay-active #lockhint{display:none!important}
   .lock-help{flex:none;padding:9px 14px;text-align:left;font-size:12.5px;color:var(--accent);background:var(--card);border-bottom:1px solid var(--line)}
   .lock-advanced{margin-top:20px;border-top:1px solid var(--line);padding-top:12px}
   .lock-advanced summary{cursor:pointer;color:var(--warn);font-size:13px;padding:10px 2px}
@@ -92,15 +97,22 @@
     display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;
     max-height:1.5em}
   #task-status.expanded #task-detail{display:block;max-height:none;overflow:visible}
+  #task-status.relay-idle:not(.expanded) #task-detail{display:none}
+  #task-status .task-top strong{flex:1;min-width:0;font-size:13px}
+  #desktop-relay-control{padding:4px 2px!important;font-size:13px!important}
+  #desktop-relay-control label{min-height:44px;padding:7px 10px;border:1px solid var(--line);
+    border-radius:10px;background:var(--card);cursor:pointer}
+  #desktop-relay-mode{width:21px;height:21px;margin:0;flex:none;accent-color:var(--accent2)}
   /* C19：状态区**不允许**被长文本撑开。它只负责"一眼看出在不在跑"，
      正文归对话流。展开看全文由「详情」按钮负责。 */
-  #task-more{font-size:12px;color:var(--accent);background:none;border:0;padding:2px 0;cursor:pointer}
+  #task-more{font-size:12px;color:var(--accent);background:none;border:0;padding:4px;
+    min-width:44px;min-height:44px;flex:none;cursor:pointer}
   #task-more[hidden]{display:none}
   #task-activity{font-size:13px;color:var(--dim2);margin-top:3px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
   #task-activity[hidden]{display:none}
   #task-status.expanded #task-activity{display:block;overflow:visible}
   #task-status.expanded #task-activity[hidden]{display:none}
-  #task-refresh{margin-left:auto;font-size:12px;color:var(--accent);padding:14px 10px;flex:none}
+  #task-refresh{margin-left:auto;font-size:12px;color:var(--accent);padding:14px 10px;flex:none;min-width:44px;min-height:44px}
   button:disabled{opacity:.45;cursor:default}
   #attachments{display:flex;gap:7px;overflow-x:auto;max-height:112px;padding:4px 0 8px}
   #attachments:empty{display:none}
@@ -342,6 +354,9 @@
      button's default padding is counted. Give text its own single-line pill. */
   .send.queue{width:64px;height:36px;padding:0 8px;border-radius:18px;
     white-space:nowrap;line-height:1}
+  .send.desktop-relay{width:44px;height:44px;font-size:20px;line-height:1;white-space:nowrap}
+  #connect-thread-panel[hidden],#desktop-relay-control[hidden],
+  #desktop-relay-help[hidden],#desktop-relay-status[hidden],#desktop-relay-check[hidden]{display:none!important}
   .send:disabled{background:var(--card2);color:var(--dim)}
   .stop{background:var(--bad);color:#fff;font-size:13.5px;padding:0 15px;
     height:34px;border-radius:17px;flex:none;font-weight:600}
@@ -446,9 +461,8 @@
   <button class="ico" id="menu" aria-label="菜单">⋯</button>
 </header>
 <section id="task-status" role="status" aria-live="polite" hidden>
-  <div class="task-top"><span class="task-dot"></span><strong id="task-label" data-i18n="正在确认任务状态…">正在确认任务状态…</strong><button id="task-refresh" type="button" data-i18n="刷新状态">刷新状态</button></div>
+  <div class="task-top"><span class="task-dot"></span><strong id="task-label" data-i18n="正在确认任务状态…">正在确认任务状态…</strong><button id="task-refresh" type="button" data-i18n="刷新状态">刷新状态</button><button id="task-more" type="button" hidden data-i18n="详情">详情</button></div>
   <div id="task-detail"></div>
-  <button id="task-more" type="button" hidden data-i18n="详情">详情</button>
   <div id="task-activity"></div>
 </section>
 
@@ -477,6 +491,12 @@
   </div>
   <div id="queued-messages" aria-live="polite"></div>
   <div id="queue-save-status" hidden role="status" aria-live="polite" style="font-size:12px;padding:4px 2px;overflow-wrap:anywhere"></div>
+  <div id="desktop-relay-control" style="padding:6px 2px;font-size:12px">
+    <label style="display:flex;align-items:center;gap:8px"><input id="desktop-relay-mode" type="checkbox"><span data-i18n="通过电脑 Codex 发送">通过电脑 Codex 发送</span></label>
+    <div id="desktop-relay-help" hidden style="padding-top:5px;color:var(--dim)" data-i18n="手机模式期间请勿操作电脑。桥会打开指定对话，使用电脑当前的模型与模式代发文字；执行中可能进入队列。">手机模式期间请勿操作电脑。桥会打开指定对话，使用电脑当前的模型与模式代发文字；执行中可能进入队列。</div>
+    <div id="desktop-relay-status" hidden role="status" aria-live="polite" style="padding-top:5px;overflow-wrap:anywhere"></div>
+    <button id="desktop-relay-check" class="btn" hidden style="margin:6px 0 0;font-size:12px" data-i18n="核对上次发送结果">核对上次发送结果</button>
+  </div>
   <div id="attachments" aria-live="polite"></div>
   <input type="file" id="pick-images" accept="image/*" multiple hidden>
   <input type="file" id="pick-files" multiple hidden>
@@ -536,9 +556,40 @@ var t = (window.DshI18n && window.DshI18n.t) ? window.DshI18n.t : function (s) {
 var tr = t;
 
 if (window.DshI18n) window.DshI18n.register({
+  "通过电脑 Codex 发送": {en:"Send through desktop Codex",es:"Enviar mediante Codex de escritorio"},
+  "由电脑 Codex 决定": {en:"Set in desktop Codex",es:"Se configura en Codex de escritorio"},
+  "电脑输入框仍有未发送的草稿，请在电脑检查后再试。手机草稿已保留。": {en:"The desktop composer still contains an unsent draft. Check it on your computer before trying again. Your phone draft has been kept.",es:"El cuadro de texto de la computadora aún contiene un borrador sin enviar. Revísalo en la computadora antes de volver a intentarlo. Se ha conservado el borrador del móvil."},
+  "本次未发送的桥消息已从电脑输入框清除，手机草稿已保留。": {en:"This unsent bridge message was cleared from the desktop composer. Your phone draft has been kept.",es:"Este mensaje del puente que no se envió se ha eliminado del cuadro de texto de la computadora. Se ha conservado el borrador del móvil."},
+  "桌面代发使用电脑当前的模型、思考强度与协作模式。手机上的选择不会应用；关闭桌面代发后可继续使用手机设置。": {en:"Desktop relay uses the computer's current model, reasoning effort, and collaboration mode. Phone selections do not apply. Turn desktop relay off to use your phone settings again.",es:"El envío mediante escritorio usa el modelo, la intensidad de razonamiento y el modo de colaboración actuales de la computadora. No se aplican las selecciones del móvil. Desactívalo para volver a usar los ajustes del móvil."},
+  "手机模式期间请勿操作电脑。桥会打开指定对话，使用电脑当前的模型与模式代发文字；执行中可能进入队列。": {en:"Do not use the computer during phone mode. The bridge opens the selected conversation and sends text using the desktop model and mode. A running task may queue it.",es:"No uses la computadora durante el modo móvil. El puente abre la conversación elegida y envía texto con el modelo y modo del escritorio. Una tarea en curso puede ponerlo en cola."},
+  "请先交还手机控制，再通过电脑发送。": {en:"Hand back phone control before sending through the desktop.",es:"Devuelve el control del móvil antes de enviar mediante el escritorio."},
+  "桌面代发首版只支持文字；附件仍保留。": {en:"Desktop relay version 1 supports text only. Your attachments are kept.",es:"La primera versión del envío mediante escritorio solo admite texto. Se conservan los adjuntos."},
+  "正在定位电脑上的项目和对话…": {en:"Locating the project and conversation on your computer…",es:"Buscando el proyecto y la conversación en tu computadora…"},
+  "发送未确认；请核对结果，不会自动重发。": {en:"Delivery is unconfirmed. Check the result; the bridge will not resend automatically.",es:"La entrega no está confirmada. Comprueba el resultado; el puente no reenvía automáticamente."},
+  "电脑 Codex 队列已接收，尚未确认开始执行。": {en:"The desktop Codex queue received the message. Execution has not been confirmed.",es:"La cola de Codex de escritorio recibió el mensaje. Aún no se confirmó la ejecución."},
+  "目标对话已收到消息；请查看后续结果。": {en:"The selected conversation received the message. Check the conversation for its result.",es:"La conversación elegida recibió el mensaje. Consulta el resultado en la conversación."},
+  "正在核对上次发送结果…": {en:"Checking the previous delivery…",es:"Comprobando la entrega anterior…"},
+  "核对上次发送结果": {en:"Check previous delivery",es:"Comprobar la entrega anterior"},
+  "已保留草稿；电脑代发未完成。": {en:"Your draft is kept. Desktop delivery did not complete.",es:"Se conserva el borrador. El envío mediante escritorio no se completó."},
+  "项目目录尚未确认，不能通过电脑发送。": {en:"The project directory is unconfirmed. Desktop delivery is unavailable.",es:"El directorio del proyecto no está confirmado. El envío mediante escritorio no está disponible."},
+  "发送到电脑": {en:"Send to desktop",es:"Enviar al escritorio"},
+  "定位并发送中…": {en:"Locating and sending…",es:"Buscando y enviando…"},
+  "上次发送结果尚未确认，请先核对。": {en:"The previous delivery is still unconfirmed. Check it before sending again.",es:"La entrega anterior sigue sin confirmar. Compruébala antes de volver a enviar."},
+  "已切换发送方式，但浏览器无法记住这个选择。刷新后请检查发送方式。": {en:"The send mode changed, but this browser cannot remember it. Check the send mode after reloading.",es:"Cambió el modo de envío, pero este navegador no puede recordarlo. Comprueba el modo después de actualizar."},
+  "这条草稿的电脑发送结果尚未确认，请先核对上次发送结果，再改用手机发送。": {en:"Desktop delivery of this draft is still unconfirmed. Check the previous delivery before sending it through the phone.",es:"El envío de este borrador desde la computadora sigue sin confirmar. Comprueba la entrega anterior antes de enviarlo desde el móvil."},
+  "无法核对这条草稿的发送记录；请先核对上次发送结果。": {en:"This draft's delivery record cannot be checked. Check the previous delivery first.",es:"No se puede verificar el registro de envío de este borrador. Comprueba primero la entrega anterior."},
+  "草稿已改变，请检查后再次发送。": {en:"The draft changed. Review it before sending again.",es:"El borrador cambió. Revísalo antes de volver a enviarlo."},
+  "草稿过长，无法在刷新后恢复；当前页面仍保留文字。": {en:"This draft is too long to restore after reloading. Its text is kept on this page.",es:"Este borrador es demasiado largo para restaurarlo después de actualizar. El texto se conserva en esta página."},
+  "浏览器无法保存草稿；请勿刷新或关闭页面。": {en:"This browser cannot save the draft. Keep this page open without reloading.",es:"Este navegador no puede guardar el borrador. Mantén esta página abierta sin actualizar."},
+  "浏览器草稿清理失败；刷新后可能出现旧文字，请核对后再发送。": {en:"The browser draft could not be cleared. Older text may reappear after reloading; check it before sending.",es:"No se pudo borrar el borrador del navegador. El texto anterior puede reaparecer después de actualizar; compruébalo antes de enviar."},
+  "此模式需要安全连接与浏览器加密支持。": {en:"This mode requires a secure connection and browser cryptography support.",es:"Este modo requiere una conexión segura y soporte criptográfico del navegador."},
   "查看会话控制与手机续聊选项": {en:"View conversation control and phone continuation options",es:"Ver el control de la conversación y las opciones para continuar en el móvil"},
   "手机可发送": {en:"Phone can send",es:"El móvil puede enviar"},
   "当前仅查看": {en:"Viewing only",es:"Solo lectura"},
+  "电脑代发已开启": {en:"Desktop relay on",es:"Envío desde la computadora activado"},
+  "文字由电脑代发；任务执行状态仍未知。": {en:"Text uses desktop relay; execution status is still unknown.",es:"El texto se envía desde la computadora; el estado de ejecución aún es desconocido."},
+  "通过电脑代发文字，不接管会话锁。桥的历史同步不能确认电脑任务是否正在执行。": {en:"Send text through desktop Codex without taking over the conversation lock. Synced history does not confirm whether the desktop task is running.",es:"Envía texto a través de Codex en la computadora sin tomar el bloqueo de la conversación. El historial sincronizado no confirma si la tarea se está ejecutando en la computadora."},
+  "当前使用电脑代发文字，手机不接管会话锁。电脑端的授权、选择和提问仍需在电脑处理；此模式暂不支持附件。": {en:"Text is sent through desktop Codex; the phone does not take over the conversation lock. Approvals, choices and questions still need to be handled on the computer. Attachments are not supported in this mode yet.",es:"El texto se envía a través de Codex en la computadora; el móvil no toma el bloqueo de la conversación. Las autorizaciones, opciones y preguntas aún deben atenderse en la computadora. Este modo todavía no admite archivos adjuntos."},
   "连接中 · 仅查看": {en:"Connecting · viewing only",es:"Conectando · solo lectura"},
   "会话控制": {en:"Conversation control",es:"Control de conversación"},
   "手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。": {en:"The phone is connected and can send. Codex’s writer lock still determines whether the computer can take over.",es:"El móvil está conectado y puede enviar. El bloqueo de escritura de Codex determina si la computadora puede tomar el control."},
@@ -720,6 +771,7 @@ if (window.DshI18n) window.DshI18n.register({
   "执行失败": { en: "Failed", es: "Falló" },
   "尚未开始": { en: "Not started", es: "Sin empezar" },
   "未连接执行端 · 实时状态未知": { en: "Not connected to the executor · live status unknown", es: "Sin conexión al ejecutor · estado en vivo desconocido" },
+  "电脑代发 · 执行状态未知": { en: "Desktop send · execution status unknown", es: "Envío desde el ordenador · ejecución desconocida" },
   "暂时无法确认任务状态": { en: "Cannot confirm the task status right now", es: "No se puede confirmar el estado de la tarea ahora" },
   "连接中断 · 任务状态未知": { en: "Disconnected · task status unknown", es: "Sin conexión · estado de la tarea desconocido" },
   "正在重连。手机断线不代表电脑任务已结束。": { en: "Reconnecting. Losing the phone connection does not mean the task on your computer has ended.", es: "Reconectando. Que el teléfono se desconecte no significa que la tarea en tu computadora haya terminado." },
@@ -823,6 +875,8 @@ if (window.DshI18n) window.DshI18n.register({
   "文件": { en: "Files", es: "Archivos" },
   "{n} 个文件有改动": { en: "{n} file(s) changed", es: "{n} archivo(s) modificados" },
   "其他": { en: "Other", es: "Otros" },
+  "Your dot · 电脑连接": { en: "Your dot · Desktop connection", es: "Your dot · Conexión de escritorio" },
+  "读取电脑上的近期聊天": { en: "Read recent desktop messages", es: "Leer mensajes recientes del escritorio" },
   "Dot · 官方使用指南": { en: "Dot · Official access guide", es: "Dot · Guía de acceso oficial" },
   "通过官方 ChatGPT App": { en: "Through the official ChatGPT app", es: "A través de la app oficial de ChatGPT" },
   "{n} 个文件": { en: "{n} file(s)", es: "{n} archivo(s)" },
@@ -1154,22 +1208,68 @@ var threadPicks = Object.create(null);
 // A draft belongs to its conversation. The composer DOM is shared by all
 // conversations, so leaving text in it can otherwise send A's message to B.
 var textDrafts = Object.create(null);
+var TEXT_DRAFT_KEY='codex-session-text-drafts-v1',TEXT_DRAFT_COUNT=16,TEXT_DRAFT_LENGTH=32768,TEXT_DRAFT_TOTAL=131072;
+var textDraftStorageWarning='';
+function validTextDraftId(tid){return typeof tid==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(tid);}
+function loadSessionTextDrafts(){
+  try{
+    var raw=sessionStorage.getItem(TEXT_DRAFT_KEY);if(!raw)return;
+    if(raw.length>TEXT_DRAFT_TOTAL)return;
+    var saved=JSON.parse(raw);
+    if(!saved||saved.version!==1||!Array.isArray(saved.entries)||saved.entries.length>TEXT_DRAFT_COUNT||Object.keys(saved).length!==2)return;
+    var restored=Object.create(null);
+    for(var i=0;i<saved.entries.length;i++){
+      var entry=saved.entries[i];
+      if(!entry||Object.keys(entry).length!==2||!validTextDraftId(entry.threadId)||typeof entry.text!=='string'||!entry.text.length||entry.text.length>TEXT_DRAFT_LENGTH||Object.prototype.hasOwnProperty.call(restored,entry.threadId))return;
+      restored[entry.threadId]=entry.text;
+    }
+    textDrafts=restored;
+  }catch(e){}
+}
+function persistTextDrafts(){
+  var entries=[];
+  Object.keys(textDrafts).slice().reverse().some(function(tid){
+    var text=textDrafts[tid];
+    if(validTextDraftId(tid)&&typeof text==='string'&&text.length&&text.length<=TEXT_DRAFT_LENGTH)entries.unshift({threadId:tid,text:text});
+    return entries.length===TEXT_DRAFT_COUNT;
+  });
+  var serialized=JSON.stringify({version:1,entries:entries});
+  while(serialized.length>TEXT_DRAFT_TOTAL&&entries.length){entries.shift();serialized=JSON.stringify({version:1,entries:entries});}
+  try{
+    if(entries.length)sessionStorage.setItem(TEXT_DRAFT_KEY,serialized);else sessionStorage.removeItem(TEXT_DRAFT_KEY);
+    return true;
+  }catch(e){return false;}
+}
+function warnTextDraftStorage(message){
+  if(textDraftStorageWarning!==message){textDraftStorageWarning=message;toast(t(message));}
+}
+loadSessionTextDrafts();
 function rememberTextDraft() {
-  if (state.thread && state.thread.id) textDrafts[state.thread.id] = $('input').value;
+  if (state.thread && state.thread.id){
+    var text=$('input').value;
+    delete textDrafts[state.thread.id];if(text)textDrafts[state.thread.id]=text;
+    if(typeof persistTextDrafts==='function'){
+      if(!persistTextDrafts())warnTextDraftStorage('浏览器无法保存草稿；请勿刷新或关闭页面。');
+      else if(text.length>TEXT_DRAFT_LENGTH||JSON.stringify({version:1,entries:[{threadId:state.thread.id,text:text}]}).length>TEXT_DRAFT_TOTAL)warnTextDraftStorage('草稿过长，无法在刷新后恢复；当前页面仍保留文字。');
+      else textDraftStorageWarning='';
+    }
+  }
 }
 function restoreTextDraft(thread) {
   var box = $('input');
   box.value = thread && thread.id ? (textDrafts[thread.id] || '') : '';
   box.style.height = 'auto';
   box.style.height = Math.min(box.scrollHeight, 140) + 'px';
+  box.scrollTop=0;
 }
 function clearSubmittedTextDraft(tid, text) {
-  if (Object.prototype.hasOwnProperty.call(textDrafts, tid) && textDrafts[tid].trim() === text)
+  if (Object.prototype.hasOwnProperty.call(textDrafts, tid) && textDrafts[tid] === text)
     delete textDrafts[tid];
   if (state.thread && state.thread.id === tid) {
     var box = $('input');
-    if (box.value.trim() === text) { box.value = ''; box.style.height = 'auto'; }
+    if (box.value === text) { box.value = ''; box.style.height = 'auto'; }
   }
+  if(typeof persistTextDrafts==='function'&&!persistTextDrafts())warnTextDraftStorage('浏览器草稿清理失败；刷新后可能出现旧文字，请核对后再发送。');
 }
 var queueEntries=[],queueFetchBusy=false,queueDraft=null,queueSaveNotices=Object.create(null);
 function setQueueSaveNotice(tid,phase,text,id){
@@ -1206,7 +1306,8 @@ function renderQueue(){
     :t('待发送 {n} 条 · 保存在电脑端', {n:queueEntries.length});box.appendChild(title);
   var activating=state.queueActivating && state.thread && state.queueActivating.thread===state.thread;
   var held=queueEntries.some(function(e){return e.state==='queued' && e.requiresConfirmation===true;});
-  if(activating || held || task.kind==='unlinked' && queueEntries.some(function(e){return e.state==='queued';})){
+  if(!(typeof desktopRelayEnabled!=='undefined' && desktopRelayEnabled) &&
+     (activating || held || task.kind==='unlinked' && queueEntries.some(function(e){return e.state==='queued';}))){
     var connect=document.createElement('button');connect.id='queue-connect';connect.textContent=activating?t('正在确认发送已存内容…'):state.resumed?t('发送已存内容'):t('尝试连接并发送已存内容（不关闭电脑 Codex）');
     connect.disabled=!state.ready||state.resuming||!!state.handingBack||!!state.sending||!!state.queueActivating||queueEntries.some(function(e){return e.state==='sending';});connect.onclick=connectQueuedThread;box.appendChild(connect);
   }
@@ -1231,6 +1332,7 @@ function renderQueue(){
   if (window.DshI18n) window.DshI18n.apply(box);
 }
 function connectQueuedThread(){
+  if(typeof desktopRelayEnabled!=='undefined'&&(desktopRelayEnabled||desktopRelayBusy))return Promise.resolve(false);
   if(!state.ready||state.view!=='thread'||!state.thread||state.resuming||state.handingBack||state.sending||state.queueActivating||state.forking||
     queueEntries.some(function(e){return e.state==='sending';})||!queueEntries.some(function(e){return e.state==='queued' && (e.requiresConfirmation===true || task.kind==='unlinked');}))return Promise.resolve(false);
   var thread=state.thread,ws=state.ws,token={thread:thread};state.queueActivating=token;
@@ -1253,6 +1355,7 @@ function connectQueuedThread(){
   });
 }
 function connectCurrentThread(sendSaved){
+  if(typeof desktopRelayEnabled!=='undefined'&&(desktopRelayEnabled||desktopRelayBusy))return Promise.resolve(false);
   if(sendSaved)return connectQueuedThread();
   if(!state.ready||!state.thread||state.resuming||state.handingBack)return Promise.resolve(false);
   var thread=state.thread;state.resuming=true;renderFooter();
@@ -1340,6 +1443,7 @@ function refreshQueue(){
 }
 function enqueueDraft(text,box,attachments,options){
   options=options||{};
+  var submittedDraft=typeof options.draftText==='string'?options.draftText:text;
   var deferred=queueOnly()||!!options.deferred;
   if(!deferred&&!state.turnId){toast(t('正在确认当前任务，稍后再加入队列'));refreshObservedThread();return;}
   var tid=state.thread.id,input,mode;
@@ -1355,7 +1459,7 @@ function enqueueDraft(text,box,attachments,options){
   var request;try{request=queueRequest(payload);}catch(e){request=Promise.reject(e);}
   return Promise.resolve(request)
     .then(function(j){
-      attachmentSent(tid,attachments);if(queueDraft===draft)queueDraft=null;clearSubmittedTextDraft(tid,text);
+      attachmentSent(tid,attachments);if(queueDraft===draft)queueDraft=null;clearSubmittedTextDraft(tid,submittedDraft);
       setQueueSaveNotice(tid,'saved',t('已保存，尚未发送。'),j && j.id || draft.id);
       if(state.thread && state.thread.id===tid){
         if(!queueEntries.some(function(e){return e.id===(j && j.id || draft.id);}))queueEntries.push({id:j && j.id || draft.id,label:label,state:'queued',requiresConfirmation:deferred,note:t('已保存，等待确认执行端；尚未发送。')});
@@ -1483,6 +1587,9 @@ function openAttachmentPicker() {
 }
 function renderTaskStatus() {
   var panel = $('task-status');
+  document.body.classList.toggle('thread-view',state.view==='thread');
+  document.body.classList.toggle('desktop-relay-active',state.view==='thread'&&!!desktopRelayEnabled);
+  $('btn-lock-help').hidden=state.view==='thread';
   panel.hidden = state.view !== 'thread';
   if (panel.hidden) return;
   var kind = state.handoffPaused ? 'paused' : !state.ready ? 'offline' : task.kind;
@@ -1490,8 +1597,13 @@ function renderTaskStatus() {
     waitingApproval:t('等待审批'),waitingInput:t('等待你回复'),completed:t('已完成'),
     interrupted:t('已停止'),failed:t('执行失败'),idle:t('尚未开始'),unlinked:t('未连接执行端 · 实时状态未知'),unknown:t('暂时无法确认任务状态'),offline:t('连接中断 · 任务状态未知'),paused:t('已交还手机连接 · 实时更新暂停')};
   panel.dataset.kind = kind;
-  $('task-label').textContent = labels[kind] || labels.unknown;
+  var relayStatus=!!desktopRelayEnabled&&['unlinked','checking','unknown'].indexOf(kind)>=0;
+  panel.classList.toggle('relay-idle',relayStatus);
+  $('task-label').textContent = relayStatus?t('电脑代发 · 执行状态未知'):labels[kind] || labels.unknown;
   var detail = kind === 'paused' ? t('这里只显示已经加载的记录。保存待办仍可用，尚未发送；恢复连接后仍需明确发送。') : kind === 'offline' ? t('正在重连。手机断线不代表电脑任务已结束。') : task.detail;
+  if(kind==='unlinked' && typeof desktopRelayEnabled!=='undefined' && desktopRelayEnabled)
+    detail=t('文字由电脑代发；任务执行状态仍未知。');
+  var detailContent = String(detail || '');
   if (task.syncedAt) detail += (detail ? ' · ' : '') + t('上次同步 ') + new Date(task.syncedAt).toLocaleTimeString();
   // ── C19：状态区只留一行 ────────────────────────────────────────────────────
   //
@@ -1503,13 +1615,15 @@ function renderTaskStatus() {
   // 这样默认状态区高度是固定的，长文本再也不会把它撑开。
   var statusLimit = 42;
   var statusFull = String(detail || '');
-  var statusShort = statusFull.length > statusLimit ? statusFull.slice(0, statusLimit) + '…' : statusFull;
-  if (statusFull.length <= statusLimit) taskStatusExpanded = false;
+  // A clock alone must not keep an earlier long-running status expanded.
+  var hasLongStatus = relayStatus || detailContent.length > statusLimit;
+  var statusShort = hasLongStatus ? detailContent.slice(0, statusLimit) + '…' : statusFull;
+  if (!hasLongStatus) taskStatusExpanded = false;
   panel.classList.toggle('expanded', taskStatusExpanded);
   $('task-detail').textContent = taskStatusExpanded ? statusFull : statusShort;
   var more = $('task-more');
   if (more) {
-    more.hidden = statusFull.length <= statusLimit;
+    more.hidden = !hasLongStatus;
     more.onclick = function () {
       taskStatusExpanded = !taskStatusExpanded;
       renderTaskStatus();
@@ -1522,6 +1636,9 @@ function renderTaskStatus() {
   activity.hidden = ['completed','idle','unlinked'].indexOf(kind) >= 0 || !task.activity;
   activity.textContent = activity.hidden ? '' : task.activity;
   $('task-refresh').disabled = !state.ready;
+  $('task-refresh').textContent=relayStatus?'↻':t('刷新状态');
+  $('task-refresh').setAttribute('aria-label',t('刷新状态'));
+  $('task-refresh').title=t('刷新状态');
 }
 function setTask(kind, detail) {
   task.kind = kind; task.detail = detail || ''; task.syncedAt = Date.now();
@@ -3719,6 +3836,7 @@ function newThread(cwd) {
  * The source may still be open on desktop. Never send the saved draft on the
  * user's behalf: the child is opened with the draft visible for review. */
 function forkCurrentThread(source) {
+  if(typeof desktopRelayBusy!=='undefined'&&desktopRelayBusy)return Promise.resolve(false);
   source=source || state.thread;
   if(!source || !source.id || !state.ready || state.forking || state.handingBack)return Promise.resolve(false);
   if(!state.thread || state.thread.id!==source.id)return Promise.resolve(false);
@@ -3750,6 +3868,7 @@ function forkCurrentThread(source) {
       if(currentDraft===draft)$('input').value='';
       textDrafts[source.id]=currentDraft===draft?'':currentDraft;
       textDrafts[child.id]=draft;
+      if(typeof persistTextDrafts==='function')persistTextDrafts();
       attachmentDrafts[source.id]=remaining;
       moved.forEach(function(a){a.threadId=child.id;});
       attachmentDrafts[child.id]=moved;
@@ -3797,7 +3916,6 @@ function openThread(t, options) {
   // the previous conversation's cached list into this one's settings menu.
   state.currentEfforts = null;
   taskStatusExpanded = false;
-  restoreTextDraft(t);
   markSeen(t);       // 记下「这条我看过了」，列表里的未读点靠它消掉
   queueEntries=[];renderQueue();refreshQueue();
   state.items = {}; state.order = [];
@@ -3820,6 +3938,9 @@ function openThread(t, options) {
   $('footer').style.display = '';
   $('body').innerHTML = '<div class="skel"></div><div class="skel"></div>';
   renderFooter();
+  // The footer was hidden on the list. Measure the restored textarea only
+  // after it is visible, otherwise scrollHeight is zero and the text vanishes.
+  restoreTextDraft(t);
   var epoch = observerEpoch;
 
   call('thread/items/list', {
@@ -4100,12 +4221,11 @@ function updateLockHint() {
   var el = document.getElementById('lockhint');
   if (!el) return;
   el.style.display = state.view === 'thread' ? 'flex' : 'none';
-  el.textContent = state.handoffPaused ? t('实时更新暂停 · 仅查看') : !state.ready ? t('连接中 · 仅查看') : state.resumed ? t('手机可发送') : t('当前仅查看');
+  var desktopMode=typeof desktopRelayEnabled!=='undefined' && desktopRelayEnabled;
+  el.textContent = state.handoffPaused ? t('实时更新暂停 · 仅查看') : !state.ready ? t('连接中 · 仅查看') : state.resumed ? t('手机可发送') : desktopMode ? t('电脑代发已开启') : t('当前仅查看');
   ['session-control-hint','lock-control-status'].forEach(function(id){
     var hint=$(id);if(!hint)return;
-    hint.textContent=state.handoffPaused ? t('实时更新暂停 · 仅查看') : !state.ready ? t('连接中 · 仅查看') : state.resumed
-      ?tr('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。')
-      :tr('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
+    hint.textContent=sessionControlHint();
   });
   // 点它 = 打开「会话写入锁」面板（也是一个入口，见 openLockPanel 的说明）
   if (!el.onclick) {
@@ -4114,6 +4234,13 @@ function updateLockHint() {
       if (ev && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); openLockPanel(); }
     };
   }
+}
+function sessionControlHint(){
+  if(state.handoffPaused)return t('实时更新暂停 · 仅查看');
+  if(!state.ready)return t('连接中 · 仅查看');
+  if(state.resumed)return t('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。');
+  if(typeof desktopRelayEnabled!=='undefined' && desktopRelayEnabled)return t('当前使用电脑代发文字，手机不接管会话锁。电脑端的授权、选择和提问仍需在电脑处理；此模式暂不支持附件。');
+  return t('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
 }
 
 /**
@@ -4329,7 +4456,7 @@ function renderFooter() {
   var readOnlySave=task.kind==='unlinked';
   var connectionPanel=$('connect-thread-panel');
   if(connectionPanel){
-    connectionPanel.hidden=!!state.resumed||!state.thread;
+    connectionPanel.hidden=!!state.resumed||!state.thread||!!desktopRelayEnabled;
     $('connect-current').disabled=!state.ready||!!state.resuming||!!state.handingBack||!!state.queueActivating;
     $('connect-current').textContent=state.resuming?t('正在连接此会话…'):t('连接此会话');
     $('fork-from-composer').disabled=!state.ready||!!state.forking||!!state.handingBack;
@@ -4371,13 +4498,14 @@ function renderFooter() {
       'align-self:center;flex:none';
     row.insertBefore(ld, $('send'));
     $('send').style.display = 'none';
+    if(typeof renderDesktopRelayControl==='function')renderDesktopRelayControl();
     return;
   }
   if (!state.resuming && busy) {
     busy.remove();
     $('send').style.display = '';
   }
-  if (state.resuming) return;
+  if (state.resuming) {if(typeof renderDesktopRelayControl==='function')renderDesktopRelayControl();return;}
 
   if (state.running && !old) {
     var s = document.createElement('button');
@@ -4391,6 +4519,131 @@ function renderFooter() {
     $('send').style.display = '';
   }
   if (old) old.disabled = !state.ready;
+  if(typeof renderDesktopRelayControl==='function')renderDesktopRelayControl();
+}
+
+// Remember only an explicit boolean choice. Restoring it changes the UI, never
+// connects a writer, checks a receipt, or sends a saved request.
+var desktopRelayPreferenceKey='codex-desktop-relay-enabled';
+function readDesktopRelayPreference(){
+  var choices=[];
+  ['localStorage','sessionStorage'].forEach(function(name){try{
+    var value=window[name].getItem(desktopRelayPreferenceKey);
+    if(value==='true'||value==='false')choices.push(value==='true');
+  }catch(e){}});
+  // Conflicting storage after a denied write must not override an opt-out.
+  return choices.length>0&&choices.every(function(value){return value===true;});
+}
+function persistDesktopRelayPreference(value){
+  var saved=false;
+  ['localStorage','sessionStorage'].forEach(function(name){try{
+    window[name].setItem(desktopRelayPreferenceKey,value?'true':'false');saved=true;
+  }catch(e){}});
+  return saved;
+}
+var desktopRelayEnabled=readDesktopRelayPreference(),desktopRelayBusy=false;
+function desktopRelayModeLocked(){
+  return desktopRelayBusy||!!state.resumed||!!state.resuming||!!state.sending||!!state.handingBack||!!state.queueActivating||!!state.forking;
+}
+var desktopRelayPending=Object.create(null),desktopRelayNotices=Object.create(null);
+try{var desktopRelaySaved=JSON.parse(localStorage.getItem('codex-desktop-relay-pending')||'{}');
+  Object.keys(desktopRelaySaved).forEach(function(tid){var entry=desktopRelaySaved[tid];
+    if(entry && entry.threadId===tid && typeof entry.id==='string' && /^[A-Za-z0-9_.-]{1,80}$/.test(entry.id) && /^[a-f0-9]{64}$/.test(entry.textHash||''))desktopRelayPending[tid]=entry;
+  });
+}catch(e){}
+function persistDesktopRelayPending(){try{localStorage.setItem('codex-desktop-relay-pending',JSON.stringify(desktopRelayPending));}catch(e){}}
+function desktopRelayTextHash(text){
+  if(!window.crypto||!crypto.subtle||typeof TextEncoder==='undefined')return Promise.reject(new Error(t('此模式需要安全连接与浏览器加密支持。')));
+  return crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)).then(function(bytes){return Array.prototype.map.call(new Uint8Array(bytes),function(b){return ('0'+b.toString(16)).slice(-2);}).join('');});
+}
+function clearSubmittedDesktopRelayDraft(tid,text){
+  if(Object.prototype.hasOwnProperty.call(textDrafts,tid)&&textDrafts[tid]===text)delete textDrafts[tid];
+  if(state.thread&&state.thread.id===tid){
+    var box=$('input');
+    if(box.value===text){box.value='';box.style.height='auto';}
+  }
+  if(!persistTextDrafts())warnTextDraftStorage('浏览器草稿清理失败；刷新后可能出现旧文字，请核对后再发送。');
+}
+function renderDesktopRelayControl(){
+  var panel=$('desktop-relay-control'),tid=state.thread&&state.thread.id;
+  if(!panel)return;panel.hidden=state.view!=='thread'||!tid;
+  var mode=$('desktop-relay-mode');mode.checked=desktopRelayEnabled;
+  mode.disabled=desktopRelayModeLocked();
+  $('desktop-relay-help').hidden=!desktopRelayEnabled;
+  var note=$('desktop-relay-status');note.hidden=!tid||!desktopRelayNotices[tid];note.textContent=tid?desktopRelayNotices[tid]||'':'';
+  var check=$('desktop-relay-check');check.hidden=!tid||!desktopRelayPending[tid];check.disabled=desktopRelayBusy;
+  $('btn-attach').disabled=desktopRelayEnabled||desktopRelayBusy;
+  $('send').classList.toggle('desktop-relay',desktopRelayEnabled);
+  // This Stop command belongs to Bridge's app-server, not the desktop writer.
+  var stop=$('footer').querySelector('.stop');
+  if(stop){stop.style.display=desktopRelayEnabled?'none':'';if(desktopRelayEnabled)stop.disabled=true;}
+  if(desktopRelayBusy)$('send').disabled=true;
+  if(!desktopRelayEnabled)return;
+  $('connect-current').disabled=true;
+  $('fork-from-composer').disabled=desktopRelayBusy||$('fork-from-composer').disabled;
+  $('input').placeholder=t('通过电脑 Codex 发送');
+  $('send-mode').style.display='none';
+  $('send').disabled=desktopRelayBusy||!!state.resumed||!!state.handingBack||!!state.sending||!!state.queueActivating||!!state.forking;
+  $('send').classList.remove('queue');$('send').textContent='↑';$('send').style.fontSize='';
+  $('send').setAttribute('aria-label',desktopRelayBusy?t('定位并发送中…'):t('发送到电脑'));$('send').title=t('通过电脑 Codex 发送');
+}
+function desktopRelayRequest(data){
+  var isSend=data.action==='send',url='/codex/desktop-relay';
+  var controller=new AbortController(),timer;
+  var options={credentials:'same-origin',signal:controller.signal,cache:'no-store',headers:{'x-dsh-desktop-relay':'1'}};
+  if(isSend){options.method='POST';options.headers['content-type']='application/json';options.body=JSON.stringify(data);}
+  else url+='?id='+encodeURIComponent(data.id)+'&threadId='+encodeURIComponent(data.threadId);
+  if(isSend&&new TextEncoder().encode(options.body).length>64*1024){var oversized=new Error('Desktop relay requests are limited to 64 KiB.');oversized.notSubmitted=true;return Promise.reject(oversized);}
+  timer=setTimeout(function(){controller.abort();},90000);
+  return privateFetch(url,options).then(function(response){return response.json().then(function(receipt){
+    if(!response.ok&&!receipt.state){var error=new Error(receipt.error||receipt.message||'Desktop relay request failed');error.notSubmitted=isSend&&['invalid-request','invalid-thread-id','invalid-request-id','invalid-path','invalid-text','unsupported-request','invalid-source','request-too-large'].indexOf(receipt.code)>=0;throw error;}
+    return receipt;
+  });}).finally(function(){clearTimeout(timer);});
+}
+function applyDesktopRelayReceipt(thread,entry,receipt){
+  if(receipt.requestId!==entry.id||receipt.threadId!==thread.id)throw new Error('Desktop relay receipt does not match this request.');
+  if(receipt.state==='accepted'&&receipt.deliveryConfirmed===true){
+    desktopRelayNotices[thread.id]=t(receipt.delivery==='queued'?'电脑 Codex 队列已接收，尚未确认开始执行。':'目标对话已收到消息；请查看后续结果。');
+    var submittedDraft=state.thread&&state.thread.id===thread.id?($('input').value||''):(textDrafts[thread.id]||'');
+    return desktopRelayTextHash(submittedDraft).then(function(hash){
+      if(hash===entry.textHash)clearSubmittedDesktopRelayDraft(thread.id,submittedDraft);
+      delete desktopRelayPending[thread.id];persistDesktopRelayPending();
+      if(state.thread&&state.thread.id===thread.id){renderFooter();refreshObservedThread();}
+    });
+  }
+  if(receipt.state==='failed'){
+    delete desktopRelayPending[thread.id];persistDesktopRelayPending();
+    if(receipt.desktopDraftRemaining===true)desktopRelayNotices[thread.id]=t('电脑输入框仍有未发送的草稿，请在电脑检查后再试。手机草稿已保留。');
+    else if(receipt.desktopDraftCleared===true)desktopRelayNotices[thread.id]=t('本次未发送的桥消息已从电脑输入框清除，手机草稿已保留。');
+    else desktopRelayNotices[thread.id]=t('已保留草稿；电脑代发未完成。')+(receipt.message?' '+receipt.message:'');
+  }else desktopRelayNotices[thread.id]=t('发送未确认；请核对结果，不会自动重发。');
+  if(state.thread===thread)renderFooter();return Promise.resolve();
+}
+function checkDesktopRelayReceipt(){
+  var thread=state.thread,entry=thread&&desktopRelayPending[thread.id];if(!entry||desktopRelayBusy)return Promise.resolve(false);
+  desktopRelayBusy=true;desktopRelayNotices[thread.id]=t('正在核对上次发送结果…');renderFooter();
+  return desktopRelayRequest({id:entry.id,threadId:thread.id}).then(function(receipt){return applyDesktopRelayReceipt(thread,entry,receipt);}).catch(function(error){
+    desktopRelayNotices[thread.id]=t('发送未确认；请核对结果，不会自动重发。')+' '+error.message;
+  }).finally(function(){desktopRelayBusy=false;renderFooter();});
+}
+function sendDesktopRelay(){
+  var thread=state.thread,text=$('input').value||'';
+  if(!thread||!text.trim()||desktopRelayBusy)return Promise.resolve(false);
+  if(state.resumed){toast(t('请先交还手机控制，再通过电脑发送。'));return Promise.resolve(false);}
+  if(state.handingBack||state.sending||state.queueActivating||state.forking)return Promise.resolve(false);
+  if(draftAttachments().length){toast(t('桌面代发首版只支持文字；附件仍保留。'));return Promise.resolve(false);}
+  if(!thread.cwd){toast(t('项目目录尚未确认，不能通过电脑发送。'));return Promise.resolve(false);}
+  if(desktopRelayPending[thread.id]){toast(t('上次发送结果尚未确认，请先核对。'));return checkDesktopRelayReceipt();}
+  desktopRelayBusy=true;desktopRelayNotices[thread.id]=t('正在定位电脑上的项目和对话…');renderFooter();
+  var entry;
+  return desktopRelayTextHash(text).then(function(hash){
+    entry={id:'desktop-'+(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random().toString(16).slice(2)),threadId:thread.id,textHash:hash};
+    desktopRelayPending[thread.id]=entry;persistDesktopRelayPending();
+    return desktopRelayRequest({action:'send',id:entry.id,threadId:thread.id,cwd:thread.cwd,text:text});
+  }).then(function(receipt){return applyDesktopRelayReceipt(thread,entry,receipt);}).catch(function(error){
+    if(!entry||error.notSubmitted){delete desktopRelayPending[thread.id];persistDesktopRelayPending();desktopRelayNotices[thread.id]=t('已保留草稿；电脑代发未完成。')+' '+error.message;}
+    else desktopRelayNotices[thread.id]=t('发送未确认；请核对结果，不会自动重发。')+' '+error.message;
+  }).finally(function(){desktopRelayBusy=false;renderFooter();});
 }
 
 /**
@@ -4400,8 +4653,42 @@ function renderFooter() {
 function send() {
   if(state.handingBack){toast(t('正在检查交还，请稍候再操作。'));return;}
   if(state.queueActivating){toast(t('正在确认发送已存内容…'));return;}
+  if(typeof desktopRelayBusy!=='undefined'&&desktopRelayBusy)return;
+  if(typeof desktopRelayEnabled!=='undefined'&&desktopRelayEnabled){sendDesktopRelay();return;}
+  var thread=state.thread,entry=thread&&typeof desktopRelayPending!=='undefined'&&desktopRelayPending[thread.id];
+  if(!entry)return sendOrdinary();
+  // A mode switch cannot bypass an unresolved desktop receipt. Check only the
+  // exact current draft; another message remains usable in ordinary mode.
+  var text=$('input').value||'',attachments=draftAttachments().slice();
+  if(!text.trim()&&!attachments.length)return;
+  if(state.sending||state.resuming||state.forking)return;
+  var requestId=entry.id,textHash=entry.textHash,sendMode=$('send-mode').value;
+  desktopRelayBusy=true;renderFooter();
+  return desktopRelayTextHash(text).then(function(hash){
+    // Ordinary sending trims the composer. A whitespace edit must not turn an
+    // unresolved desktop message into the very same ordinary payload.
+    if(text!==text.trim())return desktopRelayTextHash(text.trim()).then(function(trimmedHash){return hash===textHash||trimmedHash===textHash;});
+    return hash===textHash;
+  }).then(function(matchesPending){
+    if(state.thread!==thread||state.view!=='thread'||desktopRelayEnabled||
+       state.handingBack||state.queueActivating||state.sending||state.resuming||state.forking||$('send-mode').value!==sendMode||
+       $('input').value!==text||desktopRelayPending[thread.id]!==entry||
+       entry.id!==requestId||entry.textHash!==textHash||
+       draftAttachments().length!==attachments.length||
+       !attachments.every(function(attachment,index){return draftAttachments()[index]===attachment;})){
+      toast(t('草稿已改变，请检查后再次发送。'));return;
+    }
+    if(matchesPending){
+      desktopRelayNotices[thread.id]=t('这条草稿的电脑发送结果尚未确认，请先核对上次发送结果，再改用手机发送。');
+      toast(desktopRelayNotices[thread.id]);return;
+    }
+    desktopRelayBusy=false;return sendOrdinary();
+  }).catch(function(){
+    if(state.thread===thread){desktopRelayNotices[thread.id]=t('无法核对这条草稿的发送记录；请先核对上次发送结果。');toast(desktopRelayNotices[thread.id]);}
+  }).finally(function(){desktopRelayBusy=false;renderFooter();});
+function sendOrdinary() {
   var box = $('input');
-  var text = box.value.trim();
+  var submittedDraft=box.value,text = submittedDraft.trim();
   if (!state.thread) return;
   // The visible button is disabled while forking, but keyboard shortcuts can
   // still call send(). Do not submit the snapshot to the original as well.
@@ -4412,14 +4699,14 @@ function send() {
   if (state.sending) { toast(t('消息正在发送')); return; }
   // 他要「立即补充」，但此刻状态没确认：不要一句「先确认」把他挡回去 ——
   // 先替他确认一次，能插队就插队，不能就排队保存并说清楚。
-  if (task.kind==='unlinked') { enqueueDraft(text,box,attachments,{deferred:true}); return; }
+  if (task.kind==='unlinked') { enqueueDraft(text,box,attachments,{deferred:true,draftText:submittedDraft}); return; }
   if (queueOnly() && $('send-mode').value === 'immediate') {
-    sendWhenUncertain(text, box, attachments);
+    sendWhenUncertain(text, box, attachments,submittedDraft);
     return;
   }
-  if (queueOnly()) { enqueueDraft(text,box,attachments); return; }
+  if (queueOnly()) { enqueueDraft(text,box,attachments,{draftText:submittedDraft}); return; }
   if (!state.ready || ['checking','unknown','offline'].indexOf(task.kind) >= 0) { toast(t('先确认任务状态，再发送消息')); refreshObservedThread(); return; }
-  if (state.running) { if($('send-mode').value==='queue')enqueueDraft(text,box,attachments);else steerTurn(text,box,attachments); return; }
+  if (state.running) { if($('send-mode').value==='queue')enqueueDraft(text,box,attachments,{draftText:submittedDraft});else steerTurn(text,box,attachments,submittedDraft); return; }
 
   if (state.resuming) { toast(t('会话还在加载，稍等一下')); return; }
 
@@ -4471,7 +4758,7 @@ function send() {
       }
       toast(t('加载好了（{n} 秒），正在发送…', {n: Math.round((Date.now() - t0) / 1000)}));
       // 加载完就把使用者刚才输入的内容发出去，不用他再打一遍
-      box.value = text;
+      if(box.value!==submittedDraft){renderFooter();toast(t('草稿已改变，请检查后再次发送。'));return;}
       renderFooter();
       send();
     }).catch(function (e) {
@@ -4522,7 +4809,7 @@ function send() {
       $('title').textContent=submittedThread.preview;
     }
     addLocalUser(attachmentLabel(text,attachments),userTextOf({content:params.input}),params.clientUserMessageId);
-    clearSubmittedTextDraft(submittedThread.id,text);
+    clearSubmittedTextDraft(submittedThread.id,submittedDraft);
     var id = r && (r.turnId || (r.turn && r.turn.id));
     if (id) state.turnId = id;
     renderFooter();
@@ -4539,6 +4826,7 @@ function send() {
       addError(t('发送失败：') + e.message);
     }
   });
+}
 }
 
 /**
@@ -4559,10 +4847,11 @@ function confirmRunningTurn(){
  * 状态还没确认、但使用者选了「立即补充」时走这里：
  * 先确认一次；确认到正在跑的那一轮就真插队，确认不到就按排队保存并如实说明。
  */
-function sendWhenUncertain(text,box,attachments){
+function sendWhenUncertain(text,box,attachments,submittedDraft){
   var sendingThread=state.thread;
+  if(typeof submittedDraft!=='string')submittedDraft=text;
   if(!sendingThread)return;
-  if(!state.resumed){enqueueDraft(text,box,attachments,{deferred:true,
+  if(!state.resumed){enqueueDraft(text,box,attachments,{deferred:true,draftText:submittedDraft,
     savedNotice:t('尚未连接到此会话，只保存了待办，没有发送。')});return;}
   state.sending=true;renderFooter();
   toast(t('正在确认当前任务…'));
@@ -4571,18 +4860,19 @@ function sendWhenUncertain(text,box,attachments){
     if(state.thread!==sendingThread||state.view!=='thread'){
       state.sending=false;renderFooter();return;
     }
-    if(turnId){state.turnId=turnId;steerTurn(text,box,attachments);return;}
-    enqueueDraft(text,box,attachments,{deferred:true,
+    if(turnId){state.turnId=turnId;steerTurn(text,box,attachments,submittedDraft);return;}
+    enqueueDraft(text,box,attachments,{deferred:true,draftText:submittedDraft,
       savedNotice:t('没能确认当前任务，已按排队保存')});
   });
 }
 
-function steerTurn(text,box,attachments) {
+function steerTurn(text,box,attachments,submittedDraft) {
   attachments=attachments || [];
+  if(typeof submittedDraft!=='string')submittedDraft=text;
   if(!state.turnId){
     // Reuse the thread-bound confirmation path for a running turn whose ID
     // has not yet arrived from the observer.
-    sendWhenUncertain(text,box,attachments);
+    sendWhenUncertain(text,box,attachments,submittedDraft);
     return;
   }
   var tid=state.thread.id, turnId=state.turnId,input=attachmentInput(text,attachments);
@@ -4590,7 +4880,7 @@ function steerTurn(text,box,attachments) {
   renderFooter();
   call('turn/steer',{threadId:tid,expectedTurnId:turnId,input:input},15000).then(function(){
     attachmentSent(tid,attachments);
-    clearSubmittedTextDraft(tid,text);
+    clearSubmittedTextDraft(tid,submittedDraft);
     if(state.thread && state.thread.id===tid){
       addLocalUser(attachmentLabel(text,attachments),userTextOf({content:input}));
       toast(t('补充意见已发送，任务继续执行'));
@@ -4973,6 +5263,15 @@ function openSheet() {
       $('sheetInner').appendChild(other);
     }, t.cwd || ''));
 
+    if(desktopRelayEnabled){
+      var desktopSettingsNote=document.createElement('div');desktopSettingsNote.className='info';
+      desktopSettingsNote.textContent=tr('桌面代发使用电脑当前的模型、思考强度与协作模式。手机上的选择不会应用；关闭桌面代发后可继续使用手机设置。');
+      inner.appendChild(desktopSettingsNote);
+      [tr('模型'),tr('思考强度'),tr('协作模式')].forEach(function(label){
+        var desktopSetting=sheetRow(label,tr('由电脑 Codex 决定'),function(){});
+        desktopSetting.disabled=true;desktopSetting.querySelector('.arw').textContent='';inner.appendChild(desktopSetting);
+      });
+    }else{
     // 模型
     inner.appendChild(sheetRow(tr('模型'),
       modelLabel(state.pick.model || t.model || tr('（会话默认）')), function () {
@@ -5018,6 +5317,7 @@ function openSheet() {
       }));
 
     inner.appendChild(sheetRow(tr('协作模式'),collaborationLabel(state.pick.mode),openCollaborationPicker));
+    }
 
     var sec2 = document.createElement('div');
     sec2.className = 'stitle';
@@ -5047,16 +5347,15 @@ function openSheet() {
   secLock.textContent = tr('会话写入锁');
   inner.appendChild(secLock);
 
-  inner.appendChild(sheetRow(tr('会话写入锁'),
+  var sessionControlRow=sheetRow(tr('会话写入锁'),
     // 值里给**会话名**，别只写「（这条会话）」—— 让人一眼看出这一下会动到哪一条
     state.thread ? displayThreadTitle(state.thread,tr('（没有标题）')) : tr('先打开一条会话'),
-    function () { openLockPanel(); }));
+    function () { openLockPanel(); });
+  sessionControlRow.id='menu-session-controls';inner.appendChild(sessionControlRow);
 
   var lockHintRow = document.createElement('div');
   lockHintRow.className = 'info';lockHintRow.id='session-control-hint';
-  lockHintRow.textContent = state.resumed
-    ? tr('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。')
-    : tr('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
+  lockHintRow.textContent = sessionControlHint();
   inner.appendChild(lockHintRow);
 
   var sec3 = document.createElement('div');
@@ -5075,6 +5374,10 @@ function openSheet() {
   langRow.appendChild(langKey);
   if (window.DshI18n && window.DshI18n.makeSwitcher) langRow.appendChild(window.DshI18n.makeSwitcher());
   inner.appendChild(langRow);
+
+  inner.appendChild(sheetRow(tr('Your dot · 电脑连接'), tr('读取电脑上的近期聊天'), function () {
+    location.href = '/dot' + location.hash;
+  }));
 
   inner.appendChild(sheetRow(tr('Dot · 官方使用指南'), tr('通过官方 ChatGPT App'), function () {
     location.href = '/dot-guide' + location.hash;
@@ -5141,7 +5444,7 @@ function openLockPanel() {
   var th = state.thread;
   var info = document.createElement('div');
   info.className = 'info';
-  info.textContent = tr('同一条会话同时只能有一个地方发送。查看不会占锁；若电脑正在使用原会话，手机可以创建独立副本继续。已保存的待办尚未执行。');
+  info.textContent = desktopRelayEnabled ? tr('通过电脑代发文字，不接管会话锁。桥的历史同步不能确认电脑任务是否正在执行。') : tr('同一条会话同时只能有一个地方发送。查看不会占锁；若电脑正在使用原会话，手机可以创建独立副本继续。已保存的待办尚未执行。');
   inner.appendChild(info);
   var promptInfo=document.createElement('div');promptInfo.className='info';promptInfo.textContent=tr('电脑端任务的授权、选择和提问仍需在电脑端处理；当前连接只能同步其记录。手机接管后发起的新任务，可以在这里处理请求。');inner.appendChild(promptInfo);
 
@@ -5154,12 +5457,10 @@ function openLockPanel() {
 
     var st = document.createElement('div');
     st.className = 'info';st.id='lock-control-status';
-    st.textContent = state.resumed
-      ? tr('手机已连接此会话，可以发送。电脑能否接手仍由 Codex 的写入锁决定。')
-      : tr('当前仅查看。原会话可能由电脑或其他执行端控制；创建独立副本即可在手机继续，不必关闭电脑。');
+    st.textContent = sessionControlHint();
     inner.appendChild(st);
 
-    if(!state.resumed){
+    if(!state.resumed && !desktopRelayEnabled){
       var fork=document.createElement('button');fork.className='btn p';
       fork.textContent=tr('复制上下文，在手机独立续聊');
       fork.onclick=function(){closeSheet();forkCurrentThread(th);};
@@ -5194,9 +5495,11 @@ function openLockPanel() {
     safeCost.style.display=state.resumed?'':'none';
     inner.appendChild(safeCost);
 
-    var ownerNote=document.createElement('div');ownerNote.className='info';
-    ownerNote.textContent=tr('当前无法验证占用者，不能从手机关闭桌面 Codex。请在电脑结束原任务，或复制上下文独立续聊。');
-    inner.appendChild(ownerNote);
+    if(!desktopRelayEnabled){
+      var ownerNote=document.createElement('div');ownerNote.className='info';
+      ownerNote.textContent=tr('当前无法验证占用者，不能从手机关闭桌面 Codex。请在电脑结束原任务，或复制上下文独立续聊。');
+      inner.appendChild(ownerNote);
+    }
   } else {
     var none = document.createElement('div');
     none.className = 'info';
@@ -5300,9 +5603,18 @@ window.addEventListener('pageshow',function(e) { if(e.persisted && state.view ==
 // 不还的话那条会话就一直被我们占着，电脑上打不开。
 window.addEventListener('pagehide', releaseThread);
 window.addEventListener('beforeunload', releaseThread);
+window.addEventListener('pagehide',rememberTextDraft);
+window.addEventListener('beforeunload',rememberTextDraft);
 $('menu').onclick = openSheet;
 $('sheet').onclick = function (e) { if (e.target === $('sheet')) closeSheet(); };
 $('send').onclick = send;
+$('desktop-relay-mode').onchange=function(){
+  if(desktopRelayModeLocked()){this.checked=desktopRelayEnabled;return;}
+  desktopRelayEnabled=this.checked;
+  if(!persistDesktopRelayPreference(desktopRelayEnabled))toast(t('已切换发送方式，但浏览器无法记住这个选择。刷新后请检查发送方式。'));
+  renderFooter();
+};
+$('desktop-relay-check').onclick=checkDesktopRelayReceipt;
 $('connect-current').onclick=function(){connectCurrentThread(false);};
 $('fork-from-composer').onclick=function(){forkCurrentThread(state.thread);};
 $('send-mode').onchange=function(){setSendModePref(this.value);renderFooter();};
@@ -5442,6 +5754,7 @@ var input = $('input');
 input.addEventListener('input', function () {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  rememberTextDraft();
 });
 input.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !e.shiftKey && !/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {

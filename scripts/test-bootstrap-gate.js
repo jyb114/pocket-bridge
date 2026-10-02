@@ -52,6 +52,8 @@ console.log('[1] 新用户第一次要加载的东西（**必须放行**，否�
 const mustAllow = [
   ['/', '工作台页面'],
   ['/', '根路径'],
+  ['/dot', 'Dot empty phone shell can load its proof scripts'],
+  ['/dot/', 'Dot phone shell trailing slash'],
   ['/e2ee.js', '加密实现'],
   ['/i18n.js', '多语言模块'],
   ['/route.js', '路径角标 + 挑战应答'],
@@ -92,6 +94,7 @@ const mustBlock = [
   ['/codex/threads', '会话列表 —— 含真实对话预览'],
   ['/codex/file?path=C:\\x', '读文件'],
   ['/codex/queue', '发消息队列'],
+  ['/dot/desktop', 'Native Dot identity and private conversation text'],
   ['/__deepseek/balance', '余额'],
   ['/__codex/quota', 'Codex 额度'],
   ['/api/remote.mux', '实时对话通道'],

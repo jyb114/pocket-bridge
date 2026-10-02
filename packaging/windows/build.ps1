@@ -61,6 +61,10 @@ try {
   $nodeCommand = (Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
   if (-not $nodeCommand) { $nodeCommand = Join-Path $root "runtime\node-v$nodeVersion-win-x64\node.exe" }
   if (-not (Test-Path -LiteralPath $nodeCommand)) { throw 'Node.js is needed to stage tracked source files' }
+  # Check directory/language defaults and the marked smoke's shared-state
+  # boundary without invoking NSIS, reading user keys, or installing anything.
+  & $nodeCommand (Join-Path $root 'scripts\test-windows-installer.js')
+  if ($LASTEXITCODE -ne 0) { throw 'Windows installer source contract failed' }
   & $nodeCommand (Join-Path $PSScriptRoot 'stage.js') $payload
   if ($LASTEXITCODE -ne 0) { throw 'Source staging failed' }
 
@@ -138,7 +142,17 @@ try {
     foreach ($relative in @(
       'README.md', 'THIRD-PARTY-NOTICES.md', 'scripts\pair-code.js',
       'scripts\install-autostart.js', 'desktop\icons\app.ico',
-      'desktop\icons\green.ico', 'pwa\icon-192.png'
+      'desktop\icons\green.ico', 'pwa\icon-192.png',
+      'scripts\desktop-ui-action.js', 'scripts\codex-desktop-driver.js',
+      'scripts\codex-desktop-ui.ps1', 'scripts\codex-desktop-relay.js',
+      'scripts\codex-desktop-target.js', 'scripts\codex-desktop-text.js',
+      'scripts\codex-desktop-source-guard.ps1',
+      'scripts\dot-desktop-driver.js', 'scripts\dot-desktop-ui.ps1', 'scripts\dot-desktop-service.js',
+      'scripts\dot-desktop-protocol.js', 'scripts\dot-desktop-owner.js', 'scripts\dot-desktop-journal.js',
+      'scripts\dot-desktop-private-store.js', 'scripts\dot-desktop-runtime.js',
+      'scripts\dot-desktop-send-driver.js', 'scripts\dot-desktop-send.ps1',
+      'scripts\dot-desktop-source-guard.ps1', 'scripts\dot-desktop-navigation-guard.ps1',
+      'pwa\codex.html', 'pwa\dot.html', 'pwa\e2ee.js'
     )) {
       $sourceFile = Join-Path $root $relative
       $installedFile = Join-Path $testInstall $relative

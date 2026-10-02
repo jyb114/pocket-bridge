@@ -45,6 +45,9 @@ const BASE = path.resolve(__dirname, '..');
 let PORT = Number(process.env.DSH_GW_PORT || 8080);
 // 本机实例身份，启动时由 config.js 确认，/__health 会报给启动器
 let INSTANCE_ID = null;
+// Installation identity persists across restarts. This separate identity names
+// only this process boot and is never used as an authentication credential.
+const GATEWAY_BOOT_ID = crypto.randomUUID();
 const TARGET_HOST = '127.0.0.1';
 
 // DSH 每次启动都会换端口（启动日志里能看到 52224 → 53322 → … → 58347），
@@ -72,6 +75,14 @@ const PWA_DIR = path.join(BASE, 'pwa');
 const DSH_LAZY_IMAGE_DIR = path.join(LOG_DIR, 'dsh-onboarding-images');
 const handleCodexUpload = require('./codex-uploads.js').createUploadHandler(path.join(BASE, 'uploads', 'codex'));
 const codexQueue = require('./codex-queue.js').createQueueService(BASE, () => require('./targets.js').codex.port());
+const codexDesktopRelay = require('./codex-desktop-relay.js').createDesktopRelayService(BASE, {
+  rpc: require('./codex-queue.js').createRpc(() => require('./targets.js').codex.port()),
+  driver: require('./codex-desktop-driver.js').createDesktopDriver()
+});
+// Production remains read-only: no testOnlyEnableSend option is supplied.
+// Construction/status cannot provision keys or start a native helper.
+const dotDesktopRuntime = require('./dot-desktop-runtime.js').createDotDesktopRuntime({ base: BASE });
+const dotDesktop = dotDesktopRuntime.service;
 // 「释放电脑端的锁」—— 手机被独占写锁挡住时的唯一出路。为什么只有那两条路、
 // 以及为什么**不**许删锁文件，都写在 codex-lock.js 头部。
 const codexLock = require('./codex-lock.js').createLockService(BASE, {
@@ -108,6 +119,8 @@ function serveCodexThreads(req, res) {
 const serveCodexThreadsE2ee = e2eeWrap(serveCodexThreads);
 const handleCodexUploadE2ee = e2eeWrap(handleCodexUpload);
 const codexQueueHandleE2ee = e2eeWrap(codexQueue.handle.bind(codexQueue));
+const codexDesktopRelayHandleE2ee = e2eeWrap(codexDesktopRelay.handle.bind(codexDesktopRelay));
+const dotDesktopHandleE2ee = e2eeWrap(dotDesktop.handle.bind(dotDesktop));
 const codexLockHandleE2ee = e2eeWrap(codexLock.handle.bind(codexLock));
 // The POST file handler uses sendFile's bounded file encryption. Only its
 // request needs e2eeWrap; wrapping the streamed response as well would risk
@@ -2785,7 +2798,7 @@ const BOOTSTRAP_PATHS = new Set([
   // ★ codex 是我们的**应用页**（它自己带 /prove.js，加载时会证明）。不放行的话，
   //   没证明过的设备连这一页都打不开 —— 只会看到「正在验证」页，而使用者会理解成
   //   「要我重新配对」。它和 `/` 是同一类东西：这台设备自己的程序。
-  '/codex', '/codex/',
+  '/codex', '/codex/', '/dot', '/dot/',
   '/__auth/challenge', '/__auth/verify',
   '/__health', '/__probe',
   // 「你是不是缺密钥」——**故意不加密**，因为它要回答的正是"没有密钥怎么办"。
@@ -2973,36 +2986,108 @@ function rotateCoolingDown() {
  * 所以外网地址不变。这一点很关键：刚点完一个按钮就把人家手机书签换掉，
  * 是这个项目已经犯过一次的错。
  *
- * @returns {boolean} 有没有把重启助手拉起来（拉不起来就如实告诉使用者手动重启）
+ * @returns {boolean} Whether controlled restart was accepted/scheduled. This
+ * does not claim that drain, helper startup, or restart has completed.
  */
-function restartSelfSoon(reason, opts) {
-  const args = [path.join(BASE, 'scripts', 'restart-gateway.js')];
+const desktopLifecycle = require('./desktop-ui-action.js').createDesktopLifecycle({
+  scheduler: require('./desktop-ui-action.js'), dotRuntime: dotDesktopRuntime, codexRelay: codexDesktopRelay,
+  async spawnRestart(detail) {
+    const args = [path.join(BASE, 'scripts', 'restart-gateway.js')];
   // 把自己**实际在用的端口**告诉助手。
   //
   // 不能让它去猜 8080：网关的端口是选出来的（8080 被占就往后挪到 8099），
   // 而助手要靠轮询健康检查来判断「中间层退了没有」。端口猜错的话它永远
   // 轮询一个没人监听的端口 —— 表现是白等 20 秒然后放弃重启，
   // 使用者看到的是「点了没反应」。这个信息我们这里百分之百确定，直接传。
-  args.push('--port', String(PORT));
+    args.push('--port', String(PORT));
   // 更改地址要把新地址推到手机上 —— 那一步会让手机当场被踢下线，
   // 而它书签里还是旧地址；人在外面时没有这条推送就是死结。
-  if (opts && opts.notifyAddress) args.push('--notify-address');
-
-  try {
-    const helper = require('child_process').spawn(process.execPath, args,
-      { cwd: BASE, detached: true, stdio: 'ignore', windowsHide: true });
-    helper.unref();
-    log(`设置已改（${reason}），正在自动重启中间层（端口 ${PORT}）`);
-  } catch (err) {
-    log(`自动重启没能启动（${err.message}）—— 需要手动重启`);
-    return false;
+    if (detail?.notifyAddress) args.push('--notify-address');
+    // A returned ChildProcess is not proof of successful startup. Only its
+    // spawn event permits the already-drained gateway to exit.
+    await new Promise((resolve, reject) => {
+      const helper = require('child_process').spawn(process.execPath, args,
+        { cwd: BASE, detached: true, stdio: 'ignore', windowsHide: true });
+      helper.once('error', reject);
+      helper.once('spawn', () => { helper.unref(); resolve(); });
+    });
+    log(`设置已改（${detail?.reason}），桌面操作已结束，正在重启中间层（端口 ${PORT}）`);
+  },
+  exit(code) {
+    // Preserve the response flush delay only after all actual owned children
+    // have closed, all receipts have settled, and the helper has started.
+    return new Promise(resolve => setTimeout(() => { process.exit(code); resolve(); }, 700));
+  },
+  onState(state) {
+    if (state.phase === 'draining') log('Controlled gateway shutdown: desktop admission stopped; waiting for owned actions.');
+    if (state.phase === 'failed') log(`Controlled gateway shutdown blocked (${state.code}); ownership evidence retained, no forced exit.`);
   }
+});
+function restartSelfSoon(reason, opts) {
+  return desktopLifecycle.scheduleRestart(reason, opts);
+}
 
-  // 先把 HTTP 响应发出去，再退出自己。
-  // 直接同步 exit 的话响应可能还在缓冲区里 —— 使用者会看到一个
-  // 「点完什么都没发生」的页面，然后自己刷新，而那时服务正在重启。
-  setTimeout(() => { try { process.exit(0); } catch (err) { /* 已经在退了 */ } }, 700);
-  return true;
+function requestControlledGatewayAction(req, body) {
+  const restarting = body?.action === 'restart-gateway';
+  const reply = (status, code, scheduled = false) => ({ status, body: {
+    ok: scheduled,
+    ...(restarting ? { restarting: scheduled, restartScheduled: scheduled,
+      restartState: desktopLifecycle.status(), restartBootId: GATEWAY_BOOT_ID } :
+      { stopping: scheduled, shutdownScheduled: scheduled }),
+    shutdown: desktopLifecycle.status(), bootId: GATEWAY_BOOT_ID, instanceId: INSTANCE_ID, pid: process.pid,
+    ...(code ? { code } : {})
+  } });
+  // Unlike an OS process search, this request is pinned to one installation
+  // and one exact boot. Browser-origin equality prevents local cross-site
+  // forms from turning a public page into a stop button for the computer.
+  if (!isLoopback(req)) return reply(403, 'invalid-source');
+  try {
+    const protocol = req.socket?.encrypted ? 'https:' : 'http:';
+    const expectedOrigin = `${protocol}//${req.headers?.host}`;
+    const parsed = new URL(expectedOrigin);
+    const expectedPort = req.socket?.encrypted ? HTTPS_PORT : PORT;
+    if (parsed.origin !== expectedOrigin || !['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) ||
+        Number(parsed.port || (protocol === 'https:' ? 443 : 80)) !== expectedPort ||
+        req.headers?.origin !== expectedOrigin) return reply(403, 'invalid-source');
+  } catch (_) { return reply(403, 'invalid-source'); }
+  const uuid = value => typeof value === 'string' && value.length === 36 &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const allowed = restarting ? ['action', 'expectedBootId', 'expectedInstanceId', 'expectedPid'] : ['action', 'expectedBootId', 'expectedInstanceId'];
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !['stop-gateway', 'restart-gateway'].includes(body.action) ||
+      Object.keys(body).length !== allowed.length || Object.keys(body).some(key => !allowed.includes(key)) ||
+      !uuid(body.expectedBootId) || !uuid(body.expectedInstanceId) ||
+      restarting && (!Number.isSafeInteger(body.expectedPid) || body.expectedPid < 1 || body.expectedPid > 0xffffffff)) {
+    return reply(400, restarting ? 'invalid-restart-request' : 'invalid-stop-request');
+  }
+  if (body.expectedBootId !== GATEWAY_BOOT_ID || body.expectedInstanceId !== INSTANCE_ID ||
+      restarting && body.expectedPid !== process.pid) return reply(409, 'gateway-identity-mismatch');
+  const state = desktopLifecycle.status();
+  if (state.phase === 'failed') return reply(503, 'desktop-drain-failed');
+  if (state.kind && state.kind !== (restarting ? 'restart' : 'shutdown')) return reply(409, 'shutdown-already-scheduled');
+  if (restarting) {
+    // Only the coordinator may launch the helper after durable close and
+    // physical child drain. Restart never writes or clears a user stop marker.
+    if (!desktopLifecycle.scheduleRestart('scoped local reload')) return reply(503, 'desktop-drain-failed');
+    return reply(202, null, true);
+  }
+  // The daemon already observes this per-install flag. Persist it before an
+  // accepted stop can exit; never remove private state or another install's
+  // marker. A pre-existing regular flag is retained byte-for-byte.
+  const flag = path.join(LOG_DIR, 'user-stopped.flag');
+  try {
+    let fd;
+    try {
+      fd = fs.openSync(flag, 'wx', 0o600);
+      fs.writeFileSync(fd, 'Controlled local gateway stop requested.\n');
+      fs.fsyncSync(fd);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const existing = fs.lstatSync(flag);
+      if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1) throw Error('unsafe-stop-flag');
+    } finally { if (fd !== undefined) fs.closeSync(fd); }
+  } catch (_) { return reply(503, 'stop-marker-unavailable'); }
+  if (!desktopLifecycle.scheduleShutdown()) return reply(503, 'desktop-drain-failed');
+  return reply(202, null, true);
 }
 
 async function buildConsoleStatus(lang) {
@@ -3064,7 +3149,8 @@ async function buildConsoleStatus(lang) {
     hostname: os.hostname(),
     platform: process.platform,
     instanceId: INSTANCE_ID,
-    gateway: { port: PORT, running: true, httpsPort: HTTPS_PORT || 0, dshPort: TARGET_PORT, dshAlive,
+    gateway: { port: PORT, running: true, bootId: GATEWAY_BOOT_ID, httpsPort: HTTPS_PORT || 0, dshPort: TARGET_PORT, dshAlive,
+      desktopShutdown: desktopLifecycle.status(),
       dshRuntime: dshRuntime.serializeRuntime(dshRuntime.peekRuntime()), dshAuthReady: DSH_UPSTREAM_AUTH_OK },
     domain: {
       mode: domainMode,
@@ -3254,6 +3340,14 @@ function handleConsole(req, res, u) {
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
       catch (err) { body = {}; }
 
+      if (body?.action === 'stop-gateway' || body?.action === 'restart-gateway') {
+        const stopped = requestControlledGatewayAction(req, body);
+        res.writeHead(stopped.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(stopped.body));
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) body = {};
+
       let result = { ok: false, message: '未知操作' };
       if (body.action === 'export-diagnostic') {
         // 生成脱敏诊断包 —— 手机连不上时，人需要把「现场」发给别人看，
@@ -3375,7 +3469,7 @@ function handleConsole(req, res, u) {
             result = {
               ok: true,
               restarting: restartSelfSoon('更换临时地址和凭据', { notifyAddress: true }),
-              message: '临时地址与全部访问凭据已更换，正在重启并重建隧道。旧链接和旧设备都会失效。'
+              message: 'Access credentials changed. Restart and tunnel refresh are scheduled after desktop actions finish. Old links and paired devices are invalidated.'
             };
           } catch (err) {
             result = { ok: false, message: `更换临时地址失败: ${err.message}` };
@@ -3420,8 +3514,8 @@ function handleConsole(req, res, u) {
           result = {
             ok: true,
             restarting: restartSelfSoon('换新地址', { notifyAddress: true }),
-            message: '地址和密钥都换好了，正在自动重启服务（几秒钟）。\n' +
-              '重启完这里会显示新地址，同时会往你手机推一条能直接点开的新链接。'
+            message: 'Access credentials changed. Restart is scheduled after desktop actions finish.\n' +
+              'The new phone address will appear after restart; configured notifications will receive the new link.'
           };
         } catch (err) {
           result = { ok: false, message: `换新地址失败: ${err.message}` };
@@ -3442,7 +3536,7 @@ function handleConsole(req, res, u) {
           result = {
             ok: true,
             restarting: restartSelfSoon('换访问密钥', { notifyAddress: true }),
-            message: '新地址已生成，所有已配对的手机都已作废。正在自动重启服务（几秒钟）。'
+            message: 'Access credentials changed and paired devices were revoked. Restart is scheduled after desktop actions finish.'
           };
         } catch (err) {
           result = { ok: false, message: `更改地址失败: ${err.message}` };
@@ -3653,17 +3747,16 @@ function handleConsole(req, res, u) {
             result = {
               ok: true,
               restarting: restartSelfSoon('开内网 HTTPS'),
-              message: '已开启内网 HTTPS，正在自动重启服务（几秒钟）。\n\n'
-                + '手机第一次打开加密的内网地址时，会看到一次证书警告 —— 这是自签证书的正常表现，'
-                + '选「继续访问」即可，之后就加密了。\n'
-                + `想彻底不看到警告：把这个文件装到手机上信任一次 —— ${require('./make-cert.js').CA_CERT}`
+              message: 'LAN HTTPS is configured on. Restart is scheduled after desktop actions finish.\n\n'
+                + 'The phone may show a self-signed certificate warning when opening the LAN HTTPS address.\n'
+                + `To trust the local certificate, install this CA file on the phone: ${require('./make-cert.js').CA_CERT}`
             };
           } else {
             cfg.saveConfig(conf);
             result = {
               ok: true,
               restarting: restartSelfSoon('关内网 HTTPS'),
-              message: '已关闭内网 HTTPS，正在自动重启服务（几秒钟）。内网将回到明文 HTTP（同一 WiFi 下可被嗅探）。'
+              message: 'LAN HTTPS is configured off. Restart is scheduled after desktop actions finish. LAN HTTP traffic will be readable to observers on the same network.'
             };
           }
         } catch (err) {
@@ -3704,6 +3797,17 @@ function handleConsole(req, res, u) {
         }
       }
 
+      if (result.restarting !== undefined && desktopLifecycle.status().kind === 'restart') {
+        // Preserve the legacy synchronous boolean while naming its actual
+        // meaning. Completion is visible separately in console status.
+        result.restartScheduled = result.restarting === true;
+        result.restartState = desktopLifecycle.status();
+        result.restartBootId = GATEWAY_BOOT_ID;
+        if (!result.restartScheduled) {
+          result.ok = false;
+          result.message = 'Settings were saved, but controlled restart is blocked. Existing desktop ownership evidence is preserved.';
+        }
+      }
       log(`控制台操作 ${body.action}: ${result.message}`);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(result));
@@ -4159,9 +4263,35 @@ function viaRelay(req) {
   return requestOrigin.viaRelay(req);
 }
 
-/** 电脑上有没有长期密钥。没有就无从加密，一切照旧。 */
+/** Return a usable content key, or null without exposing storage errors. */
 function e2eeSecretOrNull() {
-  try { return e2eeBridge.readSecret(); } catch (err) { return null; }
+  try {
+    const secret = e2eeBridge.readSecret();
+    return typeof secret === 'string' && secret.length >= 16 ? secret : null;
+  } catch (err) { return null; }
+}
+
+/** A lost key must never turn a protected remote request into plaintext. */
+function refuseEncryptionUnavailable(res) {
+  res.writeHead(503, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store', 'x-content-type-options': 'nosniff'
+  });
+  res.end(JSON.stringify({ ok: false, code: 'encryption-unavailable',
+    message: 'Encrypted content is temporarily unavailable. Check the computer gateway and retry.' }));
+}
+
+function refuseEncryptionUnavailableUpgrade(socket) {
+  let response = '';
+  refuseEncryptionUnavailable({
+    writeHead(status, headers) {
+      response = `HTTP/1.1 ${status} Service Unavailable\r\nConnection: close\r\n`;
+      for (const [name, value] of Object.entries(headers)) response += `${name}: ${value}\r\n`;
+    },
+    end(body) {
+      socket.end(response + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n` + body);
+    }
+  });
 }
 
 const PLAINTEXT_REFUSED = {
@@ -4235,6 +4365,8 @@ const E2EE_CONTENT_PATHS = new Set([
   '/codex/file',      // 图片与附件字节（下载）
   '/codex/upload',    // 上传的附件字节
   '/codex/queue',     // 排队消息的正文
+  '/codex/desktop-relay', // Desktop relay text and delivery receipts.
+  '/dot/desktop', // Native Dot identity and currently loaded conversation text.
   '/codex/threads',    // 会话列表 —— 标题本身就是内容
   // C17 地址面板。回的是**访问密钥所在的地址**，所以和上面那些一样必须加密：
   // 控制台能明文拿到它是因为它只认回环，手机这条走中继。
@@ -4319,6 +4451,9 @@ function e2eeWrap(handler, options) {
     //   实测：经中继 GET /codex/threads?e2ee=1 → 200 + JSON + 真实会话标题。
     let wants = false;
     try { wants = clientWantsE2ee(req, new URL(req.url, 'http://localhost')); } catch (err) { wants = false; }
+    // The entry gate marks protected relay requests in process, never through
+    // a client header. Recheck if the key was removed after that gate ran.
+    if (!secret && req.__dshRequireE2ee === true) return refuseEncryptionUnavailable(res);
     if (!secret || !wants) return handler(req, res);
 
     let finished = false;
@@ -4377,6 +4512,7 @@ function e2eeWrap(handler, options) {
       // Only this in-process shim can carry successful decryption proof. A
       // client-supplied header alone must never authorize the Lite file routes.
       shim.__dshE2eeDecrypted = true;
+      shim.__dshRequireE2ee = req.__dshRequireE2ee === true;
       shim.socket = req.socket;
       shim.setTimeout = function () { return shim; };
       if (!options.responseEncryptedByHandler) wrapEncryptedResponse(res, secret);
@@ -4460,6 +4596,27 @@ function serveCodexPage(req, res, availabilityChecked = false) {
   return;
 }
 
+// This page has no user content until an authenticated, encrypted Connect POST.
+function serveDotPage(req, res) {
+  let body;
+  try { body = Buffer.from(injectProofAssets(fs.readFileSync(path.join(PWA_DIR, 'dot.html'), 'utf8')), 'utf8'); }
+  catch (_) {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('The Dot phone page is unavailable.');
+    return;
+  }
+  const accepted = String(req.headers['accept-encoding'] || '');
+  let encoding = /\bbr\b/.test(accepted) ? 'br' : /\bgzip\b/.test(accepted) ? 'gzip' : null;
+  if (encoding) {
+    try { body = encoding === 'br' ? zlib.brotliCompressSync(body) : zlib.gzipSync(body, { level: 6 }); }
+    catch (_) { encoding = null; }
+  }
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length };
+  if (encoding) { headers['content-encoding'] = encoding; headers.vary = 'Accept-Encoding'; }
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
 /**
  * 每一次 HTTP 请求的入口。
  *
@@ -4535,10 +4692,16 @@ function handleRequestInner(req, res, proofDeadline) {
   //
   // 放在这么靠前是有意的：这些端点分散在下面几百行里，挨个加判断迟早会漏一个，
   // 而漏掉的那条就是缺口。集中成一张表，加通道只改这张表。
-  if (E2EE_CONTENT_PATHS.has(u.pathname) && e2eeSecretOrNull() && viaRelay(req) &&
-      !clientWantsE2ee(req, u)) {
-    refusePlaintext(req, res, u.pathname);
-    return;
+  if (E2EE_CONTENT_PATHS.has(u.pathname) && viaRelay(req)) {
+    req.__dshRequireE2ee = true;
+    if (!e2eeSecretOrNull()) {
+      refuseEncryptionUnavailable(res);
+      return;
+    }
+    if (!clientWantsE2ee(req, u)) {
+      refusePlaintext(req, res, u.pathname);
+      return;
+    }
   }
 
   // 本机控制台（页面 + 状态 + 操作），全部只允许回环来源
@@ -4682,6 +4845,7 @@ function handleRequestInner(req, res, proofDeadline) {
       res.end(JSON.stringify({
         service: 'pocket-bridge-gateway',
         instanceId: INSTANCE_ID,
+        bootId: GATEWAY_BOOT_ID,
         port: PORT,
         httpsPort: HTTPS_PORT || 0,
         dshPort: TARGET_PORT,
@@ -5089,7 +5253,7 @@ function handleRequestInner(req, res, proofDeadline) {
     //   日志里 `403 未通过挑战应答: GET /codex（…不在开页面的窗口里，直接拒）`——
     //   使用者的 Codex 页整页打不开，还以为是「要我重新配对」）。
     if (u.pathname === '/' || u.pathname === '/index.html' || u.pathname === '/dsh-lite' ||
-      u.pathname === '/codex' || u.pathname === '/codex/' ||
+      u.pathname === '/codex' || u.pathname === '/codex/' || u.pathname === '/dot' || u.pathname === '/dot/' ||
       u.pathname === '/go' || u.pathname === '/go/' ||
       req.__dshViaKeyPath) {
       const wasAway = !proofBootWindowOpen(dev.device.id);
@@ -5432,6 +5596,21 @@ function handleRequestInner(req, res, proofDeadline) {
     codexQueueHandleE2ee(req, res);
     return;
   }
+  if (u.pathname === '/codex/desktop-relay') {
+    codexDesktopRelayHandleE2ee(req, res);
+    return;
+  }
+  if (u.pathname === '/dot/desktop') {
+    dotDesktopHandleE2ee(req, res);
+    return;
+  }
+  if (u.pathname === '/dot' || u.pathname === '/dot/') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store' });
+      res.end();
+    } else serveDotPage(req, res);
+    return;
+  }
   // 「释放电脑端的锁」。**故意不放进 E2EE_CONTENT_PATHS 那张闸门表**：
   // 那张表管的是「携带使用者正文的通道」，而这条只带一个会话 id、回一句成败，
   // 没有正文可泄。手机那边仍然会带 x-dsh-e2ee 发（响应加密），只是不强制。
@@ -5456,6 +5635,12 @@ function handleRequestInner(req, res, proofDeadline) {
   // 而 Codex 的界面是我们自己写的，路径怎么写都行 —— 于是两边都能待在舒服的位置上。
   if (u.pathname === '/' || u.pathname === '/index.html') {
     const want = u.searchParams.get('target');
+    if (want === 'dot') {
+      const previousCookies = res.getHeader('set-cookie');
+      res.setHeader('set-cookie', [].concat(previousCookies || [], [targetCookie('codex')]));
+      serveDotPage(req, res);
+      return;
+    }
     const phoneAgent = /iPhone|iPad|iPod|Android|Mobile/i.test(String(req.headers['user-agent'] || ''));
     // Both inspected HTTP profiles have small, encrypted phone adapters. The
     // classic upstream UI can expose history through plain /api responses, so
@@ -5699,9 +5884,18 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
   //   这一道管的是「这条路上跑的是不是明文」—— 三件事互不替代。
   //   网关原来只做到「客户端要求就加密」，所以冒充者不要求就能拿明文，
   //   而 WS 恰恰是最长的那条通道（整个对话都在上面）。
-  //   现在：有长期密钥 + 经中继 + 没带 e2ee=1 → 拒绝升级，不降级发明文。
-  //   带 #k= 的正常手机由 e2ee.js 自动补 e2ee=1，不受影响。
+  // Remote upgrades require a usable key and e2ee=1. Missing key material
+  // returns 503; a plaintext request with an available key returns 403.
   const wsGateSecret = e2eeSecretOrNull();
+  if (viaRelay(req)) {
+    if (!wsGateSecret) {
+      refuseEncryptionUnavailableUpgrade(socket);
+      return;
+    }
+    // Pin this connection's checked key through asynchronous upstream setup.
+    // A later unreadable key file must not change the connection to plaintext.
+    req.__dshWsE2eeSecret = wsGateSecret;
+  }
   if (wsGateSecret && viaRelay(req) && !e2eeBridge.wanted(req.url, wsGateSecret)) {
     log('WS 被拒：经中继但没要求加密（拒绝明文，不降级）');
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n' +
@@ -5744,21 +5938,9 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
     raw += '\r\n';
     upstream.write(raw);
 
-    // 可选加密：手机在 WS 地址上带了 e2ee=1、而且电脑上有长期密钥时才启用。
-    // ⚠️ 这里**试过**改成「服务端强制加密」，又退回来了。如实记下来：
-    //
-    //   强制之后冒充者确实拿不到明文了（实测：不带 e2ee=1 也返回密文）。
-    //   但它同时把**所有没带 #k= 的客户端**也一起废掉了 —— 它们收到密文
-    //   却解不开，表现是页面卡死（browser-check 从 83 通过掉到 43 并超时）。
-    //   包括：只有 /k/<密钥> 的老书签、以及所有测试脚手架。
-    //
-    //   要做对，得配上「没带钥匙就明确回 403 + 一句人话」，
-    //   再改测试脚手架让它带 #k= 连。那是一个完整的改动，不能只改这一行。
-    //   在那之前保持原样（客户端要求才加密），免得把一个能用的系统改坏。
-    //
-    //   结论没变：**这是当前最大的安全缺口** —— 冒充者不要求加密就能拿明文。
-    //   下一轮连同 403 提示和测试脚手架一起做。
-    const secret = e2eeBridge.readSecret();
+    // Direct local clients keep optional encryption. Relay clients passed the
+    // mandatory gate above; retain its checked key during upstream setup.
+    const secret = req.__dshWsE2eeSecret || e2eeBridge.readSecret();
     const useE2ee = e2eeBridge.wanted(req.url, secret);
     const bridge = useE2ee ? e2eeBridge.attach(secret) : null;
     if (useE2ee) log('WS 通道已启用端到端加密（隧道只能看到密文）');
@@ -6037,8 +6219,8 @@ async function proxyCodexWs(req, socket, head) {
 
     upstream.write(raw);
 
-    // 跟 DSH 那条一样的可选加密开关（强制加密试过又退回，原因见上面那段说明）
-    const cxSecret = e2eeBridge.readSecret();
+    // Keep the checked remote key; direct local clients retain optional encryption.
+    const cxSecret = req.__dshWsE2eeSecret || e2eeBridge.readSecret();
     const cxUseE2ee = e2eeBridge.wanted(req.url, cxSecret);
     const cxBridge = cxUseE2ee ? e2eeBridge.attach(cxSecret) : null;
     if (cxUseE2ee) log('WS Codex 通道已启用端到端加密');
@@ -6196,13 +6378,19 @@ async function startHttpsIfEnabled() {
 // 这里把没接住的异常和未处理的 Promise 拒绝都写进日志。
 process.on('uncaughtException', (err) => {
   log(`FATAL 未捕获异常: ${err && err.stack ? err.stack : err}`);
-  // 给日志一点时间落盘再退，否则最后这句可能丢
+  // This is an abrupt crash, not an orderly drain. Retain durable owner and
+  // child evidence for explicit recovery; never claim a graceful close.
   setTimeout(() => process.exit(1), 200);
 });
 
 process.on('unhandledRejection', (reason) => {
   log(`FATAL 未处理的 Promise 拒绝: ${reason && reason.stack ? reason.stack : reason}`);
 });
+
+// Health/listeners stay up while the same controlled transaction drains.
+// Repeated signals do not bypass a pending or failed close with process.exit.
+process.on('SIGINT', () => { desktopLifecycle.scheduleShutdown(); });
+process.on('SIGTERM', () => { desktopLifecycle.scheduleShutdown(); });
 
 server.on('error', (err) => {
   log(`FATAL 监听失败: ${err.message}`);
@@ -6542,7 +6730,9 @@ function serveCodexFile(req, res, u) {
     //
     //   这和 e2eeWrap 那段注释里记的是**同一个坑**（"闸门认两种、这里只认一种"），
     //   当时只修了 /codex/threads 那条，文件这条漏了。
-    const wantE2ee = clientWantsE2ee(req, u) && !!e2eeBridge.readSecret();
+    // Keep the remote requirement even if the key disappeared during stat.
+    const wantE2ee = req.__dshRequireE2ee === true ||
+      (clientWantsE2ee(req, u) && !!e2eeBridge.readSecret());
 
     const wantW = Number(u.searchParams.get('w') || 0);
     if (isImg && wantW > 0 && wantW <= 2000) {
@@ -6606,7 +6796,8 @@ function sendFile(res, file, type, encrypt) {
       }
       let ct = null;
       try {
-        const secret = e2eeBridge.readSecret();
+        const secret = e2eeSecretOrNull();
+        if (!secret) return refuseEncryptionUnavailable(res);
         const keys = e2ee.deriveKeys(secret, e2ee.slotAt());
         ct = e2ee.encrypt(keys.b, data);
       } catch (err) {

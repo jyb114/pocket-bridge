@@ -18,6 +18,13 @@ jobs:
         with:
           node-version: '24.18.1'
 
+      - name: Run isolated CI before packaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/run-ci-tests.js
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated CI failed; installer build and publication are blocked' }
+
       - name: Build and smoke-test installer
         shell: pwsh
         run: ./packaging/windows/build.ps1

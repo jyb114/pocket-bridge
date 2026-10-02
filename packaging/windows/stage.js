@@ -39,6 +39,14 @@ for (const relative of selected) {
 }
 for (const required of [
   'scripts/gateway-daemon.js', 'scripts/mobile-proxy.js', 'scripts/first-run.js',
+  'scripts/desktop-ui-action.js', 'scripts/codex-desktop-driver.js',
+  'scripts/codex-desktop-ui.ps1', 'scripts/codex-desktop-relay.js', 'scripts/codex-desktop-target.js', 'scripts/codex-desktop-text.js',
+  'scripts/codex-desktop-source-guard.ps1',
+  'scripts/dot-desktop-driver.js', 'scripts/dot-desktop-ui.ps1', 'scripts/dot-desktop-service.js',
+  'scripts/dot-desktop-protocol.js', 'scripts/dot-desktop-owner.js', 'scripts/dot-desktop-journal.js',
+  'scripts/dot-desktop-private-store.js', 'scripts/dot-desktop-runtime.js',
+  'scripts/dot-desktop-send-driver.js', 'scripts/dot-desktop-send.ps1',
+  'scripts/dot-desktop-source-guard.ps1', 'scripts/dot-desktop-navigation-guard.ps1', 'pwa/dot.html',
   'desktop/open-desktop.vbs', 'desktop/open-desktop-app.js',
   'desktop/icons/app.ico', 'pwa/console.html'
 ]) {

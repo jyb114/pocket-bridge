@@ -181,42 +181,55 @@ try {
     assert(!fs.existsSync(link), 'isolated autostart shortcut survived uninstall');
   });
 
-  await check('desktop launcher spawns the available Node executable', () => {
+  await check('desktop launcher spawns the available Node executable for its verified own gateway', async () => {
     const code = fs.readFileSync(path.join(desktop, 'open-desktop-app.js'), 'utf8');
     const spawned = [];
+    const instanceId = '86a537d0-7a4d-4a80-bf3f-0a1beac46ccb';
+    const bootId = 'b31352cb-076c-430d-979b-7fd5a4e78418';
+    const logDir = path.join(source, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, 'instance.json'), JSON.stringify({ instanceId }));
+    fs.writeFileSync(path.join(logDir, 'gateway-port.txt'), '19269');
     const fakeHttp = {
       get(_options, callback) {
         const request = new EventEmitter();
         process.nextTick(() => {
           const response = new EventEmitter();
+          response.statusCode = 200;
           callback(response);
-          response.emit('data', '{"service":"pocket-bridge-gateway"}');
+          response.emit('data', Buffer.from(JSON.stringify({ service: 'pocket-bridge-gateway', instanceId, bootId, pid: 73, port: 19269 })));
           response.emit('end');
         });
         return request;
       }
     };
-    const fakeSpawn = (exe) => { spawned.push(exe); return { unref() {} }; };
-    vm.runInNewContext(code, {
+    const fakeSpawn = (exe) => {
+      spawned.push(exe); const child = new EventEmitter(); child.unref = () => {};
+      process.nextTick(() => child.emit('spawn')); return child;
+    };
+    const sandbox = {
       require(name) {
         if (name === 'http') return fakeHttp;
         if (name === 'child_process') return { spawn: fakeSpawn };
         return require(name);
       },
+      module: { exports: {} },
       __dirname: desktop,
       process: { execPath: process.execPath, exitCode: 0 },
       setTimeout,
+      clearTimeout,
+      Buffer,
       console
-    }, { filename: 'open-desktop-app.js' });
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        try {
-          assert.strictEqual(spawned.length, 1, 'application launch not attempted');
-          assert.strictEqual(spawned[0].toLowerCase(), process.execPath.toLowerCase());
-          resolve();
-        } catch (err) { reject(err); }
-      }, 30);
-    });
+    };
+    try {
+      vm.runInNewContext(code, sandbox, { filename: 'open-desktop-app.js' });
+      await sandbox.module.exports.createDesktopLauncher().open();
+      assert.strictEqual(spawned.length, 1, 'application launch not attempted');
+      assert.strictEqual(spawned[0].toLowerCase(), process.execPath.toLowerCase());
+    } finally {
+      fs.unlinkSync(path.join(logDir, 'instance.json'));
+      fs.unlinkSync(path.join(logDir, 'gateway-port.txt'));
+    }
   });
 
   async function checkSetupFailure(stage) {

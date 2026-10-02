@@ -81,11 +81,103 @@ if (-not $SelfTest) {
 
 # ── 状态探测 ──────────────────────────────────────────────────────────────────
 
+function Test-BridgeUuid($Value) {
+  return ($Value -is [string] -and $Value -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+}
+
+function Get-BridgeInstanceId {
+  try {
+    $file = Join-Path $LogDir 'instance.json'
+    $item = Get-Item -LiteralPath $file -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $null }
+    $record = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (Test-BridgeUuid $record.instanceId) { return [string]$record.instanceId }
+  } catch { }
+  return $null
+}
+
+function Get-BridgeCanonicalPath($Value) {
+  if ($Value -isnot [string] -or $Value -notmatch '^[a-z]:[\\/]') { return $null }
+  try { return [IO.Path]::GetFullPath($Value).TrimEnd('\','/') } catch { return $null }
+}
+
+function Test-BridgePathEqual($Left, $Right) {
+  $one = Get-BridgeCanonicalPath $Left
+  $two = Get-BridgeCanonicalPath $Right
+  return ($one -and $two -and [string]::Equals($one, $two, [StringComparison]::OrdinalIgnoreCase))
+}
+
+function Split-BridgeProcessArguments($CommandLine) {
+  # Accept canonical quoted or unquoted argv tokens. Ambiguous escaped quotes
+  # are refused rather than guessed; Windows file names cannot contain quotes.
+  if ($CommandLine -isnot [string] -or $CommandLine -match '\\"') { return $null }
+  $tokens = New-Object 'Collections.Generic.List[string]'
+  $tokenPattern = [regex]'\G\s*(?:"([^"]+)"|([^\s"]+))(?=\s|$)'
+  $position = 0
+  while ($position -lt $CommandLine.Length) {
+    if ([string]::IsNullOrWhiteSpace($CommandLine.Substring($position))) { break }
+    $match = $tokenPattern.Match($CommandLine, $position)
+    if (-not $match.Success) { return $null }
+    $value = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    $tokens.Add($value)
+    $position = $match.Index + $match.Length
+  }
+  if ($tokens.Count -eq 0) { return $null }
+  return ,$tokens.ToArray()
+}
+
+function Get-BridgeProcessInfo([int]$ProcessId) {
+  if ($ProcessId -lt 1) { throw 'process-identity-unavailable' }
+  $found = @(Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction Stop)
+  if ($found.Count -gt 1) { throw 'process-identity-unavailable' }
+  if ($found.Count -eq 0) { return $null }
+  return $found[0]
+}
+
+function Get-BridgeBirthMilliseconds($Value) {
+  try {
+    $date = [DateTime]$Value
+    if ($date.Year -lt 2000) { return $null }
+    return [long][Math]::Floor($date.ToUniversalTime().Ticks / 10000.0)
+  } catch { return $null }
+}
+
+function Get-BridgeGatewayProof($Health, $InstanceId, [switch]$RequireBoot) {
+  if (-not $Health -or $Health.service -ne 'pocket-bridge-gateway' -or
+      -not (Test-BridgeUuid $InstanceId) -or $Health.instanceId -ne $InstanceId -or
+      [string]$Health.pid -notmatch '^[1-9][0-9]{0,9}$' -or
+      [string]$Health.port -notmatch '^[1-9][0-9]{0,4}$' -or [int]$Health.port -gt 65535 -or
+      ($RequireBoot -and -not (Test-BridgeUuid $Health.bootId))) { return $null }
+  try {
+    $info = Get-BridgeProcessInfo ([int]$Health.pid)
+    if (-not $info -or $info.Name -ne 'node.exe' -or -not (Test-BridgePathEqual $info.ExecutablePath $NodeExe)) { return $null }
+    $tokens = Split-BridgeProcessArguments $info.CommandLine
+    $birth = Get-BridgeBirthMilliseconds $info.CreationDate
+    if (-not $tokens -or $tokens.Count -ne 2 -or $null -eq $birth -or
+        -not (Test-BridgePathEqual $tokens[0] $info.ExecutablePath) -or
+        -not (Test-BridgePathEqual $tokens[1] $ProxyJs)) { return $null }
+    return [pscustomobject]@{ processId = [int]$info.ProcessId; birth = $birth;
+      executable = [string]$info.ExecutablePath; commandLine = [string]$info.CommandLine; health = $Health }
+  } catch { return $null }
+}
+
+function Get-BridgeHealth([int]$Port) {
+  return Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__health" -TimeoutSec 1 -ErrorAction Stop
+}
+
 function Find-Gateway {
-  for ($p = 8080; $p -le 8099; $p++) {
+  $instanceId = Get-BridgeInstanceId
+  if (-not $instanceId) { return $null }
+  $ports = New-Object 'Collections.Generic.List[int]'
+  try {
+    $savedPort = (Get-Content -LiteralPath (Join-Path $LogDir 'gateway-port.txt') -Raw).Trim()
+    if ($savedPort -match '^[1-9][0-9]{0,4}$' -and [int]$savedPort -le 65535) { $ports.Add([int]$savedPort) }
+  } catch { }
+  for ($p = 8080; $p -le 8099; $p++) { if (-not $ports.Contains($p)) { $ports.Add($p) } }
+  foreach ($p in $ports) {
     try {
-      $r = Invoke-RestMethod -Uri "http://127.0.0.1:$p/__health" -TimeoutSec 1 -ErrorAction Stop
-      if ($r.service -eq 'pocket-bridge-gateway') { return $r }
+      $health = Get-BridgeHealth $p
+      if ([int]$health.port -eq $p -and (Get-BridgeGatewayProof $health $instanceId)) { return $health }
     } catch { }
   }
   return $null
@@ -230,10 +322,17 @@ function Get-PairPage {
 $StopFlag = Join-Path $Base 'logs\user-stopped.flag'
 
 function Start-Gateway {
+  if ($script:StopInProgress -or (Test-BridgeShutdownPending)) { return }
   # 先清掉「使用者主动关闭」的标记 —— 他都来点启动了，就该正常跑起来。
   # 不清的话：daemon 读到标记会直接退出，表现是「点了启动没反应」，
   # 而且完全没有线索。
-  try { if (Test-Path $StopFlag) { Remove-Item $StopFlag -Force -ErrorAction SilentlyContinue } } catch { }
+  try {
+    if (Test-Path -LiteralPath $StopFlag) {
+      $flag = Get-Item -LiteralPath $StopFlag -Force -ErrorAction Stop
+      if ($flag.PSIsContainer -or ($flag.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+      Remove-Item -LiteralPath $StopFlag -Force -ErrorAction Stop
+    }
+  } catch { return }
 
   if (Find-Gateway) { return }
   # 用 wscript 起，脱离本进程 —— 客户端退出后服务继续跑
@@ -253,31 +352,303 @@ function Start-Gateway {
 }
 
 # （$StopFlag 已在上面定义，这里只用它。）
-function Stop-Gateway {
-  $n = 0
-  # 先留标记，再杀进程 —— 顺序反了的话，中间那几百毫秒里看门狗正好跑一轮，
-  # 就会把刚杀掉的又拉起来。
+function Get-BridgeTunnelProofs([int]$Port) {
+  $proofs = New-Object 'Collections.Generic.List[object]'
+  $unverified = 0
+  $tunnelExe = Join-Path $Base 'cloudflared\cloudflared.exe'
+  $configPath = Join-Path $LogDir 'cloudflared-named.yml'
+  $namedName = $null
   try {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $StopFlag) | Out-Null
-    [System.IO.File]::WriteAllText($StopFlag, (Get-Date -Format o), [System.Text.Encoding]::ASCII)
+    $configText = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8
+    $nameMatch = [regex]::Match($configText, '(?m)^tunnel:\s*([a-zA-Z0-9._-]+)\s*$')
+    $serviceMatches = [regex]::Matches($configText, '(?m)^\s*service:\s*(http://127\.0\.0\.1:[0-9]+)\s*$')
+    if ($nameMatch.Success -and $serviceMatches.Count -eq 1 -and
+        $serviceMatches[0].Groups[1].Value -eq "http://127.0.0.1:$Port") { $namedName = $nameMatch.Groups[1].Value }
   } catch { }
+  try {
+    foreach ($info in @(Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction Stop)) {
+      if (-not (Test-BridgePathEqual $info.ExecutablePath $tunnelExe)) { continue }
+      $tokens = Split-BridgeProcessArguments $info.CommandLine
+      $birth = Get-BridgeBirthMilliseconds $info.CreationDate
+      $owned = $false
+      if ($tokens -and $null -ne $birth -and (Test-BridgePathEqual $tokens[0] $tunnelExe)) {
+        $owned = ($tokens.Count -eq 5 -and $tokens[1] -ceq 'tunnel' -and $tokens[2] -ceq '--url' -and
+          $tokens[3] -ceq "http://127.0.0.1:$Port" -and $tokens[4] -ceq '--no-autoupdate')
+        if (-not $owned -and $namedName) {
+          $owned = ($tokens.Count -eq 7 -and $tokens[1] -ceq 'tunnel' -and $tokens[2] -ceq '--config' -and
+            (Test-BridgePathEqual $tokens[3] $configPath) -and $tokens[4] -ceq 'run' -and
+            $tokens[5] -ceq $namedName -and $tokens[6] -ceq '--no-autoupdate')
+        }
+      }
+      if ($owned) {
+        $proofs.Add([pscustomobject]@{ processId = [int]$info.ProcessId; birth = $birth;
+          executable = [string]$info.ExecutablePath; commandLine = [string]$info.CommandLine })
+      } else { $unverified++ }
+    }
+  } catch { $unverified++ }
+  return [pscustomobject]@{ proofs = @($proofs.ToArray()); unverified = $unverified }
+}
 
-  # 只杀「我们自己的」中间层：按命令行里的 mobile-proxy 认，不按进程名。
-  Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*mobile-proxy*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }
+function Test-BridgeSameProcess($Info, $Proof) {
+  return ($Info -and [int]$Info.ProcessId -eq $Proof.processId -and
+    (Get-BridgeBirthMilliseconds $Info.CreationDate) -eq $Proof.birth -and
+    (Test-BridgePathEqual $Info.ExecutablePath $Proof.executable) -and
+    [string]$Info.CommandLine -ceq $Proof.commandLine)
+}
 
-  # 隧道同理：按命令行认出我们自己起的那个。
-  #
-  # 原来写的是 `Get-Process cloudflared | Stop-Process` —— 按**镜像名**杀。
-  # 那会把别人装的 cloudflared（另一个隧道、别的工具）一起干掉，
-  # 而且毫无提示。这个项目在别处一直很小心地避免「按进程名杀」
-  # （Codex 桌面版和我们用的是同一个 exe），这里漏了一处。
-  Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*$Base*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }
+function Stop-BridgeOwnedTunnel($Proof) {
+  $heldProcess = $null
+  try {
+    $heldProcess = Get-Process -Id $Proof.processId -ErrorAction Stop
+    # Open and retain this exact process handle before rechecking CIM/birth.
+    # Kill uses that held object, never a freshly looked-up PID.
+    $null = $heldProcess.Handle
+    if ((Get-BridgeBirthMilliseconds $heldProcess.StartTime) -ne $Proof.birth -or
+        -not (Test-BridgeSameProcess (Get-BridgeProcessInfo $Proof.processId) $Proof)) { return $false }
+    $heldProcess.Kill()
+    return $heldProcess.WaitForExit(3000)
+  } catch { return $false }
+  finally { if ($heldProcess) { $heldProcess.Dispose() } }
+}
 
-  return $n
+function Get-BridgeNowMilliseconds { return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+
+function Test-BridgeDaemonOperationPending {
+  # The daemon owns this atomic per-install directory while admitting or
+  # completing mutations. Any presence or unreadability is pending; the tray
+  # never guesses that an owner, age or nonce makes a lease safe to reclaim.
+  try {
+    $leasePath = Join-Path $LogDir 'daemon-operation.lock'
+    $items = @(Get-Item -LiteralPath $leasePath -Force -ErrorAction Stop)
+    if ($items.Count -gt 0) { return $true }
+    # Windows PowerShell 5.1 can return zero items instead of PathNotFound for
+    # missing literal paths containing brackets. Confirm using the literal
+    # filesystem API, whose access errors still leave the operation pending.
+    $null = [IO.File]::GetAttributes($leasePath)
+    return $true
+  } catch {
+    $failure = $_.Exception
+    while ($failure.InnerException) { $failure = $failure.InnerException }
+    # Examine the actual exception, including wrapped .NET calls. Access
+    # denial and every uncertain metadata failure must remain pending.
+    if ($failure -is [Management.Automation.ItemNotFoundException] -or
+        $failure -is [IO.FileNotFoundException] -or $failure -is [IO.DirectoryNotFoundException]) { return $false }
+    return $true
+  }
+}
+
+function Test-BridgeGatewayStartupPending([switch]$IncludeUncertain) {
+  # A daemon may have admitted a new owned gateway before the stop flag. It
+  # might not have a health listener yet, so health alone cannot prove absence.
+  try {
+    foreach ($info in @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Stop)) {
+      if ($IncludeUncertain -and [string]::IsNullOrWhiteSpace([string]$info.ExecutablePath)) { return $true }
+      if ($info.Name -ne 'node.exe' -or -not (Test-BridgePathEqual $info.ExecutablePath $NodeExe)) { continue }
+      $tokens = Split-BridgeProcessArguments $info.CommandLine
+      if ($IncludeUncertain -and -not $tokens) { return $true }
+      if ($tokens -and $tokens.Count -eq 2 -and
+          (Test-BridgePathEqual $tokens[0] $NodeExe) -and (Test-BridgePathEqual $tokens[1] $ProxyJs)) {
+        # An exact owned startup is pending even if its birth cannot yet be
+        # read. This is a refusal boundary, never authority to terminate it.
+        return $true
+      }
+    }
+    return $false
+  } catch { return $true }
+}
+
+function Test-BridgeShutdownPending {
+  if (Test-BridgeDaemonOperationPending) { return $true }
+  try {
+    if ($script:PendingGatewayStopHandle) {
+      if (-not $script:PendingGatewayStopHandle.HasExited) { return $true }
+      $script:PendingGatewayStopHandle.Dispose()
+      $script:PendingGatewayStopHandle = $null
+    }
+    if ($script:PendingGatewayStopProof) {
+      $current = Get-BridgeProcessInfo $script:PendingGatewayStopProof.processId
+      if ($current -and (Test-BridgeSameProcess $current $script:PendingGatewayStopProof)) { return $true }
+      $script:PendingGatewayStopProof = $null
+    }
+    if ((Test-Path -LiteralPath $StopFlag) -and (Test-BridgeGatewayStartupPending)) { return $true }
+    return $false
+  } catch { return $true }
+}
+
+function Assert-BridgeOwnedStopPaths([switch]$RequireLogs) {
+  if (-not (Test-BridgePathEqual $LogDir (Join-Path $Base 'logs')) -or
+      -not (Test-BridgePathEqual $StopFlag (Join-Path $LogDir 'user-stopped.flag'))) { throw 'stop-flag-unavailable' }
+  # Refuse reparse-point parents before creating or touching the owned flag.
+  $directory = Get-BridgeCanonicalPath $Base
+  while ($directory) {
+    $item = Get-Item -LiteralPath $directory -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'stop-flag-unavailable' }
+    $directory = Split-Path -Parent $directory
+  }
+  if (Test-Path -LiteralPath $LogDir) {
+    $logItem = Get-Item -LiteralPath $LogDir -Force -ErrorAction Stop
+    if (-not $logItem.PSIsContainer -or ($logItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'stop-flag-unavailable' }
+  } elseif ($RequireLogs) { throw 'stop-flag-unavailable' }
+}
+
+function Write-BridgeStopFlag {
+  Assert-BridgeOwnedStopPaths
+  if (-not (Test-Path -LiteralPath $LogDir)) { [void][IO.Directory]::CreateDirectory($LogDir) }
+  Assert-BridgeOwnedStopPaths -RequireLogs
+  if (Test-Path -LiteralPath $StopFlag) {
+    $existing = Get-Item -LiteralPath $StopFlag -Force -ErrorAction Stop
+    if ($existing.PSIsContainer -or ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'stop-flag-unavailable' }
+    return
+  }
+  $stream = [IO.File]::Open($StopFlag, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+  try {
+    $bytes = [Text.Encoding]::ASCII.GetBytes((Get-Date -Format o))
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush($true)
+  } finally { $stream.Dispose() }
+}
+
+function Test-BridgeInstalledTunnelPending {
+  try {
+    $tunnelExe = Join-Path $Base 'cloudflared\cloudflared.exe'
+    foreach ($info in @(Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction Stop)) {
+      if (-not $info -or [string]::IsNullOrWhiteSpace([string]$info.ExecutablePath) -or
+          (Test-BridgePathEqual $info.ExecutablePath $tunnelExe)) { return $true }
+    }
+    return $false
+  } catch { return $true }
+}
+
+function Test-BridgeAlreadyStoppedFences($InstanceId) {
+  try {
+    Assert-BridgeOwnedStopPaths -RequireLogs
+    if (-not (Test-BridgeUuid $InstanceId) -or (Get-BridgeInstanceId) -ne $InstanceId -or
+        (Test-BridgeShutdownPending) -or (Test-BridgeGatewayStartupPending -IncludeUncertain) -or
+        (Test-BridgeInstalledTunnelPending) -or (Test-BridgeDaemonOperationPending)) { return $false }
+    return $true
+  } catch { return $false }
+}
+
+function Get-BridgeAlreadyStoppedResult($InstanceId) {
+  if (-not (Test-BridgeAlreadyStoppedFences $InstanceId)) { return $null }
+  try { Write-BridgeStopFlag } catch { return $null }
+  # Writing stop intent is not evidence of absence. Repeat every fence before
+  # allowing Quit or key rotation to treat an idle installation as stopped.
+  if (-not (Test-BridgeAlreadyStoppedFences $InstanceId)) { return $null }
+  return @{ ok = $true; alreadyStopped = $true; gatewayStopped = $true; tunnelsStopped = 0;
+    message = 'This installation is already stopped. Automatic restart is paused.' }
+}
+
+function Set-BridgeStopControls([bool]$Stopping) {
+  if ($Stopping) {
+    $script:StopControls = @()
+    foreach ($item in @($miStart, $miStop, $miKeys, $miTargets, $miAuto, $miQuit, $miConsole, $miPicker)) {
+      if ($null -ne $item) {
+        $script:StopControls += @{ item = $item; enabled = $item.Enabled }
+        $item.Enabled = $false
+      }
+    }
+  } else {
+    foreach ($record in $script:StopControls) { $record.item.Enabled = $record.enabled }
+    $script:StopControls = @()
+  }
+}
+
+function Pump-BridgeStopEvents { [System.Windows.Forms.Application]::DoEvents() }
+
+function Stop-Gateway {
+  if ($script:StopInProgress) { return @{ ok = $false; code = 'shutdown-pending'; message = 'Gateway shutdown is already pending.' } }
+  $script:StopInProgress = $true
+  $gatewayHandle = $null
+  try {
+    Set-BridgeStopControls $true
+    $instanceId = Get-BridgeInstanceId
+    $health = Find-Gateway
+    $proof = Get-BridgeGatewayProof $health $instanceId -RequireBoot
+    if (-not $proof) {
+      $idle = Get-BridgeAlreadyStoppedResult $instanceId
+      if ($idle) { return $idle }
+      return @{ ok = $false; code = 'identity-unverified'; message = 'This installation could not verify a gateway with controlled shutdown support or confirm it is fully stopped. No processes were stopped.' }
+    }
+    $fresh = Get-BridgeGatewayProof (Get-BridgeHealth ([int]$health.port)) $instanceId -RequireBoot
+    if (-not $fresh -or $fresh.birth -ne $proof.birth -or $fresh.health.bootId -ne $health.bootId -or
+        $fresh.processId -ne $proof.processId) { return @{ ok = $false; code = 'gateway-replaced'; message = 'Gateway identity changed. No processes were stopped.' } }
+    if ($script:PendingGatewayStopHandle -and -not $script:PendingGatewayStopHandle.HasExited -and
+        (-not $script:PendingGatewayStopProof -or $script:PendingGatewayStopProof.processId -ne $proof.processId -or
+         $script:PendingGatewayStopProof.birth -ne $proof.birth)) {
+      return @{ ok = $false; code = 'shutdown-pending'; message = 'The original gateway process is still draining. Its held identity was preserved; no other gateway was stopped.' }
+    }
+    $gatewayHandle = Get-Process -Id $proof.processId -ErrorAction Stop
+    $null = $gatewayHandle.Handle
+    if ((Get-BridgeBirthMilliseconds $gatewayHandle.StartTime) -ne $proof.birth -or
+        -not (Test-BridgeSameProcess (Get-BridgeProcessInfo $proof.processId) $proof)) {
+      return @{ ok = $false; code = 'gateway-replaced'; message = 'Gateway process identity changed. No processes were stopped.' }
+    }
+    # The watchdog pause is written only after ownership is verified and before
+    # requesting the authenticated, exact-boot loopback shutdown.
+    Write-BridgeStopFlag
+    $script:PendingGatewayStopProof = $proof
+    if ($script:PendingGatewayStopHandle) { $script:PendingGatewayStopHandle.Dispose() }
+    $script:PendingGatewayStopHandle = $gatewayHandle
+    $body = @{ action = 'stop-gateway'; expectedBootId = $health.bootId; expectedInstanceId = $instanceId } | ConvertTo-Json -Compress
+    $origin = "http://127.0.0.1:$($health.port)"
+    $accepted = Invoke-RestMethod -Uri "$origin/__console/action" -Method Post -Headers @{ Origin = $origin } `
+      -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 5 -ErrorAction Stop
+    if ($accepted.ok -ne $true -or $accepted.stopping -ne $true -or $accepted.shutdownScheduled -ne $true -or
+        $accepted.bootId -ne $health.bootId -or $accepted.instanceId -ne $instanceId -or [int]$accepted.pid -ne $proof.processId) {
+      return @{ ok = $false; code = 'shutdown-unconfirmed'; message = 'Gateway shutdown was not confirmed. Processes were left unchanged; automatic restart is paused.' }
+    }
+    $deadline = (Get-BridgeNowMilliseconds) + 95000
+    $exited = $false
+    while ((Get-BridgeNowMilliseconds) -lt $deadline) {
+      $observed = $null
+      try { $observed = Get-BridgeHealth ([int]$health.port) } catch { }
+      if ($observed -and ($observed.service -ne 'pocket-bridge-gateway' -or $observed.bootId -ne $health.bootId -or
+          $observed.instanceId -ne $instanceId -or [int]$observed.pid -ne $proof.processId)) {
+        return @{ ok = $false; code = 'gateway-replaced'; message = 'A different gateway appeared during shutdown. Its processes and tunnels were left unchanged.' }
+      }
+      $current = Get-BridgeProcessInfo $proof.processId
+      if (-not $current) {
+        if (-not $observed -and $gatewayHandle.HasExited -and -not (Test-BridgeDaemonOperationPending)) { $exited = $true; break }
+      } elseif (-not (Test-BridgeSameProcess $current $proof)) {
+        return @{ ok = $false; code = 'process-replaced'; message = 'The gateway process identity changed. Its processes and tunnels were left unchanged.' }
+      }
+      Start-Sleep -Milliseconds 250
+      Pump-BridgeStopEvents
+    }
+    if (-not $exited) { return @{ ok = $false; code = 'shutdown-pending'; message = 'Gateway shutdown is still pending or blocked. No process was forced to stop; automatic restart is paused.' } }
+    if (Test-BridgeGatewayStartupPending) {
+      return @{ ok = $false; code = 'shutdown-pending'; message = 'Another gateway from this installation is starting or its absence could not be confirmed. No process was forced to stop; automatic restart is paused.' }
+    }
+    # Recapture after the daemon lease has drained: an admitted operation may
+    # have handed off a known tunnel after the original stop request.
+    $tunnels = Get-BridgeTunnelProofs ([int]$health.port)
+    if ((Test-BridgeDaemonOperationPending) -or (Test-BridgeGatewayStartupPending)) {
+      return @{ ok = $false; code = 'shutdown-pending'; message = 'This installation still has a pending daemon or gateway operation. Its tunnels were left unchanged; automatic restart is paused.' }
+    }
+    $script:PendingGatewayStopProof = $null
+    $script:PendingGatewayStopHandle = $null
+    # A scheduled response is not completion. Only physical disappearance of
+    # the exact gateway and a quiescent daemon permit stopping fresh proofs.
+    $stopped = 0
+    $pending = [int]$tunnels.unverified
+    foreach ($tunnel in $tunnels.proofs) {
+      if (Stop-BridgeOwnedTunnel $tunnel) { $stopped++ } else { $pending++ }
+    }
+    if ((Test-BridgeDaemonOperationPending) -or (Test-BridgeGatewayStartupPending)) {
+      return @{ ok = $false; code = 'shutdown-pending'; tunnelsStopped = $stopped;
+        message = "Stopped $stopped verified tunnel(s), but this installation still has a pending daemon or gateway operation. Automatic restart is paused." }
+    }
+    if ($pending) { return @{ ok = $false; gatewayStopped = $true; code = 'tunnel-unconfirmed'; tunnelsStopped = $stopped;
+      message = "Gateway stopped. Stopped $stopped verified tunnel(s); remaining tunnel status is unconfirmed." } }
+    return @{ ok = $true; gatewayStopped = $true; tunnelsStopped = $stopped;
+      message = "Gateway stopped safely. Stopped $stopped verified tunnel(s). Other installations were not changed." }
+  } catch { return @{ ok = $false; code = 'shutdown-unconfirmed'; message = 'Gateway shutdown could not be confirmed. No forced gateway stop was attempted.' } }
+  finally {
+    if ($gatewayHandle -and $gatewayHandle -ne $script:PendingGatewayStopHandle) { $gatewayHandle.Dispose() }
+    $script:StopInProgress = $false
+    Set-BridgeStopControls $false
+  }
 }
 
 # ── 开机自启 ──────────────────────────────────────────────────────────────────
@@ -307,6 +678,7 @@ $menu.Items.Add($miHeader) | Out-Null
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 $miConsole = New-Item2 '打开控制台' {
+  if ($script:StopInProgress) { return }
   if (-not $script:Port) { Start-Gateway }
   Refresh-State
   if (-not $script:Port) {
@@ -318,6 +690,7 @@ $miConsole = New-Item2 '打开控制台' {
 $menu.Items.Add($miConsole) | Out-Null
 
 $miPicker = New-Item2 '连接方式与测速' {
+  if ($script:StopInProgress) { return }
   if (-not $script:Port) { Start-Gateway }
   Refresh-State
   if (-not $script:Port) { return }
@@ -384,12 +757,12 @@ $miStop = New-Item2 '停止服务' {
     [System.Windows.Forms.MessageBoxButtons]::YesNo,
     [System.Windows.Forms.MessageBoxIcon]::Warning)
   if ($r -eq [System.Windows.Forms.DialogResult]::Yes) {
-    $n = Stop-Gateway
-    Start-Sleep -Milliseconds 800
+    $result = Stop-Gateway
     Refresh-State
     $notify.BalloonTipTitle = 'Pocket Bridge'
-    $notify.BalloonTipText = "已停止 $n 个进程"
-    $notify.ShowBalloonTip(1500)
+    $notify.BalloonTipText = [string]$result.message
+    $notify.ShowBalloonTip(4000)
+    if (-not $result.ok) { [void][System.Windows.Forms.MessageBox]::Show([string]$result.message, 'Pocket Bridge') }
   }
 }
 $menu.Items.Add($miStop) | Out-Null
@@ -400,6 +773,7 @@ $menu.Items.Add($miStop) | Out-Null
 # 两处各写一份的话行为迟早会不一致（比如「Codex 只停自己起的那个、不动桌面版」
 # 这种细节，重写一遍很容易漏掉）。
 function Invoke-TargetAction($id, $action) {
+  if ($script:StopInProgress) { return }
   if (-not $script:Port) { Start-Gateway }
   Refresh-State
   if (-not $script:Port) {
@@ -450,8 +824,11 @@ $miRotate = New-Item2 '轮换访问密钥…' {
     [System.Windows.Forms.MessageBoxIcon]::Question)
   if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
-  Stop-Gateway | Out-Null
-  Start-Sleep -Milliseconds 800
+  $stopped = Stop-Gateway
+  if (-not $stopped.ok) {
+    [void][System.Windows.Forms.MessageBox]::Show([string]$stopped.message, 'Pocket Bridge')
+    return
+  }
   $out = & $NodeExe $RotateJs --revoke-sessions 2>&1 | Out-String
   Start-Gateway
   Refresh-State
@@ -586,8 +963,11 @@ $miQuit = New-Item2 '退出…' {
     $notify.BalloonTipTitle = 'Pocket Bridge'
     $notify.BalloonTipText = '正在关闭服务…'
     $notify.ShowBalloonTip(2000)
-    try { Stop-Gateway } catch { }
-    Start-Sleep -Milliseconds 800
+    $stopped = Stop-Gateway
+    if (-not $stopped.ok) {
+      [void][System.Windows.Forms.MessageBox]::Show([string]$stopped.message, 'Pocket Bridge')
+      return
+    }
   }
 
   $notify.Visible = $false
@@ -606,6 +986,7 @@ $notify.ContextMenuStrip = $menu
 # 左键单击直接开控制台 —— 最常用的动作不该藏在右键菜单里
 $notify.add_MouseClick({
   param($sender, $e)
+  if ($script:StopInProgress) { return }
   if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
     if (-not $script:Port) { Start-Gateway }
     Refresh-State
@@ -619,6 +1000,7 @@ $notify.add_MouseClick({
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.add_Tick({
+  if ($script:StopInProgress) { return }
   try { Refresh-State } catch { }
   try {
     $miHeader.Text = if ($script:Port) {
@@ -635,8 +1017,8 @@ $timer.add_Tick({
     $miCopyWan.Enabled = [bool](Get-WanUrl)
     $miCopyPair.Enabled = [bool](Get-PairCode)
     $miCopyPairUrl.Enabled = [bool](Get-PairPage)
-    $miStart.Enabled = -not $has
-    $miStop.Enabled = $has
+    $miStart.Enabled = (-not $has -and -not $script:StopInProgress -and -not (Test-BridgeShutdownPending))
+    $miStop.Enabled = ($has -and -not $script:StopInProgress)
   } catch { }
 })
 $timer.Start()

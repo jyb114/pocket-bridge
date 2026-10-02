@@ -22,7 +22,10 @@ const PROFILES = Object.freeze({
 // These are inspected upstream builds, not a promise about every past/future release.
 const VERIFIED_VERSIONS = Object.freeze({
   '0.1.0-rc.8': 'legacy-events', '0.1.1-rc.2': 'legacy-events',
-  '0.1.5-rc.3': 'remote-mux', '0.1.7-rc.2': 'remote-mux'
+  '0.1.5-rc.3': 'remote-mux', '0.1.7-rc.2': 'remote-mux',
+  // Exact published npm build: authenticated events ready + workspace baseline
+  // were exercised against the installed runtime, rather than inferred by range.
+  '0.2.0-rc.2': 'remote-mux'
 });
 
 function normalizeVersion(value) {
@@ -214,6 +217,10 @@ function detectProfile(input = {}) {
     return { profile: 'unsupported', capabilities, supported: false, evidence: 'runtime-kind-required',
       reason: 'This version has different desktop and CLI transports; identify the running runtime.' };
   }
+  if (version === '0.2.0-rc.2' && input.kind !== 'cli') {
+    return { profile: 'unsupported', capabilities, supported: false, evidence: 'runtime-kind-required',
+      reason: 'Only the inspected npm web runtime is verified for this version.' };
+  }
   const known = version && VERIFIED_VERSIONS[version];
   if (known) {
     // Authentication on a build whose inspected protocol has none is conflicting
@@ -262,18 +269,23 @@ async function probeDshRuntime(input = {}, deps = {}) {
   const timeoutMs = Number.isFinite(deps.timeoutMs) ? Math.max(50, Math.min(deps.timeoutMs, 10000)) : 1500;
   const maxBodyBytes = Number.isInteger(deps.maxBodyBytes) ? Math.max(256, Math.min(deps.maxBodyBytes, 256 * 1024)) : 64 * 1024;
   const request = deps.request || http.request;
+  let transientProbeFailure = false, observedStatusCode = null;
   const response = await new Promise(resolve => {
     let settled = false, req, deadline;
-    const finish = value => {
+    const finish = (value, transient = false) => {
       if (settled) return;
       settled = true;
+      // Once negative HTTP headers arrived, a truncated body or later timeout
+      // must not turn an authorization refusal into a transport retry.
+      transientProbeFailure = transient && (observedStatusCode === null || observedStatusCode === 200);
       clearTimeout(deadline);
       resolve(value);
     };
-    deadline = setTimeout(() => { finish(null); if (req) req.destroy(); }, timeoutMs);
+    deadline = setTimeout(() => { finish(null, true); if (req) req.destroy(); }, timeoutMs);
     try {
       req = request({ hostname: '127.0.0.1', port: input.port, path: '/', method: 'GET',
         agent: false, headers: { Accept: 'text/html', 'Accept-Encoding': 'identity' }, timeout: timeoutMs }, res => {
+        observedStatusCode = res.statusCode;
         const chunks = []; let size = 0;
         res.on('data', chunk => {
           if (settled) return;
@@ -288,18 +300,18 @@ async function probeDshRuntime(input = {}, deps = {}) {
           chunks.push(bytes);
         });
         res.on('end', () => finish({ statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
-        res.on('error', () => finish(null));
-        res.on('aborted', () => finish(null));
-        res.on('close', () => { if (!res.complete) finish(null); });
+        res.on('error', () => finish(null, true));
+        res.on('aborted', () => finish(null, true));
+        res.on('close', () => { if (!res.complete) finish(null, true); });
       });
-      req.on('timeout', () => { finish(null); req.destroy(); });
-      req.on('error', () => finish(null));
+      req.on('timeout', () => { finish(null, true); req.destroy(); });
+      req.on('error', () => finish(null, true));
       req.end();
     } catch (_) { finish(null); if (req) req.destroy(); }
   });
   // Failed/oversized responses must not inherit a stale positive fingerprint.
   const fingerprint = response ? fingerprintDshHttp(response) : { identified: false, confidence: 'low', evidence: null, capabilities: {} };
-  return createRuntimeRecord({ ...input, fingerprint }, deps);
+  return { ...createRuntimeRecord({ ...input, fingerprint }, deps), transientProbeFailure };
 }
 
 module.exports = {

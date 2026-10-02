@@ -141,6 +141,25 @@ function fixture(state = {}) {
   const noSpoof = fixture({ responses: { 19006: html } });
   equal((await noSpoof.resolver.resolveRuntime({ dshPort: 70000 })).running, false, 'invalid configured port cannot be probed');
 
+  for (const scenario of ['recovered', 'still-down', 'negative-http', 'unowned']) {
+    let attempts = 0;
+    const retry = runtime.createRuntimeResolver({ adapter: api,
+      scanProcesses: () => scenario === 'unowned' ? [] : [cli(2, '0.1.0-rc.8')],
+      listeningPortsOf: () => scenario === 'unowned' ? [] : [{ pid: 2, port: 19010 }],
+      detectInstallation: () => installed(null, null),
+      probeDshRuntime: async input => {
+        attempts++;
+        const recovered = scenario === 'recovered' && attempts === 2;
+        return { ...api.createRuntimeRecord({ kind: input.kind, version: input.version, port: input.port,
+          fingerprint: api.fingerprintDshHttp(recovered ? html : {}) }),
+          transientProbeFailure: scenario !== 'negative-http' && !recovered };
+      }
+    });
+    const result = await retry.resolveRuntime({ dshPort: 19010 }, { force: true });
+    equal(attempts, ['recovered', 'still-down'].includes(scenario) ? 2 : 1, scenario + ': only one bounded transient retry on a verified owner');
+    equal(result.running, scenario === 'recovered', scenario + ': fresh HTTP fingerprint remains mandatory');
+  }
+
   const legacy = fixture({ processes: [cli(2, '0.1.0-rc.8')], owners: [{ pid: 2, port: 19010 }], responses: { 19010: html } });
   const legacyRuntime = await legacy.resolver.resolveRuntime({});
   equal(legacyRuntime.profile, 'legacy-events', 'inspected legacy CLI is supported');

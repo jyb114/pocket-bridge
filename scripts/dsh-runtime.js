@@ -247,7 +247,15 @@ function createRuntimeResolver(deps = {}) {
       inputs.push({ port: Number(config.dshPort), kind: 'unknown', source: 'config.json' });
     }
     const results = await Promise.all(inputs.map(async input => {
-      try { return { ...input, ...await probe(input), pid: input.pid || null, source: input.source || 'process' }; }
+      try {
+        let result = await probe(input);
+        // Real legacy runtimes exposed a short OS/event-loop stall here: the
+        // listener remained alive but a GET deadline expired during discovery.
+        // Confirm it afresh once on the process-owned port. No RPC is retried,
+        // no prior fingerprint authorizes a write, and negative HTTP stays final.
+        if (input.pid && result.transientProbeFailure) result = await probe(input);
+        return { ...input, ...result, pid: input.pid || null, source: input.source || 'process' };
+      }
       catch (_) { return { ...input, identified: false, httpEvidence: null, supported: false, profile: 'unsupported' }; }
     }));
     const genuine = results.filter(result => result.identified && ['dsh-auth-challenge', 'dsh-app-html'].includes(result.httpEvidence));

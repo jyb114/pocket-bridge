@@ -888,7 +888,16 @@
 
     var wrapped = function (input, init) {
       return orig(input, init).then(function (res) {
-        if (!res.headers || res.headers.get('x-dsh-e2ee') !== '1') return res;
+        if (!res.headers || res.headers.get('x-dsh-e2ee') !== '1') {
+          // This is a local verification marker, never a trusted wire header.
+          // An unencrypted reply must not claim that AES-GCM authenticated it.
+          if (res.headers && res.headers.get('x-dsh-e2ee-decrypted') !== null) {
+            var cleanHeaders = new Headers(res.headers);
+            cleanHeaders.delete('x-dsh-e2ee-decrypted');
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers: cleanHeaders });
+          }
+          return res;
+        }
 
         var origType = res.headers.get('x-dsh-e2ee-type') || 'application/octet-stream';
         return res.arrayBuffer().then(function (buf) {

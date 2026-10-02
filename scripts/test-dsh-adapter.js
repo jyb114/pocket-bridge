@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('assert/strict');
 const { EventEmitter } = require('events');
+const http = require('http');
 const adapter = require('./dsh-adapter.js');
 let checks = 0;
 function check(label, fn) { fn(); checks++; console.log(`PASS ${label}`); }
@@ -152,6 +153,8 @@ function fakeRequest(result, options = {}) {
   check('observed active web capabilities override desktop version fallback', () => assert.equal(adapter.detectProfile({ kind: 'desktop', version: '0.1.5-rc.3', capabilities: { remoteMux: true } }).profile, 'remote-mux'));
   check('verified desktop rc.2 selects modern adapter', () => assert.equal(adapter.detectProfile({ version: '0.1.7-rc.2' }).profile, 'remote-mux'));
   check('unknown future build not silently assumed compatible', () => assert.equal(adapter.detectProfile({ version: '9.0.0' }).supported, false));
+  check('exact npm rc.2 protocol verified by real events and workspace streams', () => assert.equal(adapter.detectProfile({ kind: 'cli', version: '0.2.0-rc.2' }).profile, 'remote-mux'));
+  check('npm rc.2 acceptance does not assume an untested desktop wrapper', () => assert.equal(adapter.detectProfile({ kind: 'desktop', version: '0.2.0-rc.2' }).supported, false));
   check('unknown build can use observed modern capabilities', () => assert.equal(adapter.detectProfile({ version: '9.0.0', bundleText: 'connect("/api/remote.mux"); workspace.follow' }).profile, 'remote-mux'));
   check('old version label cannot override active modern endpoint', () => assert.equal(adapter.detectProfile({ version: '0.1.0-rc.8', capabilities: { remoteMux: true } }).profile, 'remote-mux'));
   check('legacy endpoint pair observed in native bundle', () => assert.equal(adapter.detectProfile({ bundleText: '/api/events.mux /api/events.host host.describe' }).profile, 'legacy-events'));
@@ -181,14 +184,36 @@ function fakeRequest(result, options = {}) {
   const large = fakeRequest({ ...auth, body: 'x'.repeat(300) });
   const largeRecord = await adapter.probeDshRuntime({ port: 19387 }, { request: large.request, maxBodyBytes: 256 });
   check('body limit rejects response instead of trusting truncated fingerprint', () => assert.equal(largeRecord.identified, false));
+  check('oversized or negative HTTP evidence is not marked transient for retry', () => { assert.equal(largeRecord.transientProbeFailure, false); assert.equal(redirectRecord.transientProbeFailure, false); });
   const failing = fakeRequest(auth, { error: true });
   const failed = await adapter.probeDshRuntime({ port: 19387, fingerprint: { identified: true } }, { request: failing.request });
   check('HTTP failure clears stale positive fingerprint', () => assert.equal(failed.identified, false));
   const timeout = fakeRequest(auth, { timeout: true });
   const timedOut = await adapter.probeDshRuntime({ port: 19387 }, { request: timeout.request });
   check('HTTP timeout resolves unsupported candidate without hanging', () => assert.equal(timedOut.identified, false));
+  check('transport failure and timeout can receive a fresh bounded probe', () => { assert.equal(failed.transientProbeFailure, true); assert.equal(timedOut.transientProbeFailure, true); });
   const invalid = fakeRequest(auth);
   await adapter.probeDshRuntime({ port: 65536 }, { request: invalid.request });
   check('invalid port never sends an HTTP request', () => assert.equal(invalid.observed.length, 0));
-  console.log(`DSH adapter: ${checks} isolated checks passed; no live DSH processes, credentials or network used.`);
+  // Real Node HTTP events differ from a complete synthetic response: headers
+  // can arrive before an aborted/error/close event replaces the body. Keep an
+  // already observed refusal final while retaining retries for a broken 200.
+  for (const statusCode of [401, 403, 303, 503, 200]) {
+    const server = http.createServer((req, res) => {
+      assert.equal(req.method, 'GET'); assert.equal(req.url, '/');
+      assert.equal(req.headers.authorization, undefined); assert.equal(req.headers.cookie, undefined);
+      res.writeHead(statusCode, { 'content-type': 'text/plain', 'content-length': '1000' });
+      res.write('partial fixture body');
+      setTimeout(() => res.destroy(), 20);
+    });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    try {
+      const truncated = await adapter.probeDshRuntime({ port: server.address().port }, { timeoutMs: 1000 });
+      check(`real truncated HTTP ${statusCode} ${statusCode === 200 ? 'retains a bounded transport retry' : 'does not retry observed negative status'}`, () => {
+        assert.equal(truncated.transientProbeFailure, statusCode === 200);
+        assert.equal(truncated.httpEvidence, null); assert.equal(truncated.identified, false);
+      });
+    } finally { await new Promise(resolve => server.close(resolve)); }
+  }
+  console.log(`DSH adapter: ${checks} isolated checks passed; loopback HTTP fixtures only, no live DSH processes or credentials used.`);
 })().catch(error => { console.error(error.stack); process.exitCode = 1; });

@@ -35,8 +35,8 @@ const LOG_FILE = path.join(LOG_DIR, 'tunnel.log');
 function probeUrl(url, timeoutMs = 12000) {
   return new Promise((resolve) => {
     const started = Date.now();
-    let settled = false;
-    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    let settled = false, deadline = null;
+    const done = (r) => { if (!settled) { settled = true; clearTimeout(deadline); resolve(r); } };
 
     const target = String(url).replace(/\/+$/, '') + '/__probe';
     // ★ 必须按协议选模块。用 http 去连 https 会立刻抛
@@ -52,6 +52,12 @@ function probeUrl(url, timeoutMs = 12000) {
     }
 
     let req;
+    // Also bound DNS/TLS and incomplete headers: socket inactivity can begin
+    // too late or keep resetting while the remote peer trickles bytes.
+    deadline = setTimeout(() => {
+      try { req?.destroy(); } catch (_) {}
+      done({ ok: false, status: 0, ms: Date.now() - started, error: '超时' });
+    }, timeoutMs);
     try {
       req = mod.get(target, { timeout: timeoutMs }, (res) => {
         res.resume();
@@ -108,10 +114,11 @@ function extractPublicUrl(text) {
 }
 
 /** 等一个进程在日志里写出公网地址。 */
-async function waitForUrl(logFile, timeoutMs, isAlive) {
+async function waitForUrl(logFile, timeoutMs, isAlive, admission) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(1500);
+    admission?.beforeMutation();
     if (!isAlive()) return { url: null, reason: '进程已退出' };
     try {
       const text = fs.readFileSync(logFile, 'utf8');
@@ -125,10 +132,12 @@ async function waitForUrl(logFile, timeoutMs, isAlive) {
 // ── 各提供方 ──────────────────────────────────────────────────────────────────
 
 /** Cloudflare 快速隧道：不需要账号，代价是地址每次重启都变。 */
-async function startCloudflareQuick(exe, port) {
+async function startCloudflareQuick(exe, port, admission) {
+  admission?.beforeMutation();
   const logFile = path.join(LOG_DIR, 'cloudflared.err.log');
   try { fs.unlinkSync(logFile); } catch (err) { }
 
+  admission?.beforeMutation();
   const child = spawn(exe, [
     'tunnel',
     '--url', `http://127.0.0.1:${port}`,
@@ -137,10 +146,12 @@ async function startCloudflareQuick(exe, port) {
     detached: true,
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
   });
-  child.unref();
+  if (admission) { const ready = admission.observeSpawn(child, 'tunnel'); child.unref(); await ready; }
+  else { child.on('error', () => {}); child.unref(); }
+  admission?.beforeMutation();
 
   const alive = () => { try { return process.kill(child.pid, 0); } catch (err) { return false; } };
-  const { url, reason } = await waitForUrl(logFile, 60000, alive);
+  const { url, reason } = await waitForUrl(logFile, 60000, alive, admission);
   return { url, pid: child.pid, reason, logFile };
 }
 
@@ -150,7 +161,8 @@ async function startCloudflareQuick(exe, port) {
  * 它会生成一份临时配置（不进系统目录），把域名指到本地中间层，然后 run。
  * 与快速隧道的取舍：方便 vs 安全 —— 地址长期不变意味着一旦泄露就是长期暴露。
  */
-async function startCloudflareNamed(exe, port, fixed) {
+async function startCloudflareNamed(exe, port, fixed, admission) {
+  admission?.beforeMutation();
   if (!fixed || !fixed.name || !fixed.hostname) {
     return {
       url: null,
@@ -174,16 +186,20 @@ async function startCloudflareNamed(exe, port, fixed) {
   );
   fs.writeFileSync(cfgPath, lines.join('\n') + '\n', 'utf8');
 
+  admission?.beforeMutation();
   const child = spawn(exe, [
     'tunnel', '--config', cfgPath, 'run', fixed.name, '--no-autoupdate'
   ], {
     detached: true,
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
   });
-  child.unref();
+  if (admission) { const ready = admission.observeSpawn(child, 'tunnel'); child.unref(); await ready; }
+  else { child.on('error', () => {}); child.unref(); }
+  admission?.beforeMutation();
 
   // 固定地址是已知的，不需要从日志里猜；但要给它一点时间连上
   await sleep(6000);
+  admission?.beforeMutation();
 
   const alive = (() => { try { return process.kill(child.pid, 0); } catch (err) { return false; } })();
   if (!alive) {
@@ -204,7 +220,7 @@ const PROVIDERS = [
     id: 'cloudflare-named',
     label: 'Cloudflare 命名隧道（地址固定）',
     available: () => cfg.detectTunnelProviders().cloudflared,
-    start: (exe, port) => startCloudflareNamed(exe, port, cfg.loadConfig().fixedTunnel)
+    start: (exe, port, admission) => startCloudflareNamed(exe, port, cfg.loadConfig().fixedTunnel, admission)
   },
   {
     id: 'cloudflare-quick',
@@ -259,7 +275,10 @@ function candidatesForMode(mode) {
  * @param {string} preference 'auto' 或某个提供方 id
  * @returns {Promise<{provider: string|null, url: string|null, attempts: Array}>}
  */
-async function startTunnel(port, preference = 'auto') {
+async function startTunnel(port, preference = 'auto', admission) {
+  if (admission && (Object.keys(admission).some(key => !['beforeMutation', 'observeSpawn'].includes(key)) ||
+      typeof admission.beforeMutation !== 'function' || typeof admission.observeSpawn !== 'function')) throw Error('invalid-daemon-admission');
+  admission?.beforeMutation();
   const attempts = [];
   const mode = cfg.loadConfig().tunnelDomainMode || 'dynamic';
   log(`域名策略: ${mode === 'fixed' ? '固定地址（自有域名）' : '动态地址（每次更换）'}`);
@@ -284,6 +303,7 @@ async function startTunnel(port, preference = 'auto') {
   }
 
   for (const p of candidates) {
+    admission?.beforeMutation();
     const exe = p.available();
     if (!exe) {
       attempts.push({ provider: p.id, ok: false, reason: '未安装' });
@@ -293,7 +313,9 @@ async function startTunnel(port, preference = 'auto') {
 
     log(`尝试 ${p.label} ...`);
     try {
-      const res = await p.start(exe, port);
+      admission?.beforeMutation();
+      const res = await p.start(exe, port, admission);
+      admission?.beforeMutation();
       if (res.url) {
         // 把 pid 一并带出去：调用方（测试、启动器）要能只收掉自己起的那个，
         // 而不是把使用者正在用的隧道一起杀了
@@ -304,6 +326,9 @@ async function startTunnel(port, preference = 'auto') {
       attempts.push({ provider: p.id, ok: false, reason: res.reason, pid: res.pid || null });
       log(`✗ ${p.label} 失败: ${res.reason}`);
     } catch (err) {
+      // Stop/ownership failures are cancellation, never provider failures that
+      // permit another public endpoint to be created by a fallback.
+      if (admission && /^daemon-/.test(err?.code || '')) throw err;
       attempts.push({ provider: p.id, ok: false, reason: err.message });
       log(`✗ ${p.label} 抛异常: ${err.message}`);
     }

@@ -25,6 +25,7 @@ function harness(){
   const calls=[],task={kind:'idle',activity:'old reply'};
   const box={state,task,document:{createElement:tag=>{const el=element();el.tag=tag;return el;},getElementById:id=>els[id]},$:id=>els[id],
     t:s=>s,tr:s=>s,esc:s=>s,window:{},Date,Object,Promise,activityVersion:0,detachedHandbacks:{},resumeSubscription:null,queueEntries:[],queueDraft:null,stick:false,
+    desktopRelayEnabled:false,desktopRelayBusy:false,
     openSheet(){},closeSheet(){},renderFooter(){},renderTaskStatus(){},scheduleRelease(){},toast(){},refreshObservedThread(){},scrollDown(){},connect(){calls.push('ws-connect');},
     clearTimeout(){},setTask(kind,detail){task.kind=kind;task.detail=detail;},
     forkCurrentThread(){calls.push('fork');},newThread(){calls.push('new');},
@@ -32,7 +33,7 @@ function harness(){
     call(method){calls.push(method);return Promise.resolve({});},
     reasoningText(){return '';},confirm(){throw Error('Native confirmation must not open');}};
   vm.createContext(box);
-  for(const name of ['displayThreadTitle','bridgeUploadedFiles','userTextOf','baseName','openLockPanel','openPhoneReleasePanel','updateLockHint','statusKind','applyObservedStatus',
+  for(const name of ['displayThreadTitle','bridgeUploadedFiles','userTextOf','baseName','sessionControlHint','openLockPanel','openPhoneReleasePanel','updateLockHint','statusKind','applyObservedStatus',
     'syncThreadIdentity','noteActivity','selectedCollaborationMode','subscribeIfAlreadyLoaded','onNotify','connectCurrentThread',
     'phoneHandbackIssue','verifyPhoneHandbackIdle','updateJump','resetConversationScroll','openRenameThreadPanel','showApproval','restorePhoneConnection'])vm.runInContext(extractFunction(source,name),box);
   return {box,state,task,calls,els};
@@ -55,6 +56,30 @@ function harness(){
  check('read-only panel offers a visible independent continuation',h.els.sheetInner.children.some(e=>e.className==='btn p'&&/独立续聊/.test(e.textContent)));
  check('no button promises or invokes closing desktop Codex',!h.els.sheetInner.children.some(e=>e.onclick&&/关闭.*Codex|接管/.test(e.textContent))&&/无法验证占用者/.test(labels));
  h.box.updateLockHint();check('top control explains viewing-only state',h.els.lockhint.textContent==='当前仅查看');
+}
+{
+ const h=harness();h.state.resumed=false;h.box.desktopRelayEnabled=true;
+ h.els['session-control-hint']=element();h.box.openLockPanel();
+ const labels=h.els.sheetInner.children.map(e=>e.textContent).join('\n');
+ check('desktop relay control explains that native task execution remains unconfirmed',
+   /通过电脑代发文字，不接管会话锁/.test(labels)&&/不能确认电脑任务是否正在执行/.test(labels));
+ check('desktop relay mode omits independent fork, Connect, and desktop-owner takeover controls',
+   !h.els.sheetInner.children.some(e=>e.className==='btn p'||e.id==='lock-connect-current')&&!/当前无法验证占用者/.test(labels));
+ check('desktop relay with no phone subscription hides phone handback and performs no request',
+   h.els.sheetInner.children.find(e=>e.id==='lock-release-phone').style.display==='none'&&h.calls.length===0);
+ h.box.updateLockHint();
+ check('desktop relay status distinguishes text delivery from phone lock ownership and native approvals',
+   h.els.lockhint.textContent==='电脑代发已开启'&&/手机不接管会话锁/.test(h.els['session-control-hint'].textContent)&&
+   /授权、选择和提问仍需在电脑处理/.test(h.els['session-control-hint'].textContent));
+ check('opening desktop relay controls preserves the unsent draft and actual task state',
+   h.els.input.value==='Unsent phone draft'&&h.task.kind==='idle'&&!h.state.resumed);
+ h.state.resumed=true;h.box.openLockPanel();
+ check('desktop relay retains phone handback when a pre-existing phone subscription still exists',
+   h.els.sheetInner.children.find(e=>e.id==='lock-release-phone').style.display==='');
+ h.state.resumed=false;h.box.desktopRelayEnabled=false;h.box.openLockPanel();h.box.updateLockHint();
+ check('turning desktop relay off restores independent continuation and Connect without sending',
+   h.els.sheetInner.children.some(e=>e.className==='btn p'&&/独立续聊/.test(e.textContent))&&
+   h.els.sheetInner.children.some(e=>e.id==='lock-connect-current')&&h.els.lockhint.textContent==='当前仅查看'&&h.calls.length===0);
 }
 {
  const h=harness();h.box.onNotify('turn/started',{threadId:'t',turn:{id:'next'}});

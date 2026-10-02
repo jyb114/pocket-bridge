@@ -48,6 +48,8 @@ const SUITE = [
   ['test-e2ee-order.js', [], '加密消息维持授权与已解决事件的收发顺序（延迟 WebCrypto 夹具）'],
   ['test-missing-targets.js', [], '缺少 DSH / Codex 时显示可操作提示，旧选择与独立运行服务仍可用（假目标与假连接）'],
   ['test-first-run.js', [], '隔离目录验证首次安装生成密钥、DSH 可选与升级保留'],
+  ['test-windows-installer.js', [], 'English installer, remembered per-user destination, /D smoke override and shared-state isolation (source contracts; no build or install)'],
+  ['test-desktop-gateway-scope.js', [], 'Desktop shortcut opens only its own advertised gateway identity and matching fresh boot/PID (synthetic HTTP and child events; no live gateway or native action)'],
   ...(process.platform === 'win32'
     ? [['test-source-install.js', [], '隔离目录验证 Windows 源码安装与错误处理']]
     : []),
@@ -64,6 +66,26 @@ const SUITE = [
   ['test-proof-enforcement.js', ['--static-only'], '第三道门的源码检查；真网关实测在 CI 中显式跳过'],
   ['test-upload-handler.js', [], '上传处理器：路径穿越、来源、大小（自带服务）'],
   ['test-codex-queue.js', [], '队列状态机（自带 mock rpc，不碰真会话）'],
+  ['test-codex-desktop-target.js', [], '桌面代发目标、路径和重复请求验证（纯函数；不启动桌面）'],
+  ['test-desktop-ui-action.js', [], 'Codex and Dot share a fail-fast desktop action lease until their native child exits (isolated scheduler)'],
+  ['test-desktop-lifecycle.js', [], 'Controlled gateway restart/signals stop desktop admission and await actual child CLOSE, durable Dot close and the full Codex receipt tail (isolated services; no native actions)', { platform: 'win32' }],
+  ['test-console-restart-wait.js', [], 'Console waits for a distinct gateway boot, reports blocked drains and keeps transport failures separate from completed restart (isolated DOM/GET; no gateway restart)'],
+  ['test-reload-gateway.js', [], 'Scoped reload verifies own installation, exact health PID/boot and local Origin before scheduled restart (isolated mock/owned HTTP; no native actions)', { platform: 'win32' }],
+  ['test-daemon-operation-stop.js', [], 'Daemon admission leases fence delayed gateway/tunnel starts after stop and preserve uncertain child ownership (actual orchestration with synthetic HTTP/children; no native actions)'],
+  ['test-tray-gateway-stop.js', [], 'Tray verifies scoped gateway identity, waits graceful shutdown and owns only pinned tunnel processes (PowerShell synthetic HTTP/CIM/process fixtures; no tray UI or real signals)', { platform: 'win32' }],
+  ['test-dot-desktop.js', [], 'Native Dot durable identity, scoped history, encrypted service boundaries and driver lifecycle (isolated fixtures; no native actions)'],
+  ['test-dot-desktop-journal.js', [], 'Encrypted Dot receipts, continuity, parent ownership and immutable delivery proof (isolated files; no native actions)'],
+  ['test-dot-desktop-send.js', [], 'Framed Dot helper acknowledgements, child lifetime and shutdown fences (isolated fake children; no native actions)'],
+  ['test-dot-desktop-private-store.js', [], 'Private Dot provisioning, snapshot continuity and orderly shutdown (injected protection/ACL/identity; no OS acceptance)'],
+  ['test-dot-desktop-runtime.js', [], 'Lazy Dot connect provisioning, unavailable targets and owned shutdown (injected native/store; no real desktop actions)'],
+  ['test-dot-desktop-gateway.js', [], 'Dot uses the real gateway login, device proof and encryption gates (isolated HTTP; synthetic native history)'],
+  ['test-dot-desktop-ui.js', [], 'Dot phone connect, refresh, draft preservation and authenticated encryption in a real browser (synthetic native data)', { platform: 'win32' }],
+  ['test-codex-desktop-mode.js', [], '桌面代发英文和中文模式控件身份（PowerShell 纯函数；不操作桌面）', { platform: 'win32' }],
+  ['test-codex-desktop-relay-e2ee.js', [], '桌面代发的真实网关认证路由及客户端加密互通（隔离 HTTP；假设备和交付）'],
+  ['test-e2ee-missing-key.js', [], 'Public protected HTTP and WebSocket routes fail closed when encryption keys become unavailable (isolated HTTP and upgrade)'],
+  ['test-codex-desktop-relay.js', [], '桌面代发回执、实际 Windows 路径及防重复日志（隔离 HTTP/RPC/driver；不控制真桌面）', { platform: 'win32' }],
+  ['test-codex-desktop-relay-ui.js', [], '桌面代发手机按钮、草稿和收据（真实浏览器事件；隔离 RPC/driver；Windows 与浏览器）', { platform: 'win32' }],
+  ['test-dot-inbox.js', [], 'Dot MCP 收件箱协议与存储安全（隔离 HTTP；不代表真实 Dot 已接通）'],
   ['test-codex-lock-ux.js', [], '手机查看、回前台、交还写锁与桌面占用时队列不误送（隔离夹具）'],
   ['test-codex-first-turn.js', [], '首条消息前尚未落盘的真实协议回归：空会话可发送且不被空闲计时删除（隔离夹具）'],
   ['test-codex-mobile-control.js', [], '手机内嵌交还确认、控制状态、当前轮预览、标题与正规协作模式（隔离夹具）'],
@@ -129,7 +151,7 @@ const SUITE = [
 const onlyList = process.argv.includes('--list');
 if (onlyList) {
   console.log('\nCI 会跑这些：\n');
-  for (const [f, args, why] of SUITE) console.log(`  ${f} ${args.join(' ')}\n      ${why}`);
+  for (const [f, args, why, environment] of SUITE) console.log(`  ${f} ${args.join(' ')}\n      ${why}${environment?.platform ? ' [仅 ' + environment.platform + ']' : ''}`);
   console.log(`\n共 ${SUITE.length} 条。其余测试需要真机环境，CI 不覆盖。\n`);
   process.exit(0);
 }
@@ -141,7 +163,12 @@ let failed = 0;
 let skipped = 0;
 let skippedLiveSegments = 0;
 
-for (const [file, args, why] of SUITE) {
+for (const [file, args, why, environment] of SUITE) {
+  if (environment?.platform && environment.platform !== process.platform) {
+    skipped++;
+    console.log(`  ~ 跳过 ${file}（要求 ${environment.platform}，当前 ${process.platform}）  ${why}`);
+    continue;
+  }
   const started = Date.now();
   const r = spawnSync(NODE, [path.join(BASE, 'scripts', file), ...args], {
     cwd: BASE, encoding: 'utf8', timeout: 10 * 60 * 1000
@@ -151,7 +178,7 @@ for (const [file, args, why] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-codex-observer.js','test-codex-interactions.js','test-codex-queue-mobile-save.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-codex-observer.js','test-codex-interactions.js','test-codex-queue-mobile-save.js','test-codex-desktop-relay-ui.js','test-dot-desktop-ui.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;

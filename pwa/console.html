@@ -617,7 +617,7 @@ function applyI18n() {
 
 applyI18n();
 
-var state = { data: null, busy: false };
+var state = { data: null, busy: false, restartWait: null };
 function $(id) { return document.getElementById(id); }
 
 function esc(s) {
@@ -759,6 +759,7 @@ function render(data) {
   // 放在最后一行：上面所有 renderXxx 都已经把 DOM 写完了。
   applyI18n();
   renderDesktopSummary(data);
+  renderRestartWait();
 }
 
 function mkBtn(label, cls, fn) {
@@ -1380,9 +1381,11 @@ function load() {
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(render)
     .catch(function (e) {
-      $('hero').className = 'hero bad';
-      $('heroTitle').textContent = t('读不到状态');
-      $('heroText').textContent = e.message + t('　—— 服务可能刚重启，几秒后再刷新。');
+      if (!renderRestartWait()) {
+        $('hero').className = 'hero bad';
+        $('heroTitle').textContent = t('读不到状态');
+        $('heroText').textContent = e.message + t('　—— 服务可能刚重启，几秒后再刷新。');
+      }
       if ($('summary-devices')) {
         $('summary-devices').textContent=t('状态未知');
         $('summary-devices').className='device-count';
@@ -1394,6 +1397,7 @@ function load() {
 function action(name, label, params) {
   toast(t('正在执行：{label}…', { label: label }));
   var body = { action: name };
+  var startingBootId = state.data && state.data.gateway && state.data.gateway.bootId;
   if (params) for (var k in params) body[k] = params[k];
   return fetch('/__console/action', {
     method: 'POST',
@@ -1403,8 +1407,17 @@ function action(name, label, params) {
     // 服务端说「我在重启」时，不能立刻 load() —— 那几秒里服务确实不在，
     // 页面会跳到「读不到状态 / 服务可能刚重启」，看起来像点坏了。
     // 先等它回来，再刷新。
-    if (j && j.restarting) {
-      return waitForRestart(j.message).then(function () {
+    if (j && (j.restartScheduled === false || (j.restartState && j.restartState.phase === 'failed'))) {
+      var blocked = new Error(restartFailureMessage(j.restartState && j.restartState.code));
+      blocked.restartWaitCode = 'restart-blocked';
+      state.restartWait = { phase: 'failed', message: blocked.message };
+      renderRestartWait();
+      throw blocked;
+    }
+    // Tunnel refresh only requests a tunnel reconnection. It does not replace
+    // the gateway process, even though the legacy response says restarting.
+    if (j && j.restarting && !(name === 'refresh-tunnel' && j.restartScheduled === undefined && !j.restartBootId)) {
+      return waitForRestart(j.message, j.restartBootId || startingBootId).then(function () {
         return load().then(function () { return j; });
       });
     }
@@ -1415,38 +1428,88 @@ function action(name, label, params) {
     return load().then(function () { return j; });
   }).catch(function (e) {
     toast(t('执行失败：{msg}', { msg: e.message }));
+    if (e.restartWaitCode) return { ok: false, restarting: false, code: e.restartWaitCode, message: e.message };
   });
 }
 
-/**
- * 等中间层重启回来。
- *
- * 为什么值得单独写：重启是**我们主动做的**（设置改完自动重启），
- * 使用者什么都没做错，界面就不该在这几秒里显示成故障。
- * 顶部那条结论改成「正在重启服务…」，然后每半秒探一次，回来了就自动刷新。
- *
- * 60 秒还回不来就放弃等待 —— 让随后的 load() 去显示真正的错误信息，
- * 总比无限转圈强。
- */
-function waitForRestart(msg) {
-  toast(msg || t('正在重启服务…'));
-  var hero = $('hero');
-  hero.className = 'hero mid';
-  $('heroTitle').textContent = t('正在重启服务…');
-  $('heroText').textContent = t('刚改的设置要重启才生效，几秒钟就好 —— 这个页面会自己恢复。');
+function restartFailureMessage(code) {
+  if (code === 'desktop-drain-timeout') return t('重启已停止：等待电脑操作结束超时。请检查电脑操作与日志；不要连续重试。');
+  if (code === 'desktop-drain-failed') return t('重启已停止：电脑操作未能安全结束。请检查电脑操作与日志；不要连续重试。');
+  if (code === 'restart-helper-failed') return t('重启已停止：重启助手未能启动。请检查日志后再处理。');
+  return t('重启已停止，未确认完成。请检查电脑操作与日志；不要连续重试。');
+}
+function renderRestartWait() {
+  var pending = state.restartWait;
+  if (!pending) return false;
+  $('hero').className = pending.phase === 'failed' ? 'hero bad' : 'hero mid';
+  $('heroTitle').textContent = pending.phase === 'failed' ? t('服务重启未完成') : t('正在重启服务…');
+  $('heroText').textContent = pending.phase === 'failed' ? pending.message : t('正在等待电脑操作安全结束并重启服务；确认恢复后，这个页面会自己刷新。');
+  return true;
+}
 
-  return new Promise(function (resolve) {
-    var tries = 0;
-    (function poll() {
-      tries++;
-      fetch('/__console/status', { cache: 'no-store' })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function () { resolve(); })
-        .catch(function () {
-          if (tries > 120) { resolve(); return; }
-          setTimeout(poll, 500);
-        });
-    })();
+/**
+ * A scheduled restart is complete only when a different process reports its
+ * normal running lifecycle. Installation instanceId survives a restart.
+ * Legacy gateways without a boot ID must disappear before a healthy response
+ * can confirm recovery. A transport gap alone never confirms recovery.
+ */
+function waitForRestart(msg, startingBootId) {
+  toast(msg || t('正在重启服务…'));
+  var before = typeof startingBootId === 'string' && startingBootId.trim() ? startingBootId : null;
+  var pending = { phase: 'waiting', message: null };
+  state.restartWait = pending;
+  renderRestartWait();
+  return new Promise(function (resolve, reject) {
+    var done = false, gap = false, pollTimer = null, controller = null;
+    var deadline = setTimeout(function () {
+      var error = new Error(t('等待服务重启超时，未确认完成。设置可能已部分生效，请检查当前状态与日志；不要连续重试。'));
+      error.restartWaitCode = 'restart-wait-timeout';
+      finish(error);
+    }, 120000);
+    function finish(error, data) {
+      if (done) return;
+      done = true;
+      clearTimeout(deadline);clearTimeout(pollTimer);
+      if (controller) controller.abort();
+      if (state.restartWait === pending) {
+        if (error) { pending.phase = 'failed';pending.message = error.message; }
+        else state.restartWait = null;
+        renderRestartWait();
+      }
+      if (error) reject(error);else resolve(data);
+    }
+    function again() { if (!done) pollTimer = setTimeout(poll, 500); }
+    function poll() {
+      if (done) return;
+      controller = new AbortController();
+      Promise.resolve().then(function () {
+        return fetch('/__console/status', { cache: 'no-store', signal: controller.signal });
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }, function (error) {
+        // HTTP errors and malformed JSON are not proof that the old process
+        // disappeared. Only a failed transport permits the legacy fallback.
+        if (!done) gap = true;
+        throw error;
+      }).then(function (data) {
+        if (done) return;
+        var gateway = data && data.gateway, shutdown = gateway && gateway.desktopShutdown;
+        if (shutdown && shutdown.phase === 'failed') {
+          var error = new Error(restartFailureMessage(shutdown.code));
+          error.restartWaitCode = 'restart-blocked';finish(error);return;
+        }
+        var boot = gateway && typeof gateway.bootId === 'string' && gateway.bootId.trim() ? gateway.bootId : null;
+        var healthy = gateway && typeof gateway === 'object' && !Array.isArray(gateway) && gateway.running === true &&
+          (gateway.bootId === undefined || boot) &&
+          (shutdown && typeof shutdown === 'object' && !Array.isArray(shutdown)
+            ? shutdown.phase === 'running' && shutdown.kind === null && shutdown.code === null
+            : gateway.desktopShutdown === undefined && gateway.bootId === undefined);
+        if (healthy && (before ? boot && boot !== before : gap)) { finish(null, data);return; }
+        again();
+      }).catch(again);
+    }
+    poll();
   });
 }
 
@@ -2319,6 +2382,31 @@ if (window.DshI18n && window.DshI18n.register) {
     '执行失败：{msg}': { en: 'Failed: {msg}', es: 'Error: {msg}' },
     '失败：{msg}': { en: 'Failed: {msg}', es: 'Error: {msg}' },
     '正在重启服务…': { en: 'Restarting the service…', es: 'Reiniciando el servicio…' },
+    '服务重启未完成': { en: 'Service restart not completed', es: 'El reinicio del servicio no se completó' },
+    '正在等待电脑操作安全结束并重启服务；确认恢复后，这个页面会自己刷新。': {
+      en: 'Waiting for computer actions to finish safely before restarting. This page refreshes after recovery is confirmed.',
+      es: 'Esperando a que las acciones del ordenador terminen de forma segura antes de reiniciar. Esta página se actualizará cuando se confirme la recuperación.'
+    },
+    '重启已停止：等待电脑操作结束超时。请检查电脑操作与日志；不要连续重试。': {
+      en: 'Restart stopped: waiting for computer actions timed out. Check the computer actions and logs; do not retry repeatedly.',
+      es: 'Reinicio detenido: se agotó el tiempo de espera de las acciones del ordenador. Comprueba las acciones y los registros; no repitas el intento continuamente.'
+    },
+    '重启已停止：电脑操作未能安全结束。请检查电脑操作与日志；不要连续重试。': {
+      en: 'Restart stopped: computer actions could not finish safely. Check the computer actions and logs; do not retry repeatedly.',
+      es: 'Reinicio detenido: las acciones del ordenador no pudieron terminar de forma segura. Comprueba las acciones y los registros; no repitas el intento continuamente.'
+    },
+    '重启已停止：重启助手未能启动。请检查日志后再处理。': {
+      en: 'Restart stopped: the restart helper could not start. Check the logs before taking further action.',
+      es: 'Reinicio detenido: el asistente de reinicio no pudo iniciarse. Revisa los registros antes de continuar.'
+    },
+    '重启已停止，未确认完成。请检查电脑操作与日志；不要连续重试。': {
+      en: 'Restart stopped and completion is unconfirmed. Check the computer actions and logs; do not retry repeatedly.',
+      es: 'Reinicio detenido; no se ha confirmado que haya finalizado. Comprueba las acciones y los registros; no repitas el intento continuamente.'
+    },
+    '等待服务重启超时，未确认完成。设置可能已部分生效，请检查当前状态与日志；不要连续重试。': {
+      en: 'Timed out waiting for the service restart; completion is unconfirmed. Some settings may already apply. Check the current status and logs; do not retry repeatedly.',
+      es: 'Se agotó el tiempo de espera del reinicio; no se ha confirmado que haya finalizado. Es posible que algunos ajustes ya se hayan aplicado. Comprueba el estado actual y los registros; no repitas el intento continuamente.'
+    },
     '刚改的设置要重启才生效，几秒钟就好 —— 这个页面会自己恢复。': {
       en: 'The settings you just changed need a restart; it takes a few seconds and this page recovers on its own.',
       es: 'Los ajustes que acabas de cambiar necesitan un reinicio; tarda unos segundos y esta página se recupera sola.'

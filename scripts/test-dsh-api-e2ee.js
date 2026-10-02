@@ -118,7 +118,7 @@ console.log('\n[红线] 旧界面加密失败时，经隧道不能降级发送�
   for (const route of ['/api/session/prompt', '/api/session/uploadFileBinary']) {
     assert.ok(routes.includes(`'${route}'`), `${route} 没有列入隧道加密闸门`);
   }
-  const gate = src.match(/if \(E2EE_CONTENT_PATHS\.has\(u\.pathname\)[\s\S]{0,180}refusePlaintext\(req, res, u\.pathname\);/) || [];
+  const gate = src.match(/if \(E2EE_CONTENT_PATHS\.has\(u\.pathname\)[\s\S]{0,500}refusePlaintext\(req, res, u\.pathname\);/) || [];
   assert.ok(gate.length, '内容路径未在代理前被拒绝明文');
   const wantsSource = require('./page-source.js').extractFunction(src, 'clientWantsE2ee');
   const wants = vm.runInNewContext(`${wantsSource}; clientWantsE2ee`, {});

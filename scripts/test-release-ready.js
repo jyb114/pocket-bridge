@@ -102,12 +102,14 @@ const rd0 = read('README.md') || '';
 ok('README 写了源码运行需要 Node.js', /Node\.js 24 or newer/i.test(rd0));
 ok('说了不需要 npm install（零依赖）', /npm install is not needed/i.test(rd0));
 ok('给了环境自检的第一步', /self-check\.js/.test(rd0));
-// Release claims must track products actually operated, not adapters that exist
-// only in code or fixtures. Requiring npm Web / legacy DSH / Codex CLI here would
-// push the public README toward an unsupported compatibility promise.
+// This checks that the public claims keep the limits of the actual acceptance
+// record. It does not operate a runtime or turn documentation into a live pass.
 const rdPlain = rd0.replace(/\*\*/g, '');
 const dshScope = rdPlain.split('## Tested DSH desktop scope')[1]?.split('## Codex phone view')[0] || '';
 const codexScope = rdPlain.split('## Codex phone view')[1]?.split(/\n## /)[0] || '';
+const dotScope = rdPlain.split('## Dot access')[1]?.split(/\n## /)[0] || '';
+const manual = (read('docs/MANUAL-ACCEPTANCE.md') || '').replace(/\*\*/g, '');
+const currentManual = manual.split('## Historical preview.4 and preview.5 observations')[0];
 ok('README names the operated, signed-in DSH desktop build',
   /DSH 0\.1\.7-rc\.2 desktop build installed on the test PC/i.test(dshScope) &&
   /DeepSeek Harness[^\n|]*desktop build[^\n|]*installed and signed in/i.test(rdPlain));
@@ -115,14 +117,40 @@ ok('README reports partial npm acceptance without claiming full or historical su
   /Other desktop versions are unverified/i.test(dshScope) &&
   /complete end-to-end acceptance has not been achieved[^\n]*not claimed as fully supported/i.test(dshScope) &&
   ['0.1.0-rc.8', '0.1.1-rc.2', '0.1.7-rc.2', '0.2.0-rc.2'].every(version => dshScope.includes(version)) &&
-  /credentials with 401[^\n]*real approval\/question completion remain unverified/i.test(dshScope) &&
-  /operating-system download completion remains unverified/i.test(dshScope) &&
-  /not a claim that an ordinary old npx install works today[^\n]*every historical desktop release is supported/i.test(dshScope) &&
+  /No successful model response: a valid API key was unavailable/i.test(dshScope) &&
+  /staged image was not sent to a model/i.test(dshScope) &&
+  /Questions and tool approval round trips were not accepted/i.test(dshScope) &&
+  /actual displayed question and answer/i.test(dshScope) &&
+  /allow\/reject was not exercised/i.test(dshScope) &&
+  /do not certify today's unmodified old-version[^\n]*npx[^\n]*every historical desktop wrapper/i.test(dshScope) &&
+  /exactly npm CLI[^\n]*0\.2\.0-rc\.2[^\n]*uninspected desktop wrapper or future release/i.test(dshScope) &&
+  /not physical iPhone\/Android, mobile 5G or Cloudflare tunnel acceptance/i.test(dshScope) &&
   /docs\/MANUAL-ACCEPTANCE\.md/.test(dshScope));
 ok('README scopes Codex to the operated desktop installation',
   /current OpenAI Codex desktop installation tested for this preview, signed in/i.test(rdPlain) &&
-  /Codex phone interface was operated[^\n]*real Codex 0\.159\.0 runtime/i.test(codexScope) &&
-  /does not establish compatibility with every Codex release/i.test(codexScope));
+  /official desktop product[^\n]*26\.928\.31416[^\n]*26\.928\.3736\.0[^\n]*0\.159\.2/i.test(codexScope) &&
+  /not a guarantee for other app versions or every desktop state/i.test(codexScope) &&
+  /same-source rerun[^\n]*remains pending/i.test(codexScope) &&
+  /Earlier real app-server tests against Codex[^\n]*0\.159\.0[^\n]*separate previous baseline/i.test(codexScope));
+ok('README separates native Dot reading from disabled sending and unresolved execution',
+  /390- and 320-pixel[^\n]*12[^\n]*two native transcript reads/i.test(dotScope) &&
+  /Dot sending is still disabled and under implementation/i.test(dotScope) &&
+  /Only materialized recent history is available/i.test(dotScope) &&
+  /official Dot local execution still fails[^\n]*drive-root pin error/i.test(dotScope) &&
+  /has not passed physical-phone or tunnel acceptance/i.test(dotScope));
+ok('README states passive-content protection, initial-page trust and local storage limits',
+  /passive tunnel observer sees ciphertext[^\n]*original page and scripts are trusted/i.test(rdPlain) &&
+  /active intermediary replacing the initial page/i.test(rdPlain) &&
+  /journals and saved-message queues may contain plaintext[^\n]*not encryption at rest/i.test(rdPlain));
+ok('current acceptance retains exact-version, old-model and scoped preview boundaries',
+  /Windows package 26\.928\.3736\.0[^\n]*0\.159\.2/i.test(currentManual) &&
+  /valid API key was unavailable[^\n]*model replies were not accepted/i.test(currentManual) &&
+  /displayed card is not approval completion/i.test(currentManual) &&
+  /same-source rerun[^\n]*remains pending/i.test(currentManual) &&
+  /Physical iPhone\/Android[^\n]*Cloudflare tunnel acceptance are pending/i.test(currentManual) &&
+  /Manual acceptance[^\n]*1\.0\.0-preview\.6/i.test(currentManual) &&
+  /No gateway, user backend, tray or native UI was started/i.test(currentManual) &&
+  /Normal interactive destination selection and live production startup remain unaccepted/i.test(currentManual));
 ok('明确不是安装两个产品才可使用，也不随安装包提供它们',
   /do not have to install both products/i.test(rd0) &&
   /does not include DeepSeek Harness, Codex/i.test(rd0));

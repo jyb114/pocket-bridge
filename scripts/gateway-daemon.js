@@ -18,6 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
 const cfg = require('./config.js');
@@ -30,12 +31,134 @@ const DAEMON_LOG = path.join(LOG_DIR, 'daemon.log');
 const STATUS_FILE = path.join(LOG_DIR, 'status.json');
 const PROXY_PORT_RANGE = [8080, 8099];
 
+// The tray observes presence, including incomplete/unreadable directories.
+// There is no stale-age or PID-only takeover: an interrupted spawn is evidence,
+// not permission for a second watchdog to create another public endpoint.
+function createDaemonOperationLease({ logDir, owner, fileSystem = fs }) {
+  const directory = path.join(logDir, 'daemon-operation.lock');
+  const ownerFile = path.join(directory, 'owner.json');
+  const nonce = crypto.randomBytes(24).toString('hex');
+  let directoryIdentity, expectedOwnerIdentity, expectedBytes, uncertain = false, released = false, stopObserved = false;
+  const children = [];
+  const failure = code => Object.assign(new Error(code), { code });
+  fileSystem.mkdirSync(logDir, { recursive: true });
+  try { fileSystem.mkdirSync(directory, { mode: 0o700 }); }
+  catch (_) { throw failure('daemon-operation-pending'); }
+  directoryIdentity = fileSystem.lstatSync(directory);
+  function sameDirectory() {
+    const current = fileSystem.lstatSync(directory);
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino)
+      throw failure('daemon-operation-unverified');
+  }
+  function assertOwned() {
+    if (released || uncertain) throw failure('daemon-operation-unverified');
+    try {
+      sameDirectory();
+      const stat = fileSystem.lstatSync(ownerFile);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.dev !== expectedOwnerIdentity.dev ||
+          stat.ino !== expectedOwnerIdentity.ino || stat.size !== expectedBytes.length ||
+          !fileSystem.readFileSync(ownerFile).equals(expectedBytes)) throw failure('daemon-operation-unverified');
+      const afterRead = fileSystem.lstatSync(ownerFile);
+      if (afterRead.dev !== stat.dev || afterRead.ino !== stat.ino) throw failure('daemon-operation-unverified');
+    } catch (_) { uncertain = true; throw failure('daemon-operation-unverified'); }
+  }
+  function save(initial = false) {
+    if (!initial) assertOwned();
+    const bytes = Buffer.from(JSON.stringify({ version: 1, ...owner, nonce,
+      children: children.map(value => ({ kind: value.kind, pid: value.child.pid || null, state: value.state })) }));
+    const temporary = path.join(directory, `owner-${crypto.randomBytes(12).toString('hex')}.tmp`);
+    let fd;
+    try {
+      sameDirectory(); fd = fileSystem.openSync(temporary, 'wx', 0o600);
+      fileSystem.writeFileSync(fd, bytes); fileSystem.fsyncSync(fd); fileSystem.closeSync(fd); fd = undefined;
+      if (!initial) assertOwned();
+      fileSystem.renameSync(temporary, ownerFile); expectedBytes = bytes;
+      expectedOwnerIdentity = fileSystem.lstatSync(ownerFile);
+      if (!expectedOwnerIdentity.isFile() || expectedOwnerIdentity.isSymbolicLink() || expectedOwnerIdentity.nlink !== 1)
+        throw failure('daemon-operation-unverified');
+    } catch (_) { uncertain = true; throw failure('daemon-operation-unverified'); }
+    finally { if (fd !== undefined) fileSystem.closeSync(fd); }
+  }
+  save(true);
+  function checkpoint() {
+    assertOwned();
+    if (stopObserved) throw failure('daemon-stop-requested');
+    try { fileSystem.lstatSync(path.join(logDir, 'user-stopped.flag')); stopObserved = true; throw failure('daemon-stop-requested'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error.code === 'daemon-stop-requested' ? error : failure('daemon-stop-unverified'); }
+  }
+  function bindInstallation(instanceId) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(instanceId || '') ||
+        owner.instanceId && owner.instanceId !== instanceId) throw failure('daemon-operation-unverified');
+    owner.instanceId = instanceId; save();
+  }
+  function observeSpawn(child, kind) {
+    if (!child || typeof child.once !== 'function' || !['gateway', 'tunnel'].includes(kind)) {
+      uncertain = true; throw failure('daemon-spawn-unverified');
+    }
+    let resolveReady, rejectReady, resolveClose, observedBoundary = false;
+    const value = { child, kind, state: 'spawning', ready: new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; }),
+      close: new Promise(resolve => { resolveClose = resolve; }) };
+    // Install handlers before persistence so a journal write failure cannot
+    // leave the real child unobserved or emit an unhandled spawn error.
+    children.push(value);
+    const timer = setTimeout(() => { value.state = 'unknown'; uncertain = true; rejectReady(failure('daemon-spawn-unverified')); }, 10000);
+    child.once('spawn', () => {
+      observedBoundary = true;
+      clearTimeout(timer);
+      value.state = Number.isSafeInteger(child.pid) && child.pid > 0 ? 'live' : 'unknown';
+      try { save(); if (value.state === 'unknown') throw failure('daemon-spawn-unverified'); resolveReady(); }
+      catch (error) { uncertain = true; rejectReady(error); }
+    });
+    child.once('error', () => { observedBoundary = true; clearTimeout(timer); value.state = child.pid ? 'unknown' : 'failed'; rejectReady(failure('daemon-spawn-unverified')); });
+    child.once('close', () => { clearTimeout(timer); value.state = 'closed'; resolveClose();
+      if (!observedBoundary) { uncertain = true; rejectReady(failure('daemon-spawn-unverified')); }
+      if (!released) try { save(); } catch (_) { uncertain = true; } });
+    value.ready.catch(() => {});
+    try { save(); } catch (error) { value.ready.catch(() => {}); throw error; }
+    return value.ready;
+  }
+  async function quiesce() {
+    let timer;
+    try {
+      await Promise.race([Promise.allSettled(children.map(value => value.ready)).then(() =>
+        Promise.all(children.filter(value => ['failed', 'unknown'].includes(value.state)).map(value => value.close))),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(failure('daemon-spawn-unverified')), 10000); })]);
+      if (children.some(value => !['live', 'closed'].includes(value.state))) throw failure('daemon-spawn-unverified');
+    } catch (error) { uncertain = true; throw error; }
+    finally { clearTimeout(timer); }
+  }
+  function release({ stopRequested = false } = {}) {
+    assertOwned();
+    if (children.some(value => !['live', 'closed'].includes(value.state)) ||
+        stopRequested && children.some(value => value.kind === 'gateway' && value.state !== 'closed')) {
+      throw failure('daemon-operation-pending');
+    }
+    // Known live tunnels are handed off only after provider continuations have
+    // quiesced. The tray then recaptures their fresh argv/birth/held handles.
+    // Claim the manifest under a nonce-specific name before deleting it. A
+    // file swapped during the claim is retained as uncertain evidence, rather
+    // than unlinked merely because its old pathname was ours.
+    assertOwned();
+    const closingFile = path.join(directory, `release-${nonce}.json`);
+    fileSystem.renameSync(ownerFile, closingFile); sameDirectory();
+    const claimed = fileSystem.lstatSync(closingFile);
+    if (!claimed.isFile() || claimed.isSymbolicLink() || claimed.nlink !== 1 ||
+        claimed.dev !== expectedOwnerIdentity.dev || claimed.ino !== expectedOwnerIdentity.ino ||
+        !fileSystem.readFileSync(closingFile).equals(expectedBytes)) {
+      uncertain = true; throw failure('daemon-operation-unverified');
+    }
+    sameDirectory(); fileSystem.unlinkSync(closingFile); sameDirectory(); fileSystem.rmdirSync(directory); released = true;
+  }
+  return { checkpoint, bindInstallation, observeSpawn, quiesce, release, children, retain() { uncertain = true; },
+    status() { return { uncertain, released, children: children.map(value => ({ kind: value.kind, state: value.state })) }; } };
+}
+
 function log(msg) {
   const line = `${new Date().toISOString()} ${msg}\n`;
-  try {
+  try { if (!process.argv.includes('--status')) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     fs.appendFileSync(DAEMON_LOG, line);
-  } catch (err) { /* 日志失败不影响主流程 */ }
+  } } catch (err) { /* 日志失败不影响主流程 */ }
   // 同时打到 stdout，方便手动运行时直接看到
   try { process.stdout.write(line); } catch (err) { }
 }
@@ -196,38 +319,50 @@ function resolveNodeExecutable() {
 }
 
 /** 探测某个端口上是不是我们的中间层。 */
-function probeGateway(port, timeoutMs = 1500) {
+function probeGateway(port, timeoutMs = 1500, expected = {}) {
   return new Promise((resolve) => {
-    const req = http.get(
+    let req, settled = false;
+    const finish = value => { if (settled) return; settled = true; clearTimeout(deadline); resolve(value); };
+    // Socket inactivity alone is not a deadline: an incomplete response can
+    // keep sending bytes. Destroy only this request at the absolute boundary.
+    const deadline = setTimeout(() => { req?.destroy(); finish(null); }, timeoutMs);
+    try { req = http.get(
       { host: '127.0.0.1', port, path: '/__health', timeout: timeoutMs },
       (res) => {
-        let body = '';
-        res.on('data', (d) => { body += d; });
+        let body = '', bytes = 0;
+        res.on('data', (d) => { bytes += d.length; if (bytes > 16384) { req.destroy(); finish(null); }
+          else body += d; });
+        res.on('error', () => finish(null));
+        res.on('aborted', () => finish(null));
         res.on('end', () => {
           try {
             const j = JSON.parse(body);
-            resolve(j && j.service === 'pocket-bridge-gateway' ? j : null);
+            finish(j && j.service === 'pocket-bridge-gateway' && j.port === port && Number.isSafeInteger(j.pid) && j.pid > 0 &&
+              (!expected.instanceId || j.instanceId === expected.instanceId) &&
+              (!expected.pid || j.pid === expected.pid) ? j : null);
           } catch (err) {
-            resolve(null);
+            finish(null);
           }
         });
       }
     );
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); finish(null); });
+    req.on('error', () => finish(null));
+    } catch (_) { finish(null); }
   });
 }
 
-async function findRunningGateway() {
+async function findRunningGateway(expected = {}) {
   for (let p = PROXY_PORT_RANGE[0]; p <= PROXY_PORT_RANGE[1]; p++) {
-    const info = await probeGateway(p);
+    const info = await probeGateway(p, 1500, expected);
     if (info) return { port: p, info };
   }
   return null;
 }
 
-async function startGateway(nodeExe) {
+async function startGateway(nodeExe, admission, identity) {
   const proxyJs = path.join(cfg.BASE, 'scripts', 'mobile-proxy.js');
+  admission.checkpoint();
   const child = spawn(nodeExe, [proxyJs], {
     detached: true,
     stdio: 'ignore',
@@ -236,14 +371,55 @@ async function startGateway(nodeExe) {
     //   这种平台细节 —— 写死 windowsHide，桌面上就一定不会闪黑窗。
     windowsHide: true
   });
-  child.unref();
+  const ready = admission.observeSpawn(child, 'gateway'); child.unref(); await ready;
+  admission.checkpoint();
 
   for (let i = 0; i < 25; i++) {
     await sleep(1000);
-    const found = await findRunningGateway();
+    admission.checkpoint();
+    const found = await findRunningGateway({ instanceId: identity.instanceId, pid: child.pid });
+    admission.checkpoint();
     if (found) return found;
   }
-  return null;
+  throw Object.assign(Error('daemon-owned-gateway-unverified'), { code: 'daemon-owned-gateway-unverified' });
+}
+
+async function stopOwnedGatewayChildren(admission, identity) {
+  for (const owned of admission.children.filter(value => value.kind === 'gateway' && value.state !== 'closed')) {
+    if (owned.state !== 'live' || !identity?.instanceId) throw Error('daemon-owned-gateway-unverified');
+    const found = await findRunningGateway({ instanceId: identity.instanceId, pid: owned.child.pid });
+    const health = found?.info;
+    if (!health || !/^[a-f0-9-]{36}$/i.test(health.bootId || '')) throw Error('daemon-owned-gateway-unverified');
+    const origin = `http://127.0.0.1:${found.port}`;
+    const bytes = Buffer.from(JSON.stringify({ action: 'stop-gateway', expectedBootId: health.bootId,
+      expectedInstanceId: identity.instanceId }));
+    await new Promise((resolve, reject) => {
+      let request, settled = false;
+      const finish = error => { if (settled) return; settled = true; clearTimeout(deadline); error ? reject(Error('daemon-owned-gateway-unverified')) : resolve(); };
+      const deadline = setTimeout(() => { request?.destroy(); finish(true); }, 5000);
+      try { request = http.request({ hostname: '127.0.0.1', port: found.port, path: '/__console/action', method: 'POST', timeout: 5000,
+        headers: { Origin: origin, 'content-type': 'application/json', 'content-length': bytes.length } }, response => {
+        const chunks = []; let size = 0;
+        response.on('data', value => { size += value.length; if (size > 16384) { request.destroy(); finish(true); }
+          else chunks.push(value); });
+        response.on('end', () => {
+          try { const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (response.statusCode !== 202 || result.shutdownScheduled !== true || result.ok !== true ||
+                result.bootId !== health.bootId || result.instanceId !== identity.instanceId || result.pid !== owned.child.pid) throw Error();
+            finish(); } catch (_) { finish(true); }
+        });
+        response.on('error', () => finish(true));
+        response.on('aborted', () => finish(true));
+      });
+      request.on('error', () => finish(true));
+      request.on('timeout', () => { request.destroy(); finish(true); });
+      request.end(bytes);
+      } catch (_) { finish(true); }
+    });
+    let timer;
+    try { await Promise.race([owned.close, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('daemon-owned-gateway-pending')), 95000); })]); }
+    finally { clearTimeout(timer); }
+  }
 }
 
 /** 隧道当前有没有在跑。 */
@@ -378,73 +554,28 @@ function writeStatus(status) {
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────────
-(async () => {
+async function runDaemon() {
   const wantStatusOnly = process.argv.includes('--status');
-
-  // ── 单实例锁：同一时刻只允许一个守护进程动隧道 ────────────────────────────
-  //
-  // 会并发跑到这里的地方不止一处：
-  //   · 看门狗计划任务（每 5 分钟一次）
-  //   · refresh-tunnel.js（控制台按钮 → 它 detach 起一个守护进程）
-  //   · 使用者手动跑
-  // 而它们的动作是「**杀掉旧的 cloudflared → 起一条新的**」。
-  // 两个撞在一起就会互相杀对方的隧道 —— 实测那次的时间线是：
-  //
-  //   03:59:56 #1 停掉旧的
-  //   03:59:58 #1 起新的
-  //   04:00:03 #2 把 #1 刚起的那个杀掉了 ← 就是这里
-  //   04:00:03 #1 报「失败: 进程已退出」→「所有隧道方案都不可用」
-  //   04:00:05 #2 重来，04:00:11 才就绪
-  //
-  // 结果是**外网入口断了 8 秒**、白重建一次。运气差一点（比如 #2 在 #1
-  // 判定成功之后再杀）就会留下一个「进程在跑、域名还没生效」的中间态。
-  //
-  // `--status` 是只读查询，不抢锁 —— 否则控制台连状态都读不出来。
-  const LOCK_FILE = path.join(LOG_DIR, 'daemon.lock');
-  const LOCK_STALE_MS = 2 * 60 * 1000;   // 一轮正常只要几秒到半分钟
-  function otherDaemonAlive() {
-    let info = null;
-    try { info = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')); } catch (err) { return false; }
-    if (!info || !info.pid) return false;
-    if (Date.now() - (info.at || 0) > LOCK_STALE_MS) return false;   // 太旧，当它已经死了
-    try { process.kill(info.pid, 0); return true; }   // 0 号信号 = 只探测存活性，不真发信号
-    catch (err) { return false; }
-  }
-  if (!wantStatusOnly) {
-    if (otherDaemonAlive()) {
-      log('· 另一个守护进程正在跑，本次跳过（两个一起跑会互相杀掉对方的隧道）');
-      return;
-    }
-    try { fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() }), 'utf8'); }
-    catch (err) { log(`· 写锁文件失败（${err.message}），继续，但这次没有并发保护`); }
-  }
-
-  // ★ 使用者主动关掉了 —— 那就不要再自己起来。
-  //
-  // 这个标记是「真正关闭」能成立的前提。
-  //
-  // 背景：看门狗计划任务每 5 分钟跑一次这个脚本，一发现中间层没在跑就把它拉起来。
-  // 所以使用者从托盘里点了「退出 → 是（连后台一起停）」，当时确实停了，
-  // 但**最多 5 分钟后又被拉回来**。他看到的景象是「关了，后台还在跑」，
-  // 而这跟意志无关 —— 是我们自己在跟他拔河。
-  //
-  // 有了标记：他关，就一直关着；他从托盘点「启动服务」，标记清掉，恢复正常。
-  // 「--status」是只读查询，不该被标记挡住（否则控制台连状态都读不出来）。
-  const STOP_FLAG = path.join(LOG_DIR, 'user-stopped.flag');
-  if (!wantStatusOnly && fs.existsSync(STOP_FLAG)) {
-    log('· 使用者已手动关闭过 —— 这次不自动启动（要恢复：托盘右键 →「启动服务」）');
-    process.exitCode = 0;
-    return;
-  }
-
+  let admission = null, identity = null, stopped = false;
+  const checkpoint = () => { if (admission) admission.checkpoint(); };
+  const tunnelAdmission = { beforeMutation: checkpoint, observeSpawn: (child, kind) => admission.observeSpawn(child, kind) };
   try {
+    if (!wantStatusOnly) {
+      admission = createDaemonOperationLease({ logDir: LOG_DIR, owner: { pid: process.pid,
+        base: path.resolve(cfg.BASE), executable: process.execPath, script: path.resolve(__filename) } });
+      checkpoint();
+    }
     // 0. 本机身份：换机器就作废旧密钥
-    const identity = cfg.ensureInstanceIdentity();
+    identity = wantStatusOnly ? JSON.parse(fs.readFileSync(path.join(LOG_DIR, 'instance.json'), 'utf8')) : cfg.ensureInstanceIdentity();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity?.instanceId || '')) throw Error('daemon-installation-unverified');
+    admission?.bindInstallation(identity.instanceId);
+    checkpoint();
     if (identity.isFirstRun) log('首次在本机运行');
     else if (identity.isNewMachine) log('检测到换机器，旧密钥已作废，将重新签发');
 
     // 1. 中间层
-    let gateway = await findRunningGateway();
+    let gateway = await findRunningGateway({ instanceId: identity.instanceId });
+    checkpoint();
     if (gateway) {
       log(`· 中间层已在运行，端口 ${gateway.port}`);
     } else if (wantStatusOnly) {
@@ -452,7 +583,9 @@ function writeStatus(status) {
     } else {
       const nodeExe = resolveNodeExecutable();
       log(`启动中间层（node: ${nodeExe}）`);
-      gateway = await startGateway(nodeExe);
+      checkpoint();
+      gateway = await startGateway(nodeExe, admission, identity);
+      checkpoint();
       if (gateway) log(`✓ 中间层已启动，端口 ${gateway.port}`);
       else log('✗ 中间层启动失败（25 秒内没找到健康检查端点）');
     }
@@ -490,13 +623,14 @@ function writeStatus(status) {
       } else {
         const st = readProbeState();
         tunnelProbe = await probeTunnelUrl(tunnelUrl);
+        checkpoint();
         if (tunnelProbe.ok) {
           log(st.fails
             ? `· 隧道公网可达（${tunnelProbe.ms}ms），上次的连续失败已清零：${tunnelUrl}`
             : `· 隧道已在运行且公网可达（${tunnelProbe.ms}ms）：${tunnelUrl}`);
-          writeProbeState({ fails: 0, lastError: null, lastOkAt: new Date().toISOString() });
+          if (!wantStatusOnly) writeProbeState({ fails: 0, lastError: null, lastOkAt: new Date().toISOString() });
           // 地址可能和我们上次记的不一样（上一次没来得及记录就退出了）。
-          if (tunnelUrl) notifyUrlChange(tunnelUrl).catch(() => { });
+          if (tunnelUrl && !wantStatusOnly) notifyUrlChange(tunnelUrl).catch(() => { });
         } else {
           // ★ 一次探测失败**不等于**隧道死了。
           //
@@ -509,7 +643,9 @@ function writeStatus(status) {
           let probed = tunnelProbe;
           for (let i = 0; i < 2 && !probed.ok; i++) {
             await sleep(1500);
+            checkpoint();
             probed = await probeTunnelUrl(tunnelUrl, 15000);
+            checkpoint();
             if (probed.ok) {
               log(`· 隧道探测第 ${i + 2} 次通了（${probed.ms}ms）—— 刚才那次是抖动，地址不动`);
             }
@@ -517,11 +653,11 @@ function writeStatus(status) {
           tunnelProbe = probed;
 
           if (probed.ok) {
-            writeProbeState({ fails: 0, lastError: null, lastOkAt: new Date().toISOString() });
+            if (!wantStatusOnly) writeProbeState({ fails: 0, lastError: null, lastOkAt: new Date().toISOString() });
           } else {
             const why = probed.error || `HTTP ${probed.status}`;
             const fails = st.fails + 1;
-            writeProbeState({ fails, lastError: why, lastOkAt: st.lastOkAt });
+            if (!wantStatusOnly) writeProbeState({ fails, lastError: why, lastOkAt: st.lastOkAt });
             // 阈值原来写死 2 —— 也就是十分钟内两次抽风就换地址。
             // 实测一晚上因此换了 8 次，使用者的书签一直在失效。
             // 按 5 分钟一轮算，5 次≈25 分钟持续不通才动手；真被回收的域名
@@ -539,14 +675,21 @@ function writeStatus(status) {
       if (tunnelDead) tunnelUrl = null;    // 别把死地址当成可用入口报出去
     }
 
-    if (tunnelUp && !tunnelStale && !tunnelDead) {
+    checkpoint();
+    if (wantStatusOnly) {
+      log('· 只读状态检查，不启动或重建隧道');
+    } else if (tunnelUp && !tunnelStale && !tunnelDead) {
       // 在跑、而且真连得上 —— 什么都不用做（上面已经记完状态、通知完）
     } else if ((tunnelUp && tunnelStale) || tunnelDead) {
       if (tunnelStale) log(`· 隧道指向 ${tunnelTargetPort}，但中间层现在在 ${port} —— 重启隧道让它跟上`);
+      checkpoint();
       tunnel.stopTunnels();
       await sleep(2000);
+      checkpoint();
       const config = cfg.loadConfig();
-      const res = await tunnel.startTunnel(port, config.tunnelProvider || 'auto');
+      checkpoint();
+      const res = await tunnel.startTunnel(port, config.tunnelProvider || 'auto', tunnelAdmission);
+      checkpoint();
       tunnelUrl = res.url;
       tunnelProvider = res.provider;
       if (res.url) {
@@ -557,6 +700,7 @@ function writeStatus(status) {
         // 这里探一次只为**如实记录**，不据此再做什么决定 ——
         // 免得刚建好就判死、陷入重建循环。
         tunnelProbe = await probeTunnelUrl(res.url, 20000);
+        checkpoint();
         log(tunnelProbe.ok
           ? `· 新隧道公网可达（${tunnelProbe.ms}ms）`
           : `· 新隧道暂时还探不通（${tunnelProbe.error || 'HTTP ' + tunnelProbe.status}）—— 边缘生效可能要十几秒，下一轮再看`);
@@ -584,11 +728,15 @@ function writeStatus(status) {
       //   漏了。于是「判定没在跑」时直接新建，而旧进程还活着 —— 电脑上就多出
       //   一个没人追踪的公网域名（实测发生过：两个 trycloudflare 域名同时返回 200）。
       //   补上之后三支一致：任何一次「重建」都从干净状态开始。
+      checkpoint();
       const killed = tunnel.stopTunnels();
       if (killed) log(`· 建新隧道前先停掉 ${killed} 个残留的隧道进程`);
       await sleep(2000);
+      checkpoint();
       const config = cfg.loadConfig();
-      const res = await tunnel.startTunnel(port, config.tunnelProvider || 'auto');
+      checkpoint();
+      const res = await tunnel.startTunnel(port, config.tunnelProvider || 'auto', tunnelAdmission);
+      checkpoint();
       tunnelUrl = res.url;
       tunnelProvider = res.provider;
       if (res.url) {
@@ -648,18 +796,30 @@ function writeStatus(status) {
         })()
       }
     };
-    writeStatus(status);
+    checkpoint();
+    if (!wantStatusOnly) writeStatus(status);
 
     log('──────── 启动器结束 ────────');
   } catch (err) {
-    log(`✗ 异常: ${err.message}`);
-    writeStatus({ updatedAt: new Date().toISOString(), error: err.message });
-    process.exitCode = 1;
+    if (err.code === 'daemon-owned-gateway-unverified') admission?.retain();
+    stopped = err.code === 'daemon-stop-requested';
+    log(stopped ? '· Stop intent observed; no further daemon startup is admitted.' : `✗ 异常: ${err.message}`);
+    const anotherOperation = !admission && err.code === 'daemon-operation-pending';
+    if (!wantStatusOnly && !stopped && !anotherOperation) writeStatus({ updatedAt: new Date().toISOString(), error: err.message });
+    process.exitCode = stopped || anotherOperation ? 0 : 1;
   } finally {
-    // 放锁。放不掉也不致命 —— 下一轮会因为「超过 LOCK_STALE_MS」把它当过期接管，
-    // 所以这里不为此报错、更不改变退出码。
-    if (!wantStatusOnly) {
-      try { fs.unlinkSync(path.join(LOG_DIR, 'daemon.lock')); } catch (err) { }
+    if (admission) {
+      try {
+        await admission.quiesce();
+        try { admission.checkpoint(); } catch (error) { if (error.code === 'daemon-stop-requested') stopped = true; else throw error; }
+        if (stopped) await stopOwnedGatewayChildren(admission, identity);
+        admission.release({ stopRequested: stopped });
+      } catch (_) {
+        log('Daemon operation remains unconfirmed; admission evidence retained and automatic startup blocked.');
+        process.exitCode = 1;
+      }
     }
   }
-})();
+}
+if (require.main === module) runDaemon().catch(() => { process.exitCode = 1; });
+module.exports = { createDaemonOperationLease, runDaemon };

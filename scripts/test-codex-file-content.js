@@ -11,8 +11,11 @@ const vm = require('node:vm');
 const e2ee = require('./e2ee');
 const { extractFunction } = require('./page-source');
 const source = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
-const senderSource = extractFunction(source, 'sendFile');
-assert.ok(senderSource, 'actual sendFile function missing');
+const senderSource = ['e2eeSecretOrNull', 'refuseEncryptionUnavailable', 'sendFile'].map(name => {
+  const implementation = extractFunction(source, name);
+  assert.ok(implementation, `actual ${name} function missing`);
+  return implementation;
+}).join('\n');
 const secret = 'example-codex-file-content-test-key';
 const sendFile = vm.runInNewContext(senderSource + '; sendFile', {
   fs, path, e2ee, log() {}, e2eeBridge: { readSecret: () => secret }

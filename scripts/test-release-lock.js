@@ -643,6 +643,26 @@ console.log('\nSession control remains discoverable without destructive desktop 
       assert.equal(rendered.phoneReleaseBtn.style.display, resumed ? '' : 'none');
       assert.ok(rendered.texts.some(text => /当前无法验证占用者/.test(text)));
     }
+    for (const lang of ['zh', 'en', 'es']) {
+      const translated = key => lang === 'zh' ? key : dict[key][lang];
+      const mode = renderLockPanel(html, dict, { id: TID, name: 'Test session' }, { desktopRelayEnabled: true, resumed: false, lang });
+      assert.equal(mode.sheetOn, true);
+      assert.equal(mode.releaseBtn, null);
+      assert.equal(mode.phoneReleaseBtn.style.display, 'none');
+      assert.ok(!mode.inner.children.some(child => child.id === 'lock-connect-current' || child.className === 'btn p'),
+        'Desktop relay must not offer inactive independent-writer controls');
+      assert.ok(mode.texts.includes(translated('通过电脑代发文字，不接管会话锁。桥的历史同步不能确认电脑任务是否正在执行。')));
+      assert.ok(mode.texts.includes(translated('当前使用电脑代发文字，手机不接管会话锁。电脑端的授权、选择和提问仍需在电脑处理；此模式暂不支持附件。')));
+      assert.ok(!mode.texts.includes(translated('当前无法验证占用者，不能从手机关闭桌面 Codex。请在电脑结束原任务，或复制上下文独立续聊。')));
+      assert.deepEqual(mode.calls, [], 'Opening a relay control panel cannot mutate subscriptions or send text');
+      const subscribed = renderLockPanel(html, dict, { id: TID, name: 'Test session' }, { desktopRelayEnabled: true, resumed: true, lang });
+      assert.equal(subscribed.phoneReleaseBtn.style.display, '', 'An existing phone subscription still needs an explicit handback action');
+      const normal = renderLockPanel(html, dict, { id: TID, name: 'Test session' }, { desktopRelayEnabled: false, resumed: false, lang });
+      assert.ok(normal.inner.children.some(child => child.id === 'lock-connect-current'));
+      assert.ok(normal.inner.children.some(child => child.className === 'btn p'));
+      assert.deepEqual(normal.calls, []);
+    }
+    ok('Desktop relay controls disclose uncertain execution, hide inactive writer actions, and restore normal controls in all languages');
     const noThread = renderLockPanel(html, dict, null);
     assert.equal(noThread.phoneReleaseBtn, null);
     assert.ok(noThread.texts.some(text => /先打开一条会话/.test(text)));
@@ -834,19 +854,23 @@ function renderLockPanel(html, dict, thread, opts) {
   const texts = [];
   const calls = [], asked = [];
   const sandbox = {
-    state: { thread, resumed: !!o.resumed, running: false, view: thread ? 'thread' : 'list' },
+    state: { thread, ready: o.ready !== false, resumed: !!o.resumed, running: false, view: thread ? 'thread' : 'list' },
+    desktopRelayEnabled: !!o.desktopRelayEnabled,
     document: { createElement: conflictFakeEl, getElementById: () => null },
     $: (id) => (id === 'sheetInner' ? inner : sheet),
     tr: (s) => o.lang && o.lang !== 'zh' ? ((dict[s] && dict[s][o.lang]) || s) : s,
     esc: (s) => String(s == null ? '' : s),
     toast: () => { }, closeSheet: () => { }, openThread: () => { }, openSheet: () => { },
-    forkCurrentThread: () => Promise.resolve(false), openPhoneReleasePanel: () => {},
+    forkCurrentThread: () => { calls.push('fork'); return Promise.resolve(false); },
+    connectCurrentThread: () => { calls.push('connect'); return Promise.resolve(false); },
+    openPhoneReleasePanel: () => { calls.push('phone-release'); },
     confirm: (s) => { asked.push(s); throw Error('Native confirm is not permitted'); },
     console
   };
+  sandbox.t = sandbox.tr;
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(extractFunction(html, 'displayThreadTitle') + '\n' + extractFunction(html, 'openLockPanel'), sandbox, { filename: 'openLockPanel' });
+  vm.runInContext(['displayThreadTitle', 'sessionControlHint', 'openLockPanel'].map(name => extractFunction(html, name)).join('\n'), sandbox, { filename: 'openLockPanel' });
   sandbox.openLockPanel();
 
   // 面板上的文字：.info 的 textContent + 按钮上的字
