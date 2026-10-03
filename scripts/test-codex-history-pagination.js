@@ -6,7 +6,7 @@ const { Browser } = require('./browser-check.js');
 const os = require('node:os'), net = require('node:net'), { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const bootstrap = `
-window.fixture = { calls: [], delayOlder: false, failOlder: false, pending: [] };
+window.fixture = { calls: [], delayOlder: false, pending: [] };
 function fixtureItems(id, older) {return Array.from({length:30},(_,n)=>({item:{id:id+'-'+(older?'old':'new')+(29-n),type:'agentMessage',text:id+' '+(older?'Older':'Recent')+' reply '+(29-n)+(fixture.replyVersionText||'')}}));}
 window.WebSocket = class {
  constructor(){this.readyState=1;setTimeout(()=>this.onopen&&this.onopen(),0);}
@@ -19,7 +19,7 @@ window.WebSocket = class {
   if(m.method==='thread/items/list'){result={data:fixtureItems(p.threadId,!!p.cursor),nextCursor:p.cursor?null:p.threadId+'-older'};}
   const respond=(failure)=>this.readyState===1&&this.onmessage&&this.onmessage({data:JSON.stringify(failure?{id:m.id,error:{message:'controlled history connection failure'}}:{id:m.id,result})});
   if(m.method==='thread/items/list'&&!p.cursor&&fixture.failInitialOnce){const message=fixture.failInitialOnce;fixture.failInitialOnce=null;setTimeout(()=>this.onmessage&&this.onmessage({data:JSON.stringify({id:m.id,error:{message}})}),0);return;}
-  if(m.method==='thread/items/list'&&p.cursor){if(fixture.delayOlder){fixture.pending.push(respond);return;}if(fixture.failOlder){fixture.failOlder=false;setTimeout(()=>respond(true),0);return;}}
+  if(m.method==='thread/items/list'&&p.cursor&&fixture.delayOlder){fixture.pending.push(respond);return;}
   setTimeout(()=>respond(false),0);
  }
  close(){this.readyState=3;this.onclose&&this.onclose();}
@@ -58,7 +58,13 @@ async function open(index,id){await wait(`state.view==='list'&&state.listReady&&
  check('older item IDs and chronological order remain indexed',JSON.stringify(await page.eval(`state.order`))===JSON.stringify([...chronological('history-a','old'),...chronological('history-a','new')]));
  check('older snapshots prevent redundant poll rebuilding',await page.eval(`Object.values(state.items).every(r=>r.snapshot===JSON.stringify(r.item))`));
  check('end of history is visibly disabled',await page.eval(`state.noMore&&document.getElementById('older-hint').disabled`));
- await click('#back');await open(1,'history-a');await page.eval(`fixture.failOlder=true`);await click('#older-hint');await wait(`!state.loadingOlder&&document.getElementById('older-hint').textContent.includes('controlled history connection failure')`);
+ // Scrolling the real button into view can start automatic pagination before
+ // the pointer event arrives. Keep this RPC pending until the pointer has
+ // finished, so the same click cannot accidentally retry a 0ms failure.
+ await click('#back');await page.eval(`fixture.delayOlder=true`);await open(1,'history-a');await click('#older-hint');await wait(`fixture.pending.length===1&&state.loadingOlder`);
+ check('scroll and pointer dispatch keep exactly one pending older request',await page.eval(`fixture.pending.length===1&&Object.keys(state.items).length===30&&state.olderCursor==='history-a-older'&&!state.noMore`));
+ await page.eval(`fixture.delayOlder=false;fixture.pending.shift()(true)`);await wait(`!state.loadingOlder&&document.getElementById('older-hint').textContent.includes('controlled history connection failure')`);
+ check('controlled pagination failure consumes its delayed response once',await page.eval(`fixture.pending.length===0&&!fixture.delayOlder`));
  check('failed pagination keeps records and cursor instead of claiming empty history',await page.eval(`Object.keys(state.items).length===30&&state.olderCursor==='history-a-older'&&!state.noMore`));
  check('failed pagination offers an enabled explicit Retry',await page.eval(`!document.getElementById('older-hint').disabled&&document.getElementById('older-hint').textContent.includes(t('重试'))`));
  await click('#older-hint');await wait(`Object.keys(state.items).length===60&&!state.loadingOlder`);check('Retry actually loads the previously failed page',await page.eval(`state.order.length===60`));
@@ -69,13 +75,16 @@ async function open(index,id){await wait(`state.view==='list'&&state.listReady&&
  await page.eval(`fixture.pending.shift()(false)`);await wait(`Object.keys(state.items).length===60&&!state.loadingOlder`);check('new page receives only its own delayed history',await page.eval(`state.order.length===60&&state.order.every(id=>id.startsWith('history-b-'))&&state.noMore`));
  await page.eval('fixture.delayOlder=false');
  for (const errorMessage of ['thread not loaded','thread/items/list is not supported yet','thread not found','request timeout']) {
-  await click('#back');await wait(`state.view==='list'&&state.listReady`);await page.eval('fixture.failInitialOnce='+JSON.stringify(errorMessage));await click('#thlist .item:nth-child(1)');
+  // Initial Retry must be observed separately from an older page that the
+  // scroll-to-button may request. Release that independent page afterwards.
+  await click('#back');await wait(`state.view==='list'&&state.listReady`);await page.eval('fixture.delayOlder=true;fixture.failInitialOnce='+JSON.stringify(errorMessage));await click('#thlist .item:nth-child(1)');
   await wait(`!!document.querySelector('#body .history-load-error button')&&Object.keys(state.items).length===30&&!observerBusy`);
   check('initial '+errorMessage+' stays a visible failure rather than an empty new conversation',await page.eval(`document.querySelector('.history-load-error').textContent.includes(${JSON.stringify(errorMessage)})&&!document.querySelector('#body .empty')`));
   await click('#input');await page.send('Input.insertText',{text:' Preserve draft across history Retry.'});const draft=await page.eval(`document.getElementById('input').value`);
   const version=' Explicit Retry updated '+errorMessage;await page.eval('fixture.replyVersionText='+JSON.stringify(version));await click('#body .history-load-error button');await wait(`!document.querySelector('.history-load-error')&&Object.keys(state.items).length===30&&!observerBusy`);
   check('initial '+errorMessage+' Retry merges changed reply content already indexed by the observer',await page.eval(`document.getElementById('body').textContent.includes(${JSON.stringify(version)})`));
   check('initial '+errorMessage+' Retry preserves recovered real row index and exact draft',await page.eval(`state.order.length===30&&Object.values(state.items).every(r=>r.el.isConnected)&&document.getElementById('input').value===${JSON.stringify(draft)}&&!state.resumed`));
+  await page.eval('fixture.delayOlder=false;while(fixture.pending.length)fixture.pending.shift()(false)');await wait(`!state.loadingOlder&&fixture.pending.length===0`);
  }
  check('viewing and pagination never resume, start, steer, stop or unsubscribe',await page.eval(`!fixture.calls.some(m=>['thread/resume','thread/start','turn/start','turn/steer','turn/interrupt','thread/unsubscribe'].includes(m.method))`));
  check('browser has no uncaught exceptions',page.exceptions.length===0);

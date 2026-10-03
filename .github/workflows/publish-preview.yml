@@ -8,15 +8,115 @@ jobs:
   publish:
     if: contains(github.event.head_commit.message, '[publish-preview]')
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 75
     permissions:
       contents: write
+      actions: read
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24.18.1'
+
+      - name: Require independent push CI for this exact commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          'use strict';
+          const fs = require('node:fs'), path = require('node:path');
+          const { execFileSync } = require('node:child_process');
+          const repository = process.env.GITHUB_REPOSITORY;
+          const sha = process.env.GITHUB_SHA;
+          const branch = process.env.GITHUB_REF_NAME;
+          const publicationId = Number(process.env.GITHUB_RUN_ID);
+          const workflowPath = '.github/workflows/ci.yml';
+          const proofFile = path.join(process.env.RUNNER_TEMP, 'pocket-bridge-independent-ci-proof.json');
+          const recheck = process.argv[2] === 'recheck';
+          const deadline = Date.now() + (recheck ? 60000 : 30 * 60 * 1000);
+          function requireValue(value, reason) { if (!value) throw new Error(reason); }
+          function bounded() { requireValue(Date.now() < deadline, 'Independent CI verification timed out; publication is blocked.'); }
+          function api(endpoint, fields = []) {
+            bounded();
+            let raw;
+            try {
+              raw = execFileSync('gh', ['api', '--method', 'GET', '-H', 'Accept: application/vnd.github+json',
+                '-H', 'X-GitHub-Api-Version: 2022-11-28', endpoint, ...fields.flatMap(value => ['-f', value])],
+                { encoding: 'utf8', timeout: Math.min(30000, Math.max(1, deadline - Date.now())), maxBuffer: 2 * 1024 * 1024 });
+            } catch (_) { throw new Error('Independent CI API query failed; publication is blocked.'); }
+            bounded();
+            try { return JSON.parse(raw); } catch (_) { throw new Error('Independent CI returned invalid metadata; publication is blocked.'); }
+          }
+          function positiveId(value) { return Number.isSafeInteger(value) && value > 0; }
+          function verifyRun(run, expectedPath, expectedWorkflowId) {
+            requireValue(run && positiveId(run.id) && positiveId(run.workflow_id) && positiveId(run.run_attempt) &&
+              run.path === expectedPath && run.head_sha === sha && run.head_branch === branch && run.event === 'push' &&
+              run.repository?.full_name === repository && run.head_repository?.full_name === repository &&
+              (!expectedWorkflowId || run.workflow_id === expectedWorkflowId), 'Workflow run identity differs; publication is blocked.');
+            const created = Date.parse(run.created_at);
+            requireValue(Number.isFinite(created), 'Workflow run creation time is unavailable; publication is blocked.');
+            return created;
+          }
+          async function main() {
+            requireValue(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) && /^[0-9a-f]{40}$/.test(sha) &&
+              branch === 'main' && process.env.GITHUB_EVENT_NAME === 'push' && positiveId(publicationId),
+              'Publication context is not the expected main push; publication is blocked.');
+            const publication = api(`repos/${repository}/actions/runs/${publicationId}`);
+            const publicationCreated = verifyRun(publication, '.github/workflows/publish-preview.yml');
+            const workflow = api(`repos/${repository}/actions/workflows/ci.yml`);
+            requireValue(positiveId(workflow.id) && workflow.path === workflowPath && workflow.name === 'CI' && workflow.state === 'active' &&
+              workflow.id !== publication.workflow_id, 'The independent CI workflow is unavailable; publication is blocked.');
+            let proof;
+            if (recheck) {
+              proof = JSON.parse(fs.readFileSync(proofFile, 'utf8'));
+              requireValue(proof.repository === repository && proof.sha === sha && proof.branch === branch &&
+                proof.publicationId === publicationId && proof.workflowId === workflow.id && proof.workflowPath === workflowPath &&
+                positiveId(proof.runId) && positiveId(proof.runAttempt), 'Independent CI proof differs; publication is blocked.');
+            }
+            while (true) {
+              bounded();
+              const listing = api(`repos/${repository}/actions/workflows/${workflow.id}/runs`,
+                [`head_sha=${sha}`, `branch=${branch}`, 'event=push', 'per_page=100']);
+              requireValue(Array.isArray(listing.workflow_runs) && Number.isSafeInteger(listing.total_count) &&
+                listing.total_count === listing.workflow_runs.length && listing.total_count <= 100,
+                'Independent CI run listing is incomplete; publication is blocked.');
+              const runs = listing.workflow_runs;
+              for (const run of runs) verifyRun(run, workflowPath, workflow.id);
+              runs.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
+              const latest = runs[0];
+              if (latest) {
+                // Both workflows start from the same push. Reject old results even for a reused SHA.
+                requireValue(Date.parse(latest.created_at) >= publicationCreated - 5 * 60 * 1000,
+                  'Independent CI result predates this publication push; publication is blocked.');
+                const fresh = api(`repos/${repository}/actions/runs/${latest.id}`);
+                verifyRun(fresh, workflowPath, workflow.id);
+                requireValue(fresh.id === latest.id && fresh.run_attempt === latest.run_attempt && fresh.created_at === latest.created_at,
+                  'Independent CI run changed during verification; publication is blocked.');
+                if (proof) requireValue(fresh.id === proof.runId && fresh.run_attempt === proof.runAttempt,
+                  'Independent CI was replaced or rerun during packaging; publication is blocked.');
+                if (fresh.status === 'completed') {
+                  requireValue(fresh.conclusion === 'success', 'Independent CI did not succeed; packaging and publication are blocked.');
+                  bounded();
+                  if (!recheck) fs.writeFileSync(proofFile, JSON.stringify({ repository, sha, branch, publicationId,
+                    workflowId: workflow.id, workflowPath, runId: fresh.id, runAttempt: fresh.run_attempt }), { flag: 'wx' });
+                  console.log(`Independent CI run ${fresh.id}, attempt ${fresh.run_attempt}, succeeded for ${sha}.`);
+                  return;
+                }
+                requireValue(!recheck && fresh.conclusion === null &&
+                  ['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(fresh.status),
+                  'Independent CI is not a confirmed success; publication is blocked.');
+              } else requireValue(!recheck, 'Independent CI result disappeared; publication is blocked.');
+              bounded();
+              await new Promise(resolve => setTimeout(resolve, Math.min(15000, Math.max(1, deadline - Date.now()))));
+            }
+          }
+          main().catch(error => { console.error(error.message); process.exitCode = 1; });
+          '@ | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pocket-bridge-independent-ci-gate.js') -Encoding utf8
+          node (Join-Path $env:RUNNER_TEMP 'pocket-bridge-independent-ci-gate.js')
+          if ($LASTEXITCODE -ne 0) { throw 'Independent push CI did not pass; packaging and publication are blocked' }
 
       - name: Run isolated CI before packaging
         shell: pwsh
@@ -44,6 +144,15 @@ jobs:
             "$hash  $(Split-Path -Leaf $_)"
           }
           [IO.File]::WriteAllLines('dist/SHA256SUMS.txt', $lines, [Text.UTF8Encoding]::new($false))
+
+      - name: Reconfirm the same independent CI run before publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node (Join-Path $env:RUNNER_TEMP 'pocket-bridge-independent-ci-gate.js') recheck
+          if ($LASTEXITCODE -ne 0) { throw 'Independent CI changed or is no longer successful; publication is blocked' }
 
       - name: Create public preview release
         shell: pwsh

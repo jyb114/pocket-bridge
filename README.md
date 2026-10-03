@@ -15,7 +15,7 @@ You do not need to register for a Pocket Bridge account or install a Pocket Brid
 
 ## Current status
 
-This is **1.0.0-preview.7**, an experimental Windows preview with the tested scope and limits listed below. Use the matching preview.7 installer once its release assets are available; earlier installers do not include these changes.
+This is **1.0.0-preview.8**, an experimental Windows preview with the tested scope and limits listed below. Use the matching preview.8 installer once its release assets are available. This follow-up stabilizes a pagination failure test and requires successful independent CI for the same commit before packaging; the phone runtime improvements from preview.7 are retained.
 
 - Windows x64 is the only packaged platform. Release assets are published only after isolated CI and compiled installer smoke; source/payload comparison and known-value privacy checks are separate gates. The earlier preview.6 installer passed a marked install, reinstall and uninstall with bundled Node execution and private-data retention checks. That earlier smoke did not start a gateway, discover user backends or operate the tray; those live startup paths remain outside package acceptance.
 - The Windows installer is not code-signed. Windows SmartScreen may show an unknown-publisher warning. Download only from this repository's Releases page and compare its published SHA-256 checksum.

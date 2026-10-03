@@ -1,8 +1,10 @@
-# Pocket Bridge 1.0.0-preview.7 — Windows preview
+# Pocket Bridge 1.0.0-preview.8 — Windows preview
 
 Pocket Bridge is a free, independent, open-source gateway for using DeepSeek Harness or OpenAI Codex on your own Windows computer from a phone browser. This preview adds experimental text sending to Your dot in the official desktop app. Desktop Codex relay can send through the conversation's existing writer without closing Codex or taking its lock. Keep the computer on, signed in and free from simultaneous desktop use during native phone actions.
 
-Use matching preview.7 source and installer assets once available. This is a Windows x64 preview, not complete compatibility with every app version, desktop state or phone network.
+Use matching preview.8 source and installer assets once available. This is a Windows x64 preview, not complete compatibility with every app version, desktop state or phone network.
+
+Preview.8 stabilizes the isolated pagination fixture's pending-load/Retry timing and adds an independent release gate. Packaging waits for the latest ci.yml push run to succeed for the exact publication commit, then verifies the same successful run attempt again before publication. Its own isolated CI and compiled installer smoke remain required. The changes preserve preview.7 product behavior, compatibility scope and privacy limits described below; fresh preview.8 CI, package and privacy acceptance must be completed separately.
 
 ## What changed
 

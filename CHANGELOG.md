@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-preview.8 — Windows preview
+
+- Stabilized the isolated pagination fixture by waiting for the pending scroll-triggered load before operating its Retry control. Product behavior and the previously documented compatibility and privacy limits remain unchanged.
+- Block packaging until the independent CI workflow's latest push run succeeds for the publication's exact commit. Recheck the same workflow/run attempt before creating the release; failed, missing, stale, pending or changed evidence blocks publication. The packaging job still runs its own isolated CI and compiled installer smoke. Fresh preview.8 CI, package and privacy acceptance are separate release gates.
+
 ## 1.0.0-preview.7 — Windows preview
 
 - Added experimental text sending to the real Your dot conversation through the official desktop composer. One actual local browser Connect, Send and Refresh flow passed 14 checks, confirming the exact fresh user row in the correct Dot conversation and a unique assistant reply. This is scoped to product 26.928.31416, Windows package 26.928.3736.0 and Codex CLI 0.159.2. That flow used real content encryption and the production private-storage provider with isolated device proof; the later public Send/Connect/Refresh case exercised production authentication separately. Physical-phone and complete-workflow acceptance remain pending.
