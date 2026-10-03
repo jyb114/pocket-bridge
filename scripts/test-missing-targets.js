@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { extractFunction, sliceBalanced } = require('./page-source.js');
 const src = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
@@ -200,5 +201,38 @@ function browserRender(html, list) {
     assert.match(src, /if \(u\.pathname === '\/codex' \|\| u\.pathname === '\/codex\/'\) \{\s*serveCodexPage\(req, res\)/);
     assert.ok(src.includes('res.end(injectProofAssets(launcherPage(req, lang)));'));
   });
+  {
+    let publicSource = Buffer.from('Public static asset content. '.repeat(40));
+    const assetBox = { Buffer, path, zlib, crypto, PWA_DIR:'/isolated-public', fs:{readFileSync:()=>Buffer.from(publicSource)} };
+    vm.createContext(assetBox); vm.runInContext(extractFunction(src, 'servePwa'), assetBox);
+    const route = {file:'public.js',type:'text/javascript',noCache:true,swAllowed:true};
+    const get = (encoding='',validator='',method='GET') => {
+      const res = response(); assetBox.servePwa({method,headers:{'accept-encoding':encoding,'if-none-match':validator}},res,route); return res;
+    };
+    const identity = get(), compressed = get('gzip');
+    check('public source validators distinguish identity and compressed bytes and retain cache policy',()=>{
+      assert.notEqual(identity.headers.etag,compressed.headers.etag);
+      assert.equal(identity.headers.vary,'Accept-Encoding');
+      assert.equal(compressed.headers.vary,'Accept-Encoding');
+      assert.equal(identity.headers['cache-control'],'no-cache');
+      assert.equal(zlib.gunzipSync(compressed.body).toString(),publicSource.toString());
+    });
+    const unchanged = get('', '"another-validator", W/' + identity.headers.etag);
+    check('matching weak/list validators return a bodyless 304 with encoding variance and SW scope',()=>{
+      assert.equal(unchanged.status,304); assert.equal(unchanged.body,'');
+      assert.equal(unchanged.headers.etag,identity.headers.etag); assert.equal(unchanged.headers.vary,'Accept-Encoding');
+      assert.equal(unchanged.headers['service-worker-allowed'],'/'); assert.equal(unchanged.headers['content-length'],undefined);
+    });
+    check('a validator for another representation does not suppress compressed bytes',()=>assert.equal(get('gzip',identity.headers.etag).status,200));
+    publicSource = Buffer.from('Changed public source. '.repeat(45));
+    check('editing the source immediately invalidates the old validator',()=>{
+      const updated=get('',identity.headers.etag); assert.equal(updated.status,200); assert.notEqual(updated.headers.etag,identity.headers.etag);
+      assert.equal(updated.body.toString(),publicSource.toString());
+    });
+    check('HEAD and matching wildcard return no body, while non-GET validation cannot hide an operation',()=>{
+      const head=get('','','HEAD'); assert.equal(head.status,200); assert.equal(head.body,''); assert.equal(head.headers['content-length'],publicSource.length);
+      assert.equal(get('','*').status,304); assert.equal(get('','*','POST').status,200);
+    });
+  }
   console.log('\nMissing-target regressions: ' + passed + ' passed. No live apps were touched.');
 })().catch((err) => { console.error(err); process.exitCode = 1; });

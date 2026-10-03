@@ -18,7 +18,7 @@ function element(){
   }});return e;
 }
 function harness(){
-  const els={sheetInner:element(),sheet:element(),title:element(),lockhint:element(),input:{value:'Unsent phone draft'},main:{scrollTop:400},jump:element()};
+  const els={sheetInner:element(),sheet:element(),title:element(),lockhint:element(),input:{value:'Unsent phone draft'},main:{scrollTop:400},jump:element(),footer:{offsetHeight:120}};
   const state={thread:{id:'t',name:'',preview:'new',model:'gpt-6-astra'},view:'thread',ready:true,resumed:true,
     awaitingFirstTurn:false,running:false,releaseTimer:{},handedBackThreads:{},items:{},order:[],pick:{},approvals:{},pending:{},
     collaborationModes:[{mode:'plan',reasoning_effort:'medium'},{mode:'default',reasoning_effort:null}]};
@@ -247,6 +247,7 @@ function harness(){
    check('a changed connection is never closed by an old handback request',!changed.result.ok&&changed.closed.length===0);
    const scroll=harness();scroll.state.anchorStop=()=>{scroll.state.anchorCancelled=true;};scroll.box.resetConversationScroll();
    check('switching to an empty conversation clears the stale jump-to-latest and old scroll anchor',scroll.box.stick&&scroll.els.main.scrollTop===0&&scroll.els.jump.style.display==='none'&&scroll.state.anchorCancelled);
+   check('jump-to-latest stays above the footer within the visible app viewport',scroll.els.jump.style.bottom==='128px');
  }
  const h=harness();h.state.resumed=false;h.state.handedBackThreads.t=true;
  const rpc=[];h.box.call=(method,params)=>{rpc.push({method,params});return Promise.resolve({thread:{id:'t',status:{type:'idle'}},model:'gpt-6-astra'});};

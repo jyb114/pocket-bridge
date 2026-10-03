@@ -29,8 +29,9 @@ const LOG_FILE = path.join(LOG_DIR, 'tunnel.log');
  * 探测走完整一圈：域名 → Cloudflare → cloudflared → 本机网关。
  * 打的是 /__probe（免认证、只回 204、不返回任何内容）。
  *
- * 判定：4xx 也算「通」—— 请求确实走到网关并被处理了。只有 5xx
- * （Cloudflare 的 502/530 表示它找不到这条隧道）和连不上才算不通。
+ * The gateway's unauthenticated /__probe returns exactly 204. A foreign
+ * service, login page, access denial or relay error must not be called healthy
+ * merely because an HTTP connection reached something on the configured port.
  */
 function probeUrl(url, timeoutMs = 12000) {
   return new Promise((resolve) => {
@@ -60,13 +61,16 @@ function probeUrl(url, timeoutMs = 12000) {
     }, timeoutMs);
     try {
       req = mod.get(target, { timeout: timeoutMs }, (res) => {
-        res.resume();
+        const ok = res.statusCode === 204;
         done({
-          ok: res.statusCode > 0 && res.statusCode < 500,
+          ok,
           status: res.statusCode,
           ms: Date.now() - started,
-          error: null
+          error: ok ? null : `Unexpected gateway probe response (HTTP ${res.statusCode})`
         });
+        // No response body is needed. Do not keep downloading an unrelated
+        // page or an endless error body after the bounded probe has settled.
+        res.destroy();
       });
     } catch (err) {
       return done({ ok: false, status: 0, ms: 0, error: err.message });

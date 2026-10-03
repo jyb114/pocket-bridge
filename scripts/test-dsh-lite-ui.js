@@ -73,7 +73,7 @@ window.DshLiteAdapter = {
 // C9 语音输入的替身。**必须在页面脚本跑之前就挂上**（dsh-lite-ui.js 会检查它）。
 // 曾经这份替身和它的测试被一次错误的双向同步覆盖掉过 —— 所以这里写清楚：
 // 它测的是"按钮到底关不关得掉"，那正是使用者报过的 bug。
-window.__voice = { started: 0, stopped: 0, handlers: null, fail: false, unavailable: false, explained: 0 };
+window.__voice = { started: 0, stopped: 0, aborted: 0, stalled: false, handlers: null, fail: false, unavailable: false, explained: 0 };
 window.DshVoice = {
   available() { return !window.__voice.unavailable; },
   explain() { window.__voice.explained++; },
@@ -87,7 +87,8 @@ window.DshVoice = {
       options.onEnd('');
       return null;
     }
-    return { stop() { window.__voice.stopped++; if (options.onEnd) options.onEnd(''); } };
+    return { stop() { window.__voice.stopped++; if (!window.__voice.stalled && options.onEnd) options.onEnd(''); },
+      abort() { window.__voice.aborted++; if (!window.__voice.stalled && options.onEnd) options.onEnd(''); } };
   },
   setInputValue(input, text) {
     input.value = text;
@@ -1519,6 +1520,116 @@ async function run() {
       x[0] === 'selectModel' || x[0] === 'selectMode').length, 0,
     '缺少选择方法时不能尝试调用');
     partial.close();
+    // Reproduce the live-install changes with actual pointer/keyboard input,
+    // while retaining fixture-only model traffic and voice recognition.
+    const merged = await browser.newPage();
+    await merged.send('Emulation.setDeviceMetricsOverride', { width:320,height:844,deviceScaleFactor:1,mobile:true });
+    await merged.goto('http://127.0.0.1:' + server.address().port + '/dsh-lite.html',300);
+    await waitForSessionList(merged);
+    async function pointer(selector) {
+      if (/^#(?:project|session)-list/.test(selector)) await openSidebar();
+      let point;
+      for (let attempt=0;attempt<12;attempt++) {
+        try { point = await merged.eval(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!r.width||!r.height||x<0||x>innerWidth||y<0||y>innerHeight||!node.contains(document.elementFromPoint(x,y)))throw Error('Fixture control is not visible: '+${JSON.stringify(selector)});return{x,y};})()`); break; }
+        catch(error) { if(attempt===11)throw error; await new Promise(resolve=>setTimeout(resolve,50)); }
+      }
+      await merged.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+      await merged.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+    }
+    async function inputText(text) {
+      await pointer('#message-input');
+      await merged.send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+      await merged.send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+      await merged.send('Input.insertText',{text});
+    }
+    async function openSidebar() {
+      if (await merged.eval(`document.body.classList.contains('sidebar-hidden')`)) { await pointer('#projects-toggle'); await new Promise(resolve=>setTimeout(resolve,250)); }
+    }
+    async function appendInput(text) {
+      await pointer('#message-input');
+      await merged.send('Input.dispatchKeyEvent',{type:'keyDown',key:'End',code:'End',windowsVirtualKeyCode:35,modifiers:2});
+      await merged.send('Input.dispatchKeyEvent',{type:'keyUp',key:'End',code:'End',windowsVirtualKeyCode:35,modifiers:2});
+      await merged.send('Input.insertText',{text});
+    }
+    await merged.eval(`window.DshI18n.setLang('en')`);
+    assert.equal(await merged.eval(`document.getElementById('projects-toggle').getAttribute('aria-label')`),'Projects and chats');
+    assert.equal(await merged.eval(`document.getElementById('new-project').textContent`),'+ Add project');
+    assert.equal(await merged.eval(`document.querySelector('.voice-lang-select option').textContent`),'Same as interface');
+    await merged.eval(`window.__savedProjects=window.DshLiteAdapter.listProjects;window.DshLiteAdapter.listProjects=async()=>{throw {userMessage:'Fixture projects unavailable.'}}`);
+    await openSidebar();
+    await pointer('#reconnect'); await new Promise(resolve=>setTimeout(resolve,50));
+    assert.match(await merged.eval(`document.getElementById('project-list').textContent`),/Fixture projects unavailable/);
+    assert.equal(await merged.eval(`window.__dshLiteState().connection`),'connected','list failure must not falsely disconnect a working transport');
+    await merged.eval(`window.DshLiteAdapter.listProjects=window.__savedProjects`);
+    await pointer('#project-list button'); await waitForSessionList(merged);
+    await merged.eval(`window.__savedSessions=window.DshLiteAdapter.listSessions;window.DshLiteAdapter.listSessions=async()=>{throw {userMessage:'Fixture chats unavailable.'}}`);
+    await pointer('#project-list button'); await new Promise(resolve=>setTimeout(resolve,50));
+    assert.match(await merged.eval(`document.getElementById('session-list').textContent`),/Fixture chats unavailable/);
+    await merged.eval(`window.DshLiteAdapter.listSessions=async()=>[{id:'s1',title:'First fixture chat'},{id:'s2',title:'Second fixture chat'}]`);
+    await pointer('#session-list button'); await waitForSessionList(merged);
+    await pointer('#session-list button'); await new Promise(resolve=>setTimeout(resolve,40));
+    await merged.eval(`window.DshLiteAdapter.sendMessage=value=>new Promise(resolve=>{window.__sentValue=value;window.__releaseSend=resolve})`);
+    await inputText('Original command'); await pointer('#send-button');
+    assert.equal(await merged.eval(`document.getElementById('message-input').disabled`),false,'sending must not interrupt further typing');
+    await appendInput(' plus newer draft');
+    await merged.eval(`window.__fake.onEvent({type:'status',state:'disconnected'})`);
+    assert.equal(await merged.eval(`document.getElementById('message-input').disabled`),false,'disconnect must not interrupt further typing');
+    assert.equal(await merged.eval(`document.getElementById('send-button').disabled`),true);
+    await merged.eval(`window.__fake.onEvent({type:'status',state:'connected'});window.__releaseSend()`);
+    await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(await merged.eval(`document.getElementById('message-input').value`),'Original command plus newer draft','accepted Send must not clear newer input');
+    await pointer('#send-button'); await appendInput(' retained after switching');
+    await openSidebar();
+    await pointer('#session-list button:nth-child(2)'); await new Promise(resolve=>setTimeout(resolve,40));
+    await inputText('Different chat draft'); await merged.eval(`window.__releaseSend()`); await new Promise(resolve=>setTimeout(resolve,40));
+    assert.equal(await merged.eval(`document.getElementById('message-input').value`),'Different chat draft');
+    await openSidebar();
+    await pointer('#session-list button'); await new Promise(resolve=>setTimeout(resolve,40));
+    assert.equal(await merged.eval(`document.getElementById('message-input').value`),'Original command plus newer draft retained after switching','the original chat must keep text written after its submitted snapshot');
+    await inputText('Exactly submitted text'); await pointer('#send-button'); await merged.eval(`window.__releaseSend()`); await new Promise(resolve=>setTimeout(resolve,40));
+    assert.equal(await merged.eval(`document.getElementById('message-input').value`),'','only an unchanged submitted draft may be cleared');
+    await merged.eval(`(()=>{window.__voice.stalled=true;window.__clockNow=0;window.__voiceTimers=new Map();let next=-1;
+      const realSet=window.setTimeout,realClear=window.clearTimeout;
+      window.setTimeout=(fn,delay,...args)=>{if(delay===30000){const id=next--;window.__voiceTimers.set(id,{fn,at:window.__clockNow+delay});return id}return realSet(fn,delay,...args)};
+      window.clearTimeout=id=>{if(window.__voiceTimers.has(id))window.__voiceTimers.delete(id);else realClear(id)};
+      window.__advanceVoice=ms=>{window.__clockNow+=ms;for(const [id,timer] of [...window.__voiceTimers])if(timer.at<=window.__clockNow){window.__voiceTimers.delete(id);timer.fn()}};})()`);
+    await pointer('#voice-button');
+    await merged.eval(`window.__advanceVoice(20000);window.__voice.handlers.onPartial('Long speech remains active');window.__advanceVoice(20000)`);
+    assert.equal(await merged.eval(`document.getElementById('voice-button').classList.contains('is-listening')`),true,'40 seconds of active speech must not trip a fixed 30-second deadline');
+    await merged.eval(`window.__advanceVoice(30001)`);
+    assert.equal(await merged.eval(`document.getElementById('voice-button').classList.contains('is-listening')`),false,'30 seconds without new speech must stop a stuck recognizer');
+    assert.ok(await merged.eval(`window.__voice.stopped>0&&window.__voice.aborted>0`));
+    await pointer('#voice-button'); await merged.eval(`window.__oldVoiceHandlers=window.__voice.handlers`);
+    await pointer('#voice-button'); await pointer('#voice-button');
+    await merged.eval(`window.__voice.handlers.onPartial('Fresh recognition');window.__currentVoiceDraft=document.getElementById('message-input').value;
+      window.__oldVoiceHandlers.onPartial('Stale recognition');window.__oldVoiceHandlers.onEnd('')`);
+    assert.equal(await merged.eval(`document.getElementById('message-input').value===window.__currentVoiceDraft&&document.getElementById('voice-button').classList.contains('is-listening')`),true,'late callbacks from a stopped recognizer cannot change a newer draft or reset a new recording');
+    await pointer('#voice-button');
+    await merged.eval(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copiedTurn=text}}});
+      window.__fake.onEvent({type:'records',sessionId:'s1',records:[{id:'u-merge',role:'user',text:'Question'},
+      {id:'a-merge-one',role:'assistant',text:'First reply part.'},{id:'t-merge',role:'thought',text:'Private thought.'},
+      {id:'a-merge-two',role:'assistant',text:'Second reply part.'},{id:'u-next',role:'user',text:'Next question'},
+      {id:'a-next',role:'assistant',text:'A different turn.'}],hasMore:false})`);
+    await pointer('#record-list .record[data-role="assistant"] .record-copy');
+    assert.equal(await merged.eval(`window.__copiedTurn`),'First reply part.\n\nSecond reply part.','whole-reply copy must exclude thoughts and later turns');
+    assert.equal(await merged.eval(`document.querySelector('.record[data-role="user"] .record-role').textContent`),'Me','generated self-message labels must follow the chosen interface language');
+    await merged.send('Browser.setDownloadBehavior',{behavior:'deny'});
+    await merged.eval(`window.DshLiteAdapter.screenShot=async()=>({mime:'image/png',image:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0WQAAAAASUVORK5CYII='})`);
+    await pointer('#rail-screen'); await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(await merged.eval(`document.querySelector('.screen-save').disabled`),false,'screen saving requires an actual current fixture image');
+    await pointer('.screen-save');
+    assert.equal(await merged.eval(`document.querySelector('.screen-save').textContent`),'Download started','a browser click cannot confirm that a file was saved');
+    await merged.eval(`window.DshLiteAdapter.screenShot=async()=>{throw Error('Fixture capture failed')}`);
+    await pointer('.screen-bar .screen-action:not(.screen-save)'); await new Promise(resolve=>setTimeout(resolve,1850));
+    assert.equal(await merged.eval(`document.querySelector('.screen-save').disabled`),true,'the save feedback timer must not reenable a stale image after failed refresh');
+    await pointer('.screen-bar .screen-action:last-child');
+    assert.equal(await merged.eval(`document.documentElement.scrollWidth<=innerWidth`),true);
+    assert.equal(merged.exceptions.length,0);
+    assert.equal(await merged.eval(`localStorage.getItem('dsh-lite:drafts')`),null,'the safe merge must not introduce unscoped persistent conversation text');
+    const mergedShot = await merged.send('Page.captureScreenshot',{format:'png'});
+    fs.writeFileSync(path.join(root,'logs','dsh-live-merge-320.png'),Buffer.from(mergedShot.data,'base64'));
+    merged.close();
+    console.log('DSH live-change merge browser checks passed (pointer/keyboard retries / localization / send drafts / voice lifetime)');
     console.log('DSH mobile shell legacy capability checks passed (model / mode / goal / plan / compact)');
     console.log('DSH mobile shell usability checks passed (selection / lock / focus / files / touch)');
     console.log('DSH mobile shell plan-mode checks passed (enter / exit / pending / unsupported)');

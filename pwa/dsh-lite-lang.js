@@ -24,6 +24,7 @@
     // ── 连接状态 / 侧栏 ─────────────────────────────────────────────────────
     '正在连接': { en: 'Connecting', es: 'Conectando' },
     '已连接': { en: 'Connected', es: 'Conectado' },
+    '我': { en: 'Me', es: 'Yo' },
     '连接断开': { en: 'Disconnected', es: 'Sin conexión' },
     '模型请求失败': { en: 'Model request failed', es: 'Falló la solicitud al modelo' },
     'DSH 的模型服务拒绝了凭据（401）。请在电脑端更新 API key 后重试。': { en: 'The model service rejected DSH\'s credentials (401). Update the API key on your computer, then try again.', es: 'El servicio del modelo rechazó las credenciales de DSH (401). Actualiza la clave API en el ordenador y vuelve a intentarlo.' },
@@ -188,6 +189,163 @@
     '允许': { en: 'Allow', es: 'Permitir' },
     '拒绝': { en: 'Reject', es: 'Rechazar' },
 
+    // ── 静态界面里补挂 data-i18n 时缺的词条 ─────────────────────────────────
+    // ★ 这一批的来由：dsh-lite.html 里**大量静态元素压根没挂 data-i18n**，
+    //   而 i18n.js 只处理带这个属性的元素 —— 所以切了语言它们还是中文。
+    //   使用者的原话：「英语，西班牙语的时候不是所有的都改变」。
+    '当前项目': { en: 'Current project', es: 'Proyecto actual' },
+    '详情': { en: 'Details', es: 'Detalles' },
+    '收起': { en: 'Collapse', es: 'Contraer' },
+    // 补齐静态界面那 71 处 data-i18n 之后，扫出来缺的就是下面这些。
+    // 属性值（中文原文）就是这里的 key —— 两边必须**一字不差**，包括全角符号。
+    'DSH · 手机版': { en: 'DSH · Mobile', es: 'DSH · Móvil' },
+    'DSH 导航': { en: 'DSH navigation', es: 'Navegación de DSH' },
+    '项目与对话': { en: 'Projects and chats', es: 'Proyectos y conversaciones' },
+    '项目和对话': { en: 'Projects and chats', es: 'Proyectos y conversaciones' },
+    '新建对话': { en: 'New chat', es: 'Nueva conversación' },
+    '查看轨迹': { en: 'View activity', es: 'Ver actividad' },
+    '看电脑屏幕': { en: 'View computer screen', es: 'Ver la pantalla del ordenador' },
+    '添加项目': { en: 'Add project', es: 'Añadir proyecto' },
+    '搜索项目和对话': { en: 'Search projects and chats', es: 'Buscar proyectos y conversaciones' },
+    '搜索当前项目和对话': {
+      en: 'Search the current project and chat',
+      es: 'Buscar el proyecto y la conversación actuales'
+    },
+    '设置': { en: 'Settings', es: 'Ajustes' },
+    '关闭项目列表': { en: 'Close project list', es: 'Cerrar la lista de proyectos' },
+    '探索未尽之境': { en: 'Uncharted Realms', es: 'Parajes inexplorados' },
+    '项目列表': { en: 'Project list', es: 'Lista de proyectos' },
+    '对话列表': { en: 'Chat list', es: 'Lista de conversaciones' },
+    '对话视图': { en: 'Chat views', es: 'Vistas de la conversación' },
+    '待处理请求': { en: 'Pending requests', es: 'Solicitudes pendientes' },
+    '排队中的消息': { en: 'Queued messages', es: 'Mensajes en cola' },
+    '发送给 DSH 的消息': { en: 'Message to DSH', es: 'Mensaje para DSH' },
+    '模型、工具配置和目标': { en: 'Model, tools and goal', es: 'Modelo, herramientas y meta' },
+    '发送': { en: 'Send', es: 'Enviar' },
+    '这里选择的是电脑目录，手机文件不会成为项目目录。': {
+      en: 'This picks a folder on the computer; files on your phone do not become the project folder.',
+      es: 'Aquí eliges una carpeta del ordenador; los archivos del teléfono no se convierten en la carpeta del proyecto.'
+    },
+    // 注意：JS 里要写两个反斜杠，HTML 属性里是一个 —— t() 拿到的是一个
+    '例如 D:\\项目\\我的应用': { en: 'e.g. D:\\Projects\\MyApp', es: 'p. ej. D:\\Proyectos\\MiApp' },
+    '只显示当前对话所属项目。点文件读取后，再点“保存”下载到手机。': {
+      en: 'Only the current chat’s project is shown. Tap a file to read it, then tap Save to download it to your phone.',
+      es: 'Solo se muestra el proyecto de la conversación actual. Toca un archivo para leerlo y luego Guardar para descargarlo al teléfono.'
+    },
+    '当前连接尚不能在手机端处理 DSH 的授权、选择或询问。遇到这类步骤，请在电脑端完成；对话内容仍可在此查看。': {
+      en: 'This connection cannot yet handle DSH approvals, choices or questions from the phone. Finish those steps on the computer; the conversation is still readable here.',
+      es: 'Esta conexión todavía no puede gestionar aprobaciones, opciones ni preguntas de DSH desde el teléfono. Complétalas en el ordenador; la conversación sigue siendo visible aquí.'
+    },
+    // 渲染函数里原本写死中文的那几处（renderControls / renderFiles / 余额面板）
+    '正在创建…': { en: 'Creating…', es: 'Creando…' },
+    '正在创建对话': { en: 'Creating a chat', es: 'Creando una conversación' },
+    '正在添加…': { en: 'Adding…', es: 'Añadiendo…' },
+    '正在停止…': { en: 'Stopping…', es: 'Deteniendo…' },
+    '正在加载…': { en: 'Loading…', es: 'Cargando…' },
+    '添加项目失败。请检查电脑上的文件夹路径。': {
+      en: 'Could not add the project. Check the folder path on the computer.',
+      es: 'No se pudo añadir el proyecto. Comprueba la ruta de la carpeta en el ordenador.'
+    },
+    '读取电脑文件夹失败，请重试。': {
+      en: 'Could not read the folders on the computer — try again.',
+      es: 'No se pudieron leer las carpetas del ordenador; inténtalo de nuevo.'
+    },
+    '读取电脑文件失败，请重试。': {
+      en: 'Could not read files on the computer — try again.',
+      es: 'No se pudieron leer los archivos del ordenador; inténtalo de nuevo.'
+    },
+    '读取文件失败，请重试。': {
+      en: 'Could not read the file — try again.',
+      es: 'No se pudo leer el archivo; inténtalo de nuevo.'
+    },
+    '↓ 重试': { en: '↓ Retry', es: '↓ Reintentar' },
+    '没有拿到数据': { en: 'No data came back', es: 'No llegaron datos' },
+    '读不到余额。这个功能走控制台端点，需要已登录的会话。': {
+      en: 'Could not read the balance. This uses the console endpoint and needs a signed-in session.',
+      es: 'No se pudo leer el saldo. Usa el endpoint de la consola y necesita una sesión iniciada.'
+    },
+    // 交互卡片（授权 / 选择 / 提问）和文件列表的兜底文案
+    '需要授权': { en: 'Approval needed', es: 'Se necesita autorización' },
+    '请选择': { en: 'Choose one', es: 'Elige una opción' },
+    '需要回答': { en: 'Answer needed', es: 'Se necesita respuesta' },
+    'DSH 请求授权：': { en: 'DSH requests approval: ', es: 'DSH solicita autorización: ' },
+    'DSH 正在等待你的回复。': {
+      en: 'DSH is waiting for your reply.',
+      es: 'DSH está esperando tu respuesta.'
+    },
+    '当前连接无法从手机回复，请在电脑端处理。': {
+      en: 'This connection cannot reply from the phone — please handle it on the computer.',
+      es: 'Esta conexión no puede responder desde el teléfono; hazlo en el ordenador.'
+    },
+    '正在读取文件…': { en: 'Reading files…', es: 'Leyendo archivos…' },
+    // C11 的另一半：列表**读失败**时的说明（原来会伪装成"你还没有项目"）
+    '读不到项目列表，请重试。': {
+      en: 'Could not load the project list — try again.',
+      es: 'No se pudo cargar la lista de proyectos; inténtalo de nuevo.'
+    },
+    '电脑报回来的项目列表格式不对。': {
+      en: 'The computer returned an unexpected project list.',
+      es: 'El ordenador devolvió una lista de proyectos inesperada.'
+    },
+    '读不到对话列表，请重试。': {
+      en: 'Could not load the chat list — try again.',
+      es: 'No se pudo cargar la lista de conversaciones; inténtalo de nuevo.'
+    },
+    // D1：地址变化 / 任务完成时通知我
+    '地址变化时通知我': { en: 'Notify me when the address changes', es: 'Avisarme cuando cambie la dirección' },
+    '地址变化时通知我（先「添加到主屏幕」）': {
+      en: 'Notify me when the address changes (first: Add to Home Screen)',
+      es: 'Avisarme cuando cambie la dirección (primero: Añadir a inicio)'
+    },
+    '通知已开启': { en: 'Notifications are on', es: 'Las notificaciones están activadas' },
+    '正在开启…': { en: 'Turning on…', es: 'Activando…' },
+    '通知被拒绝了 —— 去手机「设置」里允许这个网页的通知。': {
+      en: 'Notifications were blocked — allow them for this site in your phone settings.',
+      es: 'Se bloquearon las notificaciones; permítelas para este sitio en los ajustes del teléfono.'
+    },
+    '电脑那边还没准备好推送密钥（': {
+      en: 'The computer has no push key yet (',
+      es: 'El ordenador todavía no tiene clave de notificaciones ('
+    },
+    '订阅没被接受（': { en: 'The subscription was not accepted (', es: 'No se aceptó la suscripción (' },
+    '开启通知失败。': { en: 'Could not turn on notifications.', es: 'No se pudieron activar las notificaciones.' },
+    // 复制：助手那条复制的是**整轮**（一轮回复在界面上是好几条 record）
+    '复制整轮': { en: 'Copy whole reply', es: 'Copiar toda la respuesta' },
+    // 看电脑屏幕（这几条原来都写死成中文，切语言不跟着变）
+    '电脑屏幕': { en: 'Computer screen', es: 'Pantalla del ordenador' },
+    '再看一次': { en: 'Take another', es: 'Otra captura' },
+    '正在抓屏…': { en: 'Capturing…', es: 'Capturando…' },
+    '抓屏失败。': { en: 'Screen capture failed.', es: 'La captura de pantalla falló.' },
+    '这个版本还不支持看电脑屏幕，请更新桥。': {
+      en: 'This version cannot capture the screen yet — update the bridge.',
+      es: 'Esta versión aún no puede capturar la pantalla; actualiza el puente.'
+    },
+    '保存到手机': { en: 'Save to phone', es: 'Guardar en el teléfono' },
+    '已保存': { en: 'Saved', es: 'Guardado' },
+    '已开始下载': { en: 'Download started', es: 'Descarga iniciada' },
+    '存不了，长按图片试试': {
+      en: 'Could not save — try long-pressing the image',
+      es: 'No se pudo guardar; mantén pulsada la imagen'
+    },
+    '重试读取': { en: 'Retry', es: 'Reintentar' },
+    '文件列表未加载。请点下方“重试读取”。': {
+      en: 'The file list did not load. Tap Retry below.',
+      es: 'La lista de archivos no se cargó. Toca Reintentar abajo.'
+    },
+    '此文件夹没有文件。': { en: 'This folder has no files.', es: 'Esta carpeta no tiene archivos.' },
+
+    // ── 记录里的图片预览（C24）──────────────────────────────────────────────
+    // ★ 这三条原来**漏了**：C24 加图片预览时写了文案却没进字典，
+    //   于是切到英文 / 西班牙语时，图片那一块还是中文。
+    //   使用者的原话就是「英语，西班牙语的时候不是所有的都改变」。
+    //   （t() 找不到词条会原样返回中文，这个兜底本身是对的；漏了就是这个表现。）
+    '点一下加载图片': { en: 'Tap to load the image', es: 'Toca para cargar la imagen' },
+    '正在取图…': { en: 'Loading image…', es: 'Cargando imagen…' },
+    '取不到这张图，点这里再试': {
+      en: 'Could not fetch this image — tap here to retry',
+      es: 'No se pudo obtener esta imagen; toca aquí para reintentar'
+    },
+
     // ── 目标条（C26）──────────────────────────────────────────────────────
     // 用词**照电脑端的 goal 词典抄**（phase.active / action.pause / …），
     // 这样两边看到的是同一套说法。
@@ -263,4 +421,61 @@
     '压缩上下文：现在不能压缩（正在执行或已经在压缩）': { en: 'Cannot compact right now (a turn or a compaction is running)', es: 'Ahora no se puede compactar (hay un turno o una compactación en curso)' },
     '电脑上的这个 DSH 没有 /compact 命令。': { en: 'This DSH build has no /compact command.', es: 'Esta versión de DSH no tiene el comando /compact.' }
   });
+
+  // ── agent preset（界面上的「模式」）的显示名与说明（C23）──────────────────
+  //
+  // ★ 为什么**单独一张表**、不走上面那套 t()：
+  //   `agentPresets/list` **只回 id、不回 name** —— 实测返回是
+  //       [{id:'standard', isDefault:true}, {id:'ptc'}, {id:'minimal'}, {id:'cordis'}]
+  //   而 t() 那套的规矩是"中文原文当 key"，这里的 key 却是英文 id，
+  //   塞进同一个字典就对不上了。
+  //
+  // ★ 下面的名字和说明**是从电脑端的词典里抄的，不是我编的**：
+  //   电脑端有一套 PresetGuideDialog，key 分别是 preset*Name / guide*Intro。
+  //   从 asar 里读出来的对应关系：
+  //     presetStandardName → 「标准模式」，guideStandardIntro → 「新建任务时选择…」
+  //     presetPtcName      → 「PTC 模式」
+  //     presetMinimalName  → 「极简模式」
+  //     presetCordisName   → 「创造模式」   ← 注意：id 叫 cordis，中文叫"创造模式"
+  //   手机端原来直接把 id 显示出来（"standard / ptc / cordis"），既不是中文
+  //   也不是人话 —— 这就是使用者说的「模式列表英文、缺说明」。
+  //
+  // ★ 不在表里的（自定义预设）**原样显示 id**，绝不瞎翻。
+  var PRESETS = {
+    standard: {
+      zh: '标准模式', en: 'Standard mode', es: 'Modo estándar',
+      hint: {
+        zh: '新建任务时选择「标准模式」，说明要完成什么、相关文件在哪里，以及怎样判断任务完成。',
+        en: 'Choose Standard mode when starting a new task. Describe what you want to accomplish, point to the relevant files, and explain how to check the result.',
+        es: 'Elige el modo Estándar al empezar una tarea. Describe qué quieres conseguir, dónde están los archivos y cómo comprobar el resultado.'
+      }
+    },
+    ptc: {
+      zh: 'PTC 模式', en: 'PTC mode', es: 'Modo PTC',
+      hint: {
+        zh: '新建任务时选择「PTC 模式」，说明输入文件、处理规则和输出格式。代码由 Agent 编写。',
+        en: 'Choose PTC mode when starting a new task. Specify the input files, processing rules, and output format. The agent writes the code.',
+        es: 'Elige el modo PTC al empezar una tarea. Indica los archivos de entrada, las reglas de procesamiento y el formato de salida. El código lo escribe el agente.'
+      }
+    },
+    minimal: {
+      zh: '极简模式', en: 'Minimal mode', es: 'Modo mínimo',
+      hint: {
+        zh: '新建任务时选择「极简模式」。做对照测试时，保持模型、权限、任务输入和工作区起始状态一致。',
+        en: 'Choose Minimal mode for a new task. For a comparison, hold the model, permissions, input, and starting workspace state constant across runs.',
+        es: 'Elige el modo Mínimo al empezar una tarea. Para comparar, mantén constantes el modelo, los permisos, la entrada y el estado inicial del espacio de trabajo.'
+      }
+    },
+    cordis: {
+      zh: '创造模式', en: 'Creator mode', es: 'Modo creador',
+      hint: {
+        zh: '新建任务时选择「创造模式」，说明希望增加什么能力、从哪里使用，以及怎样验证效果。',
+        en: 'Choose Creator mode for a new task. Describe the capability you want, where it should appear, and how you will verify it.',
+        es: 'Elige el modo Creador al empezar una tarea. Describe la capacidad que quieres, dónde debe aparecer y cómo la verificarás.'
+      }
+    }
+  };
+
+  var api = (typeof window !== 'undefined' ? window : globalThis);
+  api.DshLitePresets = PRESETS;
 })(typeof window !== 'undefined' ? window : globalThis);

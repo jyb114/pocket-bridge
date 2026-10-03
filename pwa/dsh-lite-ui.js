@@ -208,7 +208,13 @@
       refs.uploadInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
       refs.upload.title = t('上传图片');
       refs.upload.setAttribute('aria-label', t('上传图片'));
-    } else refs.uploadInput.removeAttribute('accept');
+      refs.upload.setAttribute('data-i18n-title', '上传图片');
+      refs.upload.setAttribute('data-i18n-aria', '上传图片');
+    } else {
+      refs.uploadInput.removeAttribute('accept');
+      refs.upload.setAttribute('data-i18n-title', '上传文件');
+      refs.upload.setAttribute('data-i18n-aria', '上传文件');
+    }
     var mountSerial = (Number(window.__dshLiteMountSerial) || 0) + 1;
     window.__dshLiteMountSerial = mountSerial;
     app.dataset.liteUiBuild = 'session-create-v5';
@@ -272,6 +278,9 @@
       creating: false, creatingKind: '', connecting: 0, running: false, stopping: false,
       hasMore: false, loadingOlder: false,
       loadingProjects: false, loadingSessions: false,
+      // C11 的另一半：项目/对话列表**读失败**的原因。
+      // 非空时界面显示原因 + 重试，而不是假装"你还没有项目"。
+      projectsError: '', sessionsError: '',
       projectLoad: 0, sessionLoad: 0, pendingRecords: [], loadingSession: '', folderLoad: 0,
       filesLoad: 0, filesPath: '', filesStack: [], filesEntries: [], filesNextOffset: null,
       filesLoading: false, filesRetry: null, filePreview: null, disposed: false,
@@ -327,6 +336,39 @@
         return ok;
       } catch (err) { return false; }
     }
+    /**
+     * 这一轮助手说过的话（合并成一整段）。
+     *
+     * ★ 为什么需要：一轮回复在界面上是**好几条 record**（流式分段落的），
+     *   而"复制"原来只复制其中一条。使用者的原话是：
+     *   「复制应该能一次性复制你一轮说的所有东西而不是一个小框框」。
+     *
+     * 怎么分组：从这条 record 往前找到**最近的一条用户消息**，
+     * 再往后找到**下一条用户消息**，中间所有助手文本合成一段。
+     * **不合并思考过程** —— 那是另一回事，它自己也有复制按钮。
+     */
+    function turnTextFor(record) {
+      var list = state.records || [];
+      var at = list.indexOf(record);
+      if (at < 0) return label(record && record.text, '');
+      var start = 0;
+      for (var i = at; i >= 0; i--) {
+        if (list[i] && list[i].role === 'user') { start = i + 1; break; }
+      }
+      var end = list.length;
+      for (var j = at + 1; j < list.length; j++) {
+        if (list[j] && list[j].role === 'user') { end = j; break; }
+      }
+      var parts = [];
+      for (var k = start; k < end; k++) {
+        var row = list[k];
+        if (!row || row.role !== 'assistant') continue;
+        var text = label(row.text, '');
+        if (text) parts.push(text);
+      }
+      return parts.join('\n\n');
+    }
+
     function copyText(text) {
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         return navigator.clipboard.writeText(text).then(
@@ -359,6 +401,7 @@
     var mountNodes = [];
     var mountTimers = [];
     var mountObservers = [];
+    var mountCleanups = [];
     function keep(node) { if (node) mountNodes.push(node); return node; }
     // Keep failures beside the action that caused them. The global error bar is
     // behind a modal and cannot be seen while the folder picker is open.
@@ -366,7 +409,7 @@
     refs.projectFeedback.hidden = true;
     refs.projectFeedback.setAttribute('role', 'status');
     refs.projectForm.insertBefore(refs.projectFeedback, refs.projectForm.querySelector('.modal-actions'));
-    refs.filesRetry = keep(el('button', 'files-more', '重试读取'));
+    refs.filesRetry = keep(el('button', 'files-more', t('重试读取')));
     refs.filesRetry.id = 'files-retry';
     refs.filesRetry.type = 'button';
     refs.filesRetry.hidden = true;
@@ -445,24 +488,38 @@
       refs.newProject.disabled = !ready || state.creating || typeof adapter.createProject !== 'function';
       refs.newSession.disabled = !ready || !state.projectId || state.loadingProjects || state.loadingSessions ||
         state.creating || typeof adapter.createSession !== 'function';
-      refs.newSession.textContent = state.creatingKind === 'session' ? '正在创建…' : '＋ 新对话';
+      // ★ 下面这几行原来**把文案写死成中文** —— 后果是：i18n.js 刚把界面翻成
+      //   英文，renderControls() 一跑又写回中文。使用者报的「英语，西班牙语的时候
+      //   不是所有的都改变」，有相当一部分就是这里。
+      //   规矩：凡是渲染时写进 DOM 的文字，一律过 t()。
+      refs.newSession.textContent = state.creatingKind === 'session' ? t('正在创建…') : t('＋ 新对话');
       refs.railNewProject.disabled = refs.newProject.disabled;
       refs.railNewSession.disabled = refs.newSession.disabled;
-      refs.railNewSession.setAttribute('aria-label', state.creatingKind === 'session' ? '正在创建对话' : '新建对话');
-      refs.input.disabled = !ready || !state.sessionId || state.sending || typeof adapter.sendMessage !== 'function';
-      refs.send.disabled = refs.input.disabled || state.uploading || (!refs.input.value.trim() && !state.uploads.length);
+      refs.railNewSession.setAttribute('aria-label',
+        state.creatingKind === 'session' ? t('正在创建对话') : t('新建对话'));
+      // ★ 输入框**永远可以打字**（2026-09-29 改）。
+      //
+      //   这里原来还有 `!ready`（连接没就绪）和 `state.sending`（正在发）——
+      //   后果是网络一抖、或者刚点完发送，输入框就变灰**打不了字**，
+      //   正打到一半的句子被打断。使用者报的就是这个：「网络不稳定的时候
+      //   应该不能打断指令的输入」。
+      //   要禁用的只是**发送按钮**，不是输入框 —— 连接回来了还能接着按发送。
+      refs.input.disabled = typeof adapter.sendMessage !== 'function';
+      refs.send.disabled = !ready || !state.sessionId || state.sending || state.uploading ||
+        typeof adapter.sendMessage !== 'function' ||
+        (!refs.input.value.trim() && !state.uploads.length);
       refs.upload.disabled = !ready || !state.sessionId || state.uploading || typeof adapter.uploadFile !== 'function';
       refs.projectSubmit.disabled = !ready || state.creating || typeof adapter.createProject !== 'function';
-      refs.projectSubmit.textContent = state.creatingKind === 'project' ? '正在添加…' : '选择此文件夹';
+      refs.projectSubmit.textContent = state.creatingKind === 'project' ? t('正在添加…') : t('选择此文件夹');
       refs.browseFolder.hidden = typeof adapter.listDirectories !== 'function';
       refs.filesOpen.disabled = !ready || !state.sessionId || typeof adapter.listWorkspaceFiles !== 'function' ||
         typeof adapter.downloadFile !== 'function';
       refs.stop.hidden = !state.running || typeof adapter.cancelSession !== 'function';
       refs.stop.disabled = !ready || state.stopping;
-      refs.stop.textContent = state.stopping ? '正在停止…' : '停止';
+      refs.stop.textContent = state.stopping ? t('正在停止…') : t('停止');
       refs.historyBar.hidden = !state.sessionId || !state.hasMore || typeof adapter.loadOlder !== 'function';
       refs.loadOlder.disabled = !ready || state.loadingOlder;
-      refs.loadOlder.textContent = state.loadingOlder ? '正在加载…' : '加载更早内容';
+      refs.loadOlder.textContent = state.loadingOlder ? t('正在加载…') : t('加载更早内容');
     }
     function currentProject() { return state.projects.find(function (p) { return safeId(p.id) === state.projectId; }); }
     function currentSession() { return state.sessions.find(function (s) { return safeId(s.id) === state.sessionId; }); }
@@ -497,6 +554,18 @@
     }
     function renderProjects() {
       refs.projectList.replaceChildren();
+      // ★ 先看**是不是根本没读到**（C11 的另一半）。
+      //   原来不管三七二十一：列表空就显示「还没有项目。点击"添加项目"」——
+      //   于是"读失败"和"你真的没有项目"长得一模一样，
+      //   使用者会以为项目全没了。现在把原因说出来，并给一个重试。
+      if (state.projectsError) {
+        refs.projectList.append(el('div', 'list-empty', state.projectsError));
+        var retry = el('button', 'text-action', t('重试读取'));
+        retry.type = 'button';
+        retry.addEventListener('click', function () { reloadProjects(); });
+        refs.projectList.append(retry);
+        return;
+      }
       var term = refs.search.value.trim().toLocaleLowerCase();
       var projects = state.projects.filter(function (project) {
         return !term || (label(project.name, '') + ' ' + label(project.path, '')).toLocaleLowerCase().indexOf(term) >= 0;
@@ -522,6 +591,17 @@
       refs.sessionList.replaceChildren();
       if (!state.projectId) { refs.sessionList.append(el('div', 'list-empty', t('先选择项目。'))); return; }
       if (state.loadingSessions) { refs.sessionList.append(el('div', 'list-empty', t('正在加载对话列表…'))); return; }
+      // ★ 读失败要说出来 —— 不然下面会画成「这个项目还没有对话。」（C11 的另一半）
+      if (state.sessionsError) {
+        refs.sessionList.append(el('div', 'list-empty', state.sessionsError));
+        var retry = el('button', 'text-action', t('重试读取'));
+        retry.type = 'button';
+        retry.addEventListener('click', function () {
+          if (state.projectId) selectProject(state.projectId);
+        });
+        refs.sessionList.append(retry);
+        return;
+      }
       var term = refs.search.value.trim().toLocaleLowerCase();
       var sessions = state.sessions.filter(function (session) {
         return !term || label(session.title, '').toLocaleLowerCase().indexOf(term) >= 0;
@@ -585,7 +665,7 @@
         item.dataset.role = role;
         var meta = el('div', 'record-meta');
         meta.append(el('span', 'record-role', label(record.title,
-          role === 'user' ? '我' : role === 'assistant' ? 'DSH' : role === 'thought' ? t('思考') : role === 'tool' ? t('工具') : role)));
+          role === 'user' ? t('我') : role === 'assistant' ? 'DSH' : role === 'thought' ? t('思考') : role === 'tool' ? t('工具') : role)));
         item.append(meta);
         var recordText = typeof record.text === 'string' ? record.text : '';
         if (role === 'system' && record.status === 'error') {
@@ -594,16 +674,25 @@
         }
         // ★ 一键复制这一条。手机上没法拖选文字，没有按钮就等于复制不了。
         //   **助手说的和用户自己说的都要有**（用户的原话：「你的我的都不行」）。
+        //
+        // ★ 助手那条复制的是**整轮**，不是这一小条（2026-09-29 改）。
+        //   使用者原话：「复制应该能一次性复制你一轮说的所有东西而不是一个小框框」。
+        //   一轮回复在界面上是**好几条 record**（流式分段），原来只复制其中一条，
+        //   等于把一整段回答切成几块分别复制 —— 用起来很别扭。
+        //   用户自己说的、思考、工具：仍然只复制这一条（它们本来就是完整的一条）。
         if (recordText) {
-          var copyButton = el('button', 'record-copy', t('复制'));
+          var wholeTurn = role === 'assistant';
+          var copyButton = el('button', 'record-copy', wholeTurn ? t('复制整轮') : t('复制'));
           copyButton.type = 'button';
-          copyButton.setAttribute('aria-label', t('复制') + ' · ' + role);
+          copyButton.setAttribute('aria-label',
+            (wholeTurn ? t('复制整轮') : t('复制')) + ' · ' + role);
           copyButton.addEventListener('click', function () {
-            copyText(recordText).then(function (done) {
+            var payload = wholeTurn ? (turnTextFor(record) || recordText) : recordText;
+            copyText(payload).then(function (done) {
               copyButton.textContent = done ? t('已复制') : t('复制失败');
               copyButton.classList.toggle('is-done', !!done);
               setTimeout(function () {
-                copyButton.textContent = t('复制');
+                copyButton.textContent = wholeTurn ? t('复制整轮') : t('复制');
                 copyButton.classList.remove('is-done');
               }, 1600);
             });
@@ -931,8 +1020,13 @@
         var draftKey = interactionDraftKey(item);
         var draft = state.interactionDrafts.get(draftKey);
         card.dataset.draftKey = draftKey;
-        card.append(el('h2', '', label(item.title, item.kind === 'approval' ? '需要授权' : item.kind === 'choice' ? '请选择' : '需要回答')));
-        appendInteractionText(card, label(item.text, 'DSH 正在等待你的回复。'),
+        // ★ 标题在这里拼，不在 adapter 里拼 —— adapter 是数据层，没有 t()。
+        //   （它原来写死了 `'DSH 请求授权：' + toolName`，切英文后还是中文。）
+        var interactionTitle = item.kind === 'approval'
+          ? (item.toolName ? t('DSH 请求授权：') + item.toolName : t('需要授权'))
+          : item.kind === 'choice' ? t('请选择') : t('需要回答');
+        card.append(el('h2', '', label(item.title, interactionTitle)));
+        appendInteractionText(card, label(item.text, t('DSH 正在等待你的回复。')),
           draftKey + '\nitem', 'interaction-detail', item.kind === 'question');
         var questions = item.kind === 'question' && Array.isArray(item.questions) ? item.questions : [];
         questions.forEach(function (question, index) {
@@ -972,7 +1066,7 @@
           card.append(fieldset);
         });
         if (!canReply()) {
-          card.append(el('p', '', '当前连接无法从手机回复，请在电脑端处理。'));
+          card.append(el('p', '', t('当前连接无法从手机回复，请在电脑端处理。')));
           refs.interactions.append(card);
           return;
         }
@@ -1197,11 +1291,31 @@
     }
     async function reloadProjects() {
       state.loadingProjects = true;
+      state.projectsError = '';
       renderProjects(); renderControls();
       var projects;
-      try { projects = await adapter.listProjects(); }
-      finally { state.loadingProjects = false; renderControls(); }
-      if (!Array.isArray(projects)) throw new Error('invalid project list');
+      try {
+        projects = await adapter.listProjects();
+      } catch (error) {
+        // ★ 项目列表读不到**不等于连接失败**（C11 的另一半）。
+        //
+        //   原来这里的异常会一路抛到 connect() 的 catch，于是界面显示
+        //   「连接 DSH 失败」并把状态打成"已断开" —— 两处都误导：
+        //   连接可能好好的，只是这一次列表没拿到，重试一下就行。
+        //   更糟的是 renderProjects 会把空列表显示成「还没有项目。点击"添加项目"」，
+        //   使用者以为项目全没了（这就是他说的「有些时候还是跳回选择项目」的感觉）。
+        //   现在记下来，由 renderProjects 明说 + 给一个重试按钮。
+        state.loadingProjects = false;
+        state.projectsError = safeError(error, t('读不到项目列表，请重试。'));
+        renderProjects(); renderControls();
+        return;
+      }
+      state.loadingProjects = false;
+      if (!Array.isArray(projects)) {
+        state.projectsError = t('电脑报回来的项目列表格式不对。');
+        renderProjects(); renderControls();
+        return;
+      }
       state.projects = projects;
       renderProjects();
       // 项目还在就留着（不该因为"列表回来了"就把使用者踢回选择页）；
@@ -1247,6 +1361,7 @@
         if (token !== state.projectLoad || state.disposed) return false;
         if (!Array.isArray(sessions)) throw new Error('invalid session list');
         state.sessions = sessions;
+        state.sessionsError = '';
         state.loadingSessions = false;
         renderSessions(); renderTitle(); renderControls();
         clearError();
@@ -1257,6 +1372,9 @@
       } catch (error) {
         if (token === state.projectLoad) {
           state.loadingSessions = false;
+          // ★ 同项目列表那个道理：记下原因让 renderSessions 明说，
+          //   而不是画一个空列表让使用者以为"这个项目里没有对话"。
+          state.sessionsError = safeError(error, t('读不到对话列表，请重试。'));
           renderSessions(); renderControls();
           showError(error, '加载对话列表失败，请重连后重试。');
         }
@@ -1462,7 +1580,7 @@
         if (await selectProject(id)) clearError();
       } catch (error) {
         if (refs.modal.hidden) showError(error, '添加项目失败。请检查电脑上的文件夹路径。');
-        else projectMessage(safeError(error, '添加项目失败。请检查电脑上的文件夹路径。'), true);
+        else projectMessage(safeError(error, t('添加项目失败。请检查电脑上的文件夹路径。')), true);
       } finally { state.creating = false; state.creatingKind = ''; renderControls(); }
     }
     async function loadDirectory(path) {
@@ -1494,12 +1612,12 @@
       } catch (error) {
         if (token === state.folderLoad) {
           refs.folderBrowser.replaceChildren(el('div', 'list-empty', '读取文件夹失败，可直接输入完整路径。'));
-          if (!refs.modal.hidden) projectMessage(safeError(error, '读取电脑文件夹失败，请重试。'), true);
+          if (!refs.modal.hidden) projectMessage(safeError(error, t('读取电脑文件夹失败，请重试。')), true);
         }
       }
     }
     function renderFiles() {
-      refs.filesCurrent.textContent = state.filesPath || '项目根目录';
+      refs.filesCurrent.textContent = state.filesPath || t('项目根目录');
       refs.filesUp.disabled = !state.filesStack.length || state.filesLoading;
       refs.filesMore.hidden = state.filesNextOffset === null || !!state.filesRetry;
       refs.filesMore.disabled = state.filesLoading;
@@ -1511,9 +1629,9 @@
         return !filter || label(entry && entry.name, entry && entry.path || '').toLocaleLowerCase().indexOf(filter) >= 0;
       });
       if (!visibleEntries.length) {
-        refs.filesList.append(el('div', 'list-empty', state.filesLoading ? '正在读取文件…' :
-          state.filesRetry ? '文件列表未加载。请点下方“重试读取”。' :
-            filter && state.filesEntries.length ? t('当前列表没有匹配的文件。') : '此文件夹没有文件。'));
+        refs.filesList.append(el('div', 'list-empty', state.filesLoading ? t('正在读取文件…') :
+          state.filesRetry ? t('文件列表未加载。请点下方“重试读取”。') :
+            filter && state.filesEntries.length ? t('当前列表没有匹配的文件。') : t('此文件夹没有文件。')));
       }
       visibleEntries.forEach(function (entry) {
         if (!entry || typeof entry.path !== 'string' || !entry.path) return;
@@ -1579,7 +1697,7 @@
             state.filesNextOffset = previous.nextOffset;
           }
           state.filesRetry = { path: path || '', append: !!append };
-          refs.filesStatus.textContent = safeError(error, '读取电脑文件失败，请重试。');
+          refs.filesStatus.textContent = safeError(error, t('读取电脑文件失败，请重试。'));
           refs.filesStatus.dataset.state = 'error';
         }
         return false;
@@ -1600,15 +1718,16 @@
         openFilePreview(entry.path);
       } catch (error) {
         if (state.sessionId === sessionId) {
-          refs.filesStatus.textContent = safeError(error, '读取文件失败，请重试。');
+          refs.filesStatus.textContent = safeError(error, t('读取文件失败，请重试。'));
           refs.filesStatus.dataset.state = 'error';
           button.disabled = false;
-          button.textContent = '↓ 重试 ' + label(entry.name, '文件');
+          button.textContent = t('↓ 重试') + ' ' + label(entry.name, t('文件'));
         }
       }
     }
     async function send(event) {
       event.preventDefault();
+      var submittedDraft = refs.input.value;
       var text = refs.input.value.trim();
       if ((!text && !state.uploads.length) || state.connection !== 'connected' || !state.sessionId || state.sending || state.uploading) return;
       var sessionId = state.sessionId;
@@ -1618,11 +1737,22 @@
       state.sending = true; renderControls();
       try {
         await adapter.sendMessage({ sessionId: sessionId, text: text, attachments: uploads });
-        state.drafts.delete(draftKey(projectId, sessionId));
-        if (state.sessionId === sessionId) {
-          refs.input.value = '';
-          state.uploads = [];
+        // Sending may finish after more typing or a conversation switch. Clear
+        // only this submission's unchanged text and exact attachment objects.
+        var key = draftKey(projectId, sessionId);
+        if (state.projectId === projectId && state.sessionId === sessionId) {
+          if (refs.input.value === submittedDraft) refs.input.value = '';
+          state.uploads = state.uploads.filter(function (upload) { return uploads.indexOf(upload) < 0; });
+          saveCurrentDraft();
           renderUploads();
+        } else {
+          var saved = state.drafts.get(key);
+          if (saved) {
+            var remaining = { text: saved.text === submittedDraft ? '' : saved.text,
+              uploads: saved.uploads.filter(function (upload) { return uploads.indexOf(upload) < 0; }) };
+            if (remaining.text || remaining.uploads.length) state.drafts.set(key, remaining);
+            else state.drafts.delete(key);
+          }
         }
         clearError();
       } catch (error) {
@@ -1764,17 +1894,59 @@
     function closeScreenOverlay() {
       if (screenOverlay) screenOverlay.__liteClose();
     }
+    /**
+     * 把一张截图存到手机。
+     *
+     * ★ 为什么要把 data URL 转成 **Blob** 再下载，而不是直接给 `<a href="data:...">`：
+     *   iOS Safari 对 `data:` URL 上的 `download` 支持很差 —— 常常**静默什么都不做**，
+     *   使用者以为存了其实没存。Blob URL 是可靠的（codex 那边下载交付物也是这么做的）。
+     *   手机上会落进「照片」或「下载」。
+     *
+     * @returns {string} 给按钮显示的反馈文字
+     */
+    function saveShotToPhone(shot) {
+      try {
+        var bin = atob(String((shot && shot.image) || ''));
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var mime = (shot && shot.mime) || 'image/jpeg';
+        var url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        var d = new Date();
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        // 文件名带时间戳：连着存几张不会互相覆盖（手机上重名会变成 (1)(2)）
+        var name = 'screen-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+          '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) +
+          (mime.indexOf('png') >= 0 ? '.png' : '.jpg');
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // 立刻 revoke 会让某些浏览器下载到一半失败，留一分钟
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+        return t('已开始下载');
+      } catch (err) {
+        // 极少数浏览器不给下载 —— 那时还能长按图片存
+        return t('存不了，长按图片试试');
+      }
+    }
     function showScreenShot() {
       if (!state.sessionId) { setSidebar(true); return; }
       closeScreenOverlay();
       var box = el('div', 'screen-overlay');
       var bar = el('div', 'screen-bar');
-      var heading = el('strong', '', '电脑屏幕');
+      var heading = el('strong', '', t('电脑屏幕'));
       bar.append(heading);
-      var again = el('button', 'screen-action', '再看一次');
-      var shut = el('button', 'screen-action', '关闭');
-      bar.append(again, shut);
-      var holder = el('div', 'screen-holder', '正在抓屏…');
+      // 「保存」要等**真有图**了才能按 —— 没图时按下去只能报错。
+      var save = el('button', 'screen-action', t('保存到手机'));
+      save.classList.add('screen-save');
+      save.disabled = true;
+      var again = el('button', 'screen-action', t('再看一次'));
+      var shut = el('button', 'screen-action', t('关闭'));
+      bar.append(save, again, shut);
+      var holder = el('div', 'screen-holder', t('正在抓屏…'));
       box.append(bar, holder);
       keep(box);
       document.body.append(box);
@@ -1782,25 +1954,45 @@
       wireOverlay(box, heading, shut, refs.railScreen);
       box.addEventListener('click', function (event) { if (event.target === box) box.__liteClose(); });
 
+      var lastShot = null;   // 最近一次抓到的图，供「保存到手机」用
+      save.addEventListener('click', function () {
+        if (!lastShot) return;
+        save.disabled = true;
+        save.textContent = saveShotToPhone(lastShot);
+        setTimeout(function () {
+          save.textContent = t('保存到手机');
+          save.disabled = !lastShot;
+        }, 1800);
+      });
+
       function grab() {
         if (typeof adapter.screenShot !== 'function') {
-          holder.textContent = '这个版本还不支持看电脑屏幕，请更新桥。';
+          holder.textContent = t('这个版本还不支持看电脑屏幕，请更新桥。');
           return;
         }
-        holder.textContent = '正在抓屏…';
+        holder.textContent = t('正在抓屏…');
         holder.classList.add('is-busy');
+        // 抓的过程中先禁掉保存：不然按下会存到**上一张**（图上已经不是它了）
+        lastShot = null;
+        save.disabled = true;
         adapter.screenShot({ maxWidth: 1280 }).then(function (result) {
           holder.classList.remove('is-busy');
           holder.textContent = '';
+          lastShot = result;
+          save.disabled = false;
           var img = el('img', 'screen-image');
-          img.alt = '电脑屏幕';
+          img.alt = t('电脑屏幕');
           img.src = 'data:' + (result.mime || 'image/jpeg') + ';base64,' + result.image;
           holder.append(img);
           holder.append(el('span', 'screen-meta',
             result.width + '×' + result.height + ' · ' + Math.round((result.bytes || 0) / 1024) + ' KB'));
         }).catch(function (problem) {
           holder.classList.remove('is-busy');
-          holder.textContent = (problem && problem.message) || '抓屏失败。';
+          holder.textContent = (problem && problem.message) || t('抓屏失败。');
+          // 失败之后画面上已经没有图了，保存按钮也得跟着不可用 ——
+          // 否则按下去存到的是**上一次**那张，人还以为存的是眼前这张。
+          lastShot = null;
+          save.disabled = true;
         });
       }
       again.addEventListener('click', grab);
@@ -1876,10 +2068,12 @@
               if (data[k] !== undefined && data[k] !== null) rows.push(k + '：' + data[k]);
             });
             if (!rows.length) rows.push(JSON.stringify(data));
-          } else rows.push('没有拿到数据');
+          } else rows.push(t('没有拿到数据'));
           rows.forEach(function (line) { body.append(el('p', 'panel-line', line)); });
         }).catch(function (err) {
-          body.textContent = '读不到余额（' + (err && err.message) + '）。这个功能走控制台端点，需要已登录的会话。';
+          // 整句一起翻 —— 拼接出来的句子换语言后语序会不对
+          body.textContent = t('读不到余额。这个功能走控制台端点，需要已登录的会话。') +
+            (((err && err.message) ? '（' + err.message + '）' : ''));
         });
       });
     }
@@ -2355,6 +2549,13 @@
     }
     // 「工具配置」= agent preset（DSH 的工具组合），走 agentPresets/select。
     // 目标（goal）不在这个列表里 —— 它是 `/goal` 命令（见上面的说明）。
+    function uiLang() {
+      try { return (window.DshI18n && window.DshI18n.lang && window.DshI18n.lang()) || 'zh'; }
+      catch (_) { return 'zh'; }
+    }
+    function presetRow(id) { return (window.DshLitePresets || {})[String(id || '')] || null; }
+    function presetLabel(id) { var row = presetRow(id); return row ? (row[uiLang()] || row.zh) : ''; }
+    function presetHint(id) { var row = presetRow(id); return row && row.hint ? (row.hint[uiLang()] || row.hint.zh) : ''; }
     function showModes() {
       if (typeof adapter.listModes !== 'function' || typeof adapter.selectMode !== 'function') {
         overlay(t('工具配置'), function (body) {
@@ -2362,9 +2563,18 @@
         }, refs.composerPicks.querySelector('[data-kind="mode"]'));
         return;
       }
-      var names = { standard: '标准工具', ptc: '代码工具', minimal: '精简工具', cordis: '插件开发' };
       pickList('工具配置',
-        function () { return adapter.listModes(state.sessionId); },
+        function () {
+          return adapter.listModes(state.sessionId).then(function (items) {
+            // 顺手把官方说明挂成副标题 —— pickList 会把 item.description 显示在名字下面
+            return (items || []).map(function (item) {
+              var id = String((item && (item.id || item.name)) || '');
+              var hint = presetHint(id);
+              if (hint && item && !item.description) item.description = hint;
+              return item;
+            });
+          });
+        },
         function (id) {
           var sessionId = state.sessionId;
           return adapter.selectMode(sessionId, id).then(function () {
@@ -2379,12 +2589,14 @@
           selection: true,
           note: function () {
             var current = state.selection.agentPreset;
-            var line = current ? t('当前工具配置') + '：' + t(names[current] || current) + '。' : t('当前工具配置未报告。');
+            var line = current
+              ? t('当前工具配置') + '：' + (presetLabel(current) || current) + '。'
+              : t('当前工具配置未报告。');
             if (state.selection.blank === false) line += ' ' + t('对话开始后不能更换工具配置，请新建对话。');
             else if (state.selection.blank === null) line += ' ' + t('此版本未报告能否更换；若被拒绝，请新建对话。');
             return line;
           },
-          displayName: function (id, name) { return name === id && names[id] ? t(names[id]) : name; },
+          displayName: function (id, name) { return presetLabel(id) || name; },
           isSelected: function (id) { return state.selection.agentPreset === id; },
           locked: function () { return state.selection.blank === false; }
         });
@@ -2511,8 +2723,10 @@
         var controller = null;
         var base = '';
         var resetTimer = null;
+        var voiceEpoch = 0;
         /** 无论怎么结束，UI 必须回到"没在听" —— 这是"关不了"那一条的根治。 */
         function reset() {
+          voiceEpoch++;
           if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
           controller = null;
           mic.classList.remove('is-listening');
@@ -2522,32 +2736,69 @@
           mic.setAttribute('aria-pressed', 'false');
           mic.disabled = false;
         }
+        /**
+         * 看门狗：**连续 30 秒一点动静都没有**才强制结束。
+         *
+         * ★ 每来一次识别结果就重新计时 —— 这一条不能省。
+         *   原来的写法是"开始后 30 秒无条件复位"，后果是：
+         *   使用者说一段长话，说到 30 秒界面自己复位成 🎤、话也被掐断，
+         *   他以为是"关不掉/乱跳"（原话：「我刚刚说了一长串，无法关闭」）。
+         *   兜底要防的是**卡死**（识别器既不回 onend 也不回 onerror），
+         *   而"还在出字"恰恰证明它活得好好的，不该打断。
+         */
+        function armWatchdog() {
+          if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+          resetTimer = setTimeout(function () {
+            var live = controller;
+            reset();
+            if (live) {
+              // 先把识别器弄死，界面才敢显示"没在听"（顺序不能反）
+              try { live.stop(); } catch (err) { /* 已经死了 */ }
+              try { if (live.abort) live.abort(); } catch (err) { /* 已经死了 */ }
+            }
+          }, 30000);
+        }
         function stop() {
           var live = controller;
           // 先复位再让它停：`stop()` 在 iOS 上未必回调 onend，
           // 等回调就等于"点了没反应"。
           reset();
-          if (live) { try { live.stop(); } catch (err) { /* 已经死了 */ } }
+          if (live) {
+            try { live.stop(); } catch (err) { /* 已经死了 */ }
+            // stop() 只是"请给结果"，iOS 上未必真停。再 abort 一道硬的：
+            // 否则识别器会继续往输入框灌字，而按钮已经显示"没在听"了 ——
+            // 使用者看到 🎤 就去点，代码以为是"开始"，于是又 start 一个，
+            // 和还活着的旧识别器打架（这就是"关了开不了"）。
+            setTimeout(function () { try { if (live.abort) live.abort(); } catch (err) { /* 已经死了 */ } }, 250);
+          }
         }
         mic.addEventListener('click', function () {
           if (controller) { stop(); return; }
           if (!window.DshVoice.available()) { window.DshVoice.explain(); return; }
           base = refs.input.value ? refs.input.value.replace(/\s*$/, '') + ' ' : '';
+          var epoch = ++voiceEpoch;
+          var draftBase = base;
+          function currentRecognition() { return epoch === voiceEpoch && !state.disposed; }
           controller = window.DshVoice.start({
             lang: voiceLang(),
             onPartial: function (text) {
-              window.DshVoice.setInputValue(refs.input, base + text);
+              if (!currentRecognition()) return;
+              window.DshVoice.setInputValue(refs.input, draftBase + text);
               renderControls();
+              armWatchdog();          // ★ 还在出字 = 活着，重新计时，别打断长句子
             },
             onFinal: function (text) {
-              window.DshVoice.setInputValue(refs.input, base + text);
+              if (!currentRecognition()) return;
+              window.DshVoice.setInputValue(refs.input, draftBase + text);
               renderControls();
+              armWatchdog();
             },
             onError: function (message) {
+              if (!currentRecognition()) return;
               showError({ userMessage: message }, t('语音输入失败。'));
               reset();                 // ★ 报错也必须复位，否则按钮永远卡在"正在听"
             },
-            onEnd: reset
+            onEnd: function () { if (currentRecognition()) reset(); }
           });
           if (controller) {
             mic.classList.add('is-listening');
@@ -2555,18 +2806,13 @@
             mic.setAttribute('data-stop-label', t('停止'));
             mic.setAttribute('aria-label', t('停止'));
             mic.setAttribute('aria-pressed', 'true');
-            // 兜底：识别器万一既不发 onend 也不发 onerror（实测在后台切回来时
-            // 会这样），30 秒后强制复位 —— 宁可自己停，也不能让人"关不了"。
-            resetTimer = setTimeout(function () {
-              var live = controller;
-              reset();
-              if (live) { try { live.stop(); } catch (err) { /* 已经死了 */ } }
-            }, 30000);
+            armWatchdog();
           } else {
             reset();
           }
         });
         keep(mic);
+        mountCleanups.push(stop);
         plus.parentNode.insertBefore(mic, plus.nextSibling);
       }
       var holder = refs.composerPicks;
@@ -2621,7 +2867,16 @@
       return ui === 'en' ? 'en-US' : ui === 'es' ? 'es-ES' : 'zh-CN';
     }
 
-    (function installSettingsExtras() {
+    /**
+     * 设置菜单里那几项运行时挂上去的东西（看余额 / 连接地址 / 界面语言 / 语音语言）。
+     *
+     * ★ 做成**具名函数**而不是原来的 IIFE（立即执行）：
+     *   这些节点是运行时挂的，切了语言必须**重建一次**才会跟着变 ——
+     *   而 IIFE 只跑一次，所以它们永远停在上一种语言。
+     *   使用者报的「英语，西班牙语的时候不是所有的都改变」，这几项每次都在里面。
+     *   函数体本来就是"先把自己上一轮加的删掉再建"，所以重复调用是安全的。
+     */
+    function installSettingsExtras() {
       var menu = refs.settingsMenu;
       if (!menu) return;
       // 设置菜单是 HTML 里就有的节点，所以这里加的东西**不能用 removeChild 收走**
@@ -2652,7 +2907,7 @@
         voiceRow.append(el('span', '', t('语音语言')));
         var voiceSelect = el('select', 'voice-lang-select');
         voiceSelect.setAttribute('aria-label', t('语音语言'));
-        [['', '跟着界面语言'], ['zh-CN', '中文'], ['en-US', 'English'], ['es-ES', 'Español'],
+        [['', t('跟着界面语言')], ['zh-CN', '中文'], ['en-US', 'English'], ['es-ES', 'Español'],
           ['ja-JP', '日本語'], ['ko-KR', '한국어'], ['fr-FR', 'Français'], ['de-DE', 'Deutsch']]
           .forEach(function (pair) {
             var option = el('option', '', pair[1]);
@@ -2670,7 +2925,8 @@
         voiceRow.append(voiceSelect);
         menu.append(voiceRow);
       }
-    })();
+    }
+    installSettingsExtras();
 
     // ── E3：加密状态常驻标记 ─────────────────────────────────────────────────
     //
@@ -2772,6 +3028,15 @@
         renderInteractions(); renderControls(); renderUploads(); renderQueue();
         renderFiles(); renderFilePreview();
         renderGoalBar();
+        // 设置菜单里那几项是运行时挂的，必须重建才会跟着变；
+        // 文件模态框同理（它平时是隐藏的，但打开时也得是新语言）。
+        installSettingsExtras();
+        // 空状态那行字（「这段对话还没有消息。」「正在加载对话内容…」）在
+        // renderEmpty 里，它**不在**上面任何一条 render* 的调用链上，得单独点名。
+        renderEmpty();
+        // 「重试读取」这个按钮是**一次性建出来的**（不在 render* 里），
+        // 所以得单独把文案改过来。
+        if (refs.filesRetry) refs.filesRetry.textContent = t('重试读取');
         updateCryptoChip(); composerPicksRelabel(); relabelStatus();
         loadBalance(refs.composerBalance);
         var jump = document.querySelector('.jump-bottom');
@@ -2781,6 +3046,16 @@
         var mic = document.getElementById('voice-button');
         if (mic && !mic.classList.contains('is-listening')) {
           mic.setAttribute('aria-label', t('语音输入'));
+        }
+        // ★ 最后再套一遍 data-i18n。
+        //
+        //   为什么必须放在**重渲染之后**：上面这些 render* 会**新建 DOM**
+        //   （设置菜单里的按钮、交互卡片、文件列表…），而 i18n.js 的 applyAll()
+        //   是在 setLang 里、**这些新元素出现之前**跑的 —— 新元素自然没被翻译。
+        //   i18n.js 自己的注释就写着「新增的 DOM 要再调一次」，只是一直没人调。
+        //   少了这一句，表现就是使用者说的「不是所有的都改变」。
+        if (window.DshI18n && typeof window.DshI18n.apply === 'function') {
+          window.DshI18n.apply(document);
         }
       } catch (err) { /* 重画失败不该影响切换语言本身 */ }
     };
@@ -3089,6 +3364,7 @@
         state.disposed = true;
         state.connecting++;
         state.filesLoad++;
+        mountCleanups.forEach(function (cleanup) { try { cleanup(); } catch (_) {} });
         clearDownloadUrls();
         listeners.forEach(function (entry) { entry[0].removeEventListener(entry[1], entry[2]); });
         mountTimers.forEach(function (timer) { clearInterval(timer); });

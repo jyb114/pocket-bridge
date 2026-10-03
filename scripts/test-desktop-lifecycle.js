@@ -254,7 +254,11 @@ async function main() {
       const base = path.join(evidenceRoot, 'unprovisioned-production');
       const context = { BASE: base, require(name) {
         assert.equal(name, './dot-desktop-runtime.js');
-        return { createDotDesktopRuntime(options) { creations++; assert.deepEqual(Object.keys(options), ['base']); return real.createDotDesktopRuntime(options); } };
+        return { createDotDesktopRuntime(options) {
+          creations++; assert.deepEqual(Object.keys(options), ['base', 'enableSend']);
+          assert.equal(options.base, base); assert.equal(options.enableSend, true);
+          return real.createDotDesktopRuntime(options);
+        } };
       } };
       vm.createContext(context);
       const start = source.indexOf('const dotDesktopRuntime =');

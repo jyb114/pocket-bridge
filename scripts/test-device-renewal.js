@@ -34,12 +34,18 @@ if (fixtureChild && !fs.existsSync(path.join(BASE, '.device-renewal-test-fixture
 if (!fixtureChild && !live) {
   // sessions.js 把设备表路径固定在自身所在目录。复制到新目录后运行原模块，
   // 才能真实验证续期逻辑，同时绝不读写使用者的 logs/ 与正在运行的网关。
-  const prefix = path.join(os.tmpdir(), 'pocket-bridge-renewal-');
+  // Freeze the absolute, resolved task temp root once. Windows TEMP may use
+  // different separators, casing or a trailing slash from dirname(mkdtemp).
+  // Comparing those raw spellings rejects an otherwise owned test directory.
+  const tempRoot = fs.realpathSync(path.resolve(os.tmpdir()));
+  const prefix = path.join(tempRoot, 'pocket-bridge-renewal-');
   const fixture = fs.mkdtempSync(prefix);
+  const owner = crypto.randomBytes(24).toString('hex') + '\n';
+  const marker = path.join(fixture, '.device-renewal-test-fixture');
+  fs.writeFileSync(marker, owner, { flag: 'wx' });
   try {
     fs.mkdirSync(path.join(fixture, 'scripts'));
     fs.mkdirSync(path.join(fixture, 'logs'));
-    fs.writeFileSync(path.join(fixture, '.device-renewal-test-fixture'), 'isolated\n');
     fs.writeFileSync(path.join(fixture, 'logs', 'access-key.txt'), crypto.randomBytes(32).toString('hex'));
     for (const name of ['test-device-renewal.js', 'sessions.js', 'mobile-proxy.js']) {
       fs.copyFileSync(path.join(BASE, 'scripts', name), path.join(fixture, 'scripts', name));
@@ -52,10 +58,18 @@ if (!fixtureChild && !live) {
     if (child.error) throw child.error;
     process.exitCode = child.status === null ? 1 : child.status;
   } finally {
-    if (path.dirname(fixture) !== os.tmpdir() || !path.basename(fixture).startsWith('pocket-bridge-renewal-')) {
+    const target = path.resolve(fixture);
+    const resolvedRoot = fs.realpathSync(tempRoot);
+    const resolvedTarget = fs.realpathSync(target);
+    const relative = path.relative(resolvedRoot, resolvedTarget);
+    if (path.relative(tempRoot, resolvedRoot) !== '' || path.relative(target, resolvedTarget) !== '' ||
+        !relative || path.isAbsolute(relative) || path.dirname(relative) !== '.' ||
+        !/^pocket-bridge-renewal-[A-Za-z0-9]{6}$/.test(relative) ||
+        fs.lstatSync(target).isSymbolicLink() || !fs.lstatSync(target).isDirectory() ||
+        fs.readFileSync(path.join(target, '.device-renewal-test-fixture'), 'utf8') !== owner) {
       throw new Error('拒绝清理非测试临时目录');
     }
-    fs.rmSync(fixture, { recursive: true, force: true });
+    fs.rmSync(resolvedTarget, { recursive: true, force: true });
   }
   return;
 }

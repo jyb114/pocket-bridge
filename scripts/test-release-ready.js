@@ -21,10 +21,10 @@ console.log('\n=== 发布就绪检查 ===\n');
 
 // ── 1. 该有的文件都在 ──────────────────────────────────────────
 console.log('[1] 必备文件');
-for (const f of ['LICENSE', '.gitignore', '.gitattributes', 'README.md', 'SECURITY.md', 'THIRD-PARTY-NOTICES.md', 'package.json', 'CHANGELOG.md']) {
+for (const f of ['LICENSE', '.gitignore', '.gitattributes', 'README.md', 'SECURITY.md', 'THIRD-PARTY-NOTICES.md', 'package.json', 'CHANGELOG.md', 'RELEASE_NOTES.md', 'docs/MANUAL-ACCEPTANCE.md', 'docs/desktop-relay-experimental.md']) {
   ok(f + ' 存在', fs.existsSync(path.join(BASE, f)));
 }
-const publicDocs = ['README.md', 'SECURITY.md', 'THIRD-PARTY-NOTICES.md', 'CHANGELOG.md'];
+const publicDocs = ['README.md', 'SECURITY.md', 'THIRD-PARTY-NOTICES.md', 'CHANGELOG.md', 'RELEASE_NOTES.md', 'docs/MANUAL-ACCEPTANCE.md', 'docs/desktop-relay-experimental.md'];
 for (const f of publicDocs) {
   ok(`${f} is English-only`, !/[\u3400-\u9fff\uf900-\ufaff]/u.test(read(f) || ''));
 }
@@ -110,6 +110,13 @@ const codexScope = rdPlain.split('## Codex phone view')[1]?.split(/\n## /)[0] ||
 const dotScope = rdPlain.split('## Dot access')[1]?.split(/\n## /)[0] || '';
 const manual = (read('docs/MANUAL-ACCEPTANCE.md') || '').replace(/\*\*/g, '');
 const currentManual = manual.split('## Historical preview.4 and preview.5 observations')[0];
+const versionPattern = pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const releaseNotes = read('RELEASE_NOTES.md') || '';
+ok('current product documents use the package version',
+  new RegExp(`This is ${versionPattern},`).test(rdPlain) &&
+  new RegExp(`^# Pocket Bridge ${versionPattern} `).test(releaseNotes) &&
+  new RegExp(`^# Changelog\\r?\\n\\r?\\n## ${versionPattern} `).test(read('CHANGELOG.md') || '') &&
+  new RegExp(`^# Manual acceptance[^\\n]*${versionPattern}`).test(currentManual));
 ok('README names the operated, signed-in DSH desktop build',
   /DSH 0\.1\.7-rc\.2 desktop build installed on the test PC/i.test(dshScope) &&
   /DeepSeek Harness[^\n|]*desktop build[^\n|]*installed and signed in/i.test(rdPlain));
@@ -132,12 +139,18 @@ ok('README scopes Codex to the operated desktop installation',
   /not a guarantee for other app versions or every desktop state/i.test(codexScope) &&
   /same-source rerun[^\n]*remains pending/i.test(codexScope) &&
   /Earlier real app-server tests against Codex[^\n]*0\.159\.0[^\n]*separate previous baseline/i.test(codexScope));
-ok('README separates native Dot reading from disabled sending and unresolved execution',
+ok('README separates accepted local Dot text sending from unaccepted production and execution',
   /390- and 320-pixel[^\n]*12[^\n]*two native transcript reads/i.test(dotScope) &&
-  /Dot sending is still disabled and under implementation/i.test(dotScope) &&
+  /actual local native Send flow passed 14 checks[^\n]*one native Send invocation[^\n]*exact fresh user message[^\n]*correct Dot conversation[^\n]*unique assistant reply/i.test(dotScope) &&
+  /official desktop product[^\n]*26\.928\.31416[^\n]*26\.928\.3736\.0[^\n]*0\.159\.2/i.test(dotScope) &&
+  /isolated device-proof fixture/i.test(dotScope) &&
+  /does not establish server acknowledgement, local execution or task completion/i.test(dotScope) &&
+  /Send supports plain text only/i.test(dotScope) &&
+  /does not automatically resend/i.test(dotScope) &&
   /Only materialized recent history is available/i.test(dotScope) &&
   /official Dot local execution still fails[^\n]*drive-root pin error/i.test(dotScope) &&
-  /has not passed physical-phone or tunnel acceptance/i.test(dotScope));
+  /has not passed physical-phone or tunnel acceptance/i.test(dotScope) &&
+  !/Dot sending is still disabled and under implementation/i.test(dotScope));
 ok('README states passive-content protection, initial-page trust and local storage limits',
   /passive tunnel observer sees ciphertext[^\n]*original page and scripts are trusted/i.test(rdPlain) &&
   /active intermediary replacing the initial page/i.test(rdPlain) &&
@@ -148,7 +161,9 @@ ok('current acceptance retains exact-version, old-model and scoped preview bound
   /displayed card is not approval completion/i.test(currentManual) &&
   /same-source rerun[^\n]*remains pending/i.test(currentManual) &&
   /Physical iPhone\/Android[^\n]*Cloudflare tunnel acceptance are pending/i.test(currentManual) &&
-  /Manual acceptance[^\n]*1\.0\.0-preview\.6/i.test(currentManual) &&
+  new RegExp(`Manual acceptance[^\\n]*${versionPattern}`, 'i').test(currentManual) &&
+  /14 checks passed[^\n]*one native Send invocation[^\n]*exact fresh user row[^\n]*unique assistant reply/i.test(currentManual) &&
+  /isolated device-proof fixture[^\n]*not production device-proof\/authentication or physical-phone acceptance/i.test(currentManual) &&
   /No gateway, user backend, tray or native UI was started/i.test(currentManual) &&
   /Normal interactive destination selection and live production startup remain unaccepted/i.test(currentManual));
 ok('明确不是安装两个产品才可使用，也不随安装包提供它们',

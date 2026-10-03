@@ -24,7 +24,7 @@ const TEXT = Object.freeze({
   'desktop-unavailable': 'The Codex desktop window is unavailable.',
   'desktop-busy': 'Another desktop action is in progress. Wait for it to finish and retry.',
   'desktop-stopping': 'Desktop operations are stopped while the gateway shuts down. Nothing new was sent.',
-  'draft-present': 'The desktop composer contains a draft. Nothing was sent.',
+  'draft-present': 'The desktop composer has a draft or its empty state could not be verified. Nothing was sent.',
   'target-mismatch': 'The desktop conversation could not be verified. Nothing was sent.',
   'composer-unavailable': 'The desktop composer is unavailable. Nothing was sent.',
   'send-control-unavailable': 'The desktop send control is unavailable. Nothing was sent.',

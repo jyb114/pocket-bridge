@@ -19,6 +19,7 @@ const MESSAGES = Object.freeze({
   'target-mismatch': 'The desktop dot changed. Reconnect from the correct account; nothing was sent.',
   'history-unavailable': 'The current Dot messages could not be read safely. Your draft is preserved.',
   'clipboard-unavailable': 'The computer clipboard could not be preserved.',
+  'source-unverified': 'The current desktop chat could not be verified safely. On the computer, open Your dot and its profile, keep any existing draft, then retry Connect. Nothing was sent.',
   'send-unavailable': 'Text sending is not yet available for this desktop version. Your draft is preserved.',
   'draft-present': 'The desktop Dot contains an unsent draft. Nothing was sent; your phone draft is preserved.',
   'journal-unavailable': 'The private Dot receipt journal is unavailable. Text sending is disabled.',
@@ -30,15 +31,28 @@ const MESSAGES = Object.freeze({
 });
 function error(code, status = 400) { return Object.assign(new Error(MESSAGES[code] || MESSAGES.unknown), { code, status }); }
 function safeCode(value) { return Object.hasOwn(MESSAGES, value) ? value : 'unknown'; }
+const RECEIPT_CHECK_MESSAGES = Object.freeze({
+  'desktop-busy': 'The computer is busy. Wait, then check this receipt again. The original send remains unconfirmed; do not resend.',
+  'desktop-unavailable': 'The original desktop app is not available. Keep it open and check again. The original send remains unconfirmed; do not resend.',
+  'source-unverified': 'The original Dot view could not be verified safely. Use Refresh, then Check receipt. The original send remains unconfirmed; do not resend.',
+  'target-mismatch': 'The desktop Dot changed since this send. Return to the original Dot and check again. The original send remains unconfirmed; do not resend.',
+  'history-unavailable': 'The original history and exact new message could not be verified. The original send remains unconfirmed; do not resend.',
+  'clipboard-unavailable': 'The computer clipboard could not be preserved for this check. Check again when the computer is free. The original send remains unconfirmed; do not resend.'
+});
 function createDotDesktopService(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      ['enableSend','testOnlyEnableSend'].some(key => options[key] !== undefined && typeof options[key] !== 'boolean') ||
+      options.enableSend !== undefined && options.testOnlyEnableSend !== undefined && options.enableSend !== options.testOnlyEnableSend)
+    throw error('invalid-request');
   const driver = options.driver;
   if (!driver || typeof driver.inspect !== 'function' || typeof driver.snapshot !== 'function')
     throw Error('Dot service requires an independent native Dot driver.');
   let boundId = null, lastVersion = null;
   const sender = options.textSender, journal = options.journal;
-  const sendGate = options.testOnlyEnableSend === true && sender && typeof sender.send === 'function' &&
+  const permitted = options.enableSend === undefined ? options.testOnlyEnableSend === true : options.enableSend === true;
+  const sendGate = permitted && sender && typeof sender.send === 'function' &&
     typeof sender.supports === 'function' && journal && typeof journal.status === 'function';
-  const inFlight = new Map(), activeTargets = new Map();
+  const inFlight = new Map(), reconciling = new Map(), activeTargets = new Map();
   let acceptingSends = true;
   function canSend() { return !!(acceptingSends && sendGate && sender.supports(lastVersion) && journal.status().available === true); }
   async function status() {
@@ -146,7 +160,47 @@ function createDotDesktopService(options = {}) {
       return { ok: true, receipt: { requestId: value.requestId.toLowerCase(), threadId: boundId, state: 'checking',
         submitted: null, shownInDesktopConversation: false, serverAcknowledged: false, executionConfirmed: false } };
     }
-    return { ok: true, receipt: journal.receipt(value.requestId, boundId) };
+    const requestId = value.requestId.toLowerCase();
+    const current = journal.receipt(requestId, boundId);
+    if (current.state !== 'unknown' || !acceptingSends || typeof sender.observe !== 'function' ||
+        typeof journal.reconciliationContext !== 'function' || typeof journal.assertReadyForReconcile !== 'function')
+      return { ok: true, receipt: current };
+    if (reconciling.has(requestId)) return reconciling.get(requestId);
+    if (activeTargets.has(boundId)) return { ok: true, receipt: current };
+    const context = journal.reconciliationContext(requestId, boundId);
+    if (!context || !sender.supports(context.baseline.version)) return { ok: true, receipt: current };
+    let registered = false, checkCode = null;
+    const operation = Promise.resolve().then(async () => {
+      try {
+        const result = await sender.observe(context, {
+          version: context.baseline.version,
+          onLocked(helper) { journal.registerChild(helper); registered = true; },
+          beforeAck(stage, request, operationId, digest) {
+            if (!['observe', 'observe-complete'].includes(stage) || request.requestId !== requestId ||
+                operationId !== context.operationId || digest !== context.baselineDigest) throw error('unknown', 503);
+            journal.assertReadyForReconcile(requestId, digest);
+          },
+          onObserved(frame) {
+            try { return journal.accept(requestId, frame.observation); }
+            catch (cause) { if (!['delivery-proof-unavailable', 'delivery-proof-reused'].includes(cause?.code)) throw cause;
+              checkCode = 'history-unavailable';
+              return journal.receipt(requestId, context.request.threadId); }
+          },
+          onFailure() { /* A failed read never resets or authorizes the original send. */ },
+          onClose(helper) { if (registered) { journal.unregisterChild(helper, true); registered = false; } }
+        });
+        return { ok: true, receipt: result, ...(checkCode ? { checkCode, checkMessage: RECEIPT_CHECK_MESSAGES[checkCode] } : {}) };
+      } catch (cause) {
+        const code = Object.hasOwn(RECEIPT_CHECK_MESSAGES, cause?.code) ? cause.code : 'unknown';
+        return { ok: true, receipt: journal.receipt(requestId, context.request.threadId), checkCode: code,
+          checkMessage: RECEIPT_CHECK_MESSAGES[code] || 'The receipt check could not be completed. The original send remains unconfirmed; do not resend.' };
+      }
+    }).finally(() => {
+      reconciling.delete(requestId);
+      if (activeTargets.get(context.request.threadId) === requestId) activeTargets.delete(context.request.threadId);
+    });
+    reconciling.set(requestId, operation); activeTargets.set(context.request.threadId, requestId);
+    return operation;
   }
   function json(res, statusCode, value) {
     if (res.destroyed) return;
@@ -188,7 +242,7 @@ function createDotDesktopService(options = {}) {
   }
   return { handle, status, snapshot, send, receipt,
     stopAcceptingSends() { acceptingSends = false; },
-    async drainSends() { acceptingSends = false; await Promise.allSettled([...inFlight.values()].map(value => value.operation)); },
-    close() { acceptingSends = false; if (inFlight.size) throw error('desktop-busy', 409); if (journal) journal.close({ allChildrenClosed: true }); } };
+    async drainSends() { acceptingSends = false; await Promise.allSettled([...inFlight.values()].map(value => value.operation).concat([...reconciling.values()])); },
+    close() { acceptingSends = false; if (inFlight.size || reconciling.size) throw error('desktop-busy', 409); if (journal) journal.close({ allChildrenClosed: true }); } };
 }
 module.exports = { createDotDesktopService, MAX_BODY_BYTES };

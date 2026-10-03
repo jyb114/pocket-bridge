@@ -27,6 +27,7 @@ const NODE = process.execPath;
  */
 const SUITE = [
   ['test-runtime-requirements.js', [], '源码运行的 Node.js 版本门槛与 CI、安装说明一致'],
+  ['test-gateway-listener.js', [], 'Actual owned HTTP/TCP listeners reserve the exact IPv4 tunnel origin, avoid occupied ports, share IPv6/upgrade handlers and roll back incomplete startup (no production service)'],
   ['check-frontend.js', [], '静态检查：脚本注入、id 引用、备选优先级表'],
   ['test-contrast.js', [], '静态检查：文字对比度是否过 AA、键盘焦点是否可见'],
   ['test-i18n.js', [], '静态检查：字典覆盖（真跑字典，不碰网络）'],
@@ -74,17 +75,24 @@ const SUITE = [
   ['test-daemon-operation-stop.js', [], 'Daemon admission leases fence delayed gateway/tunnel starts after stop and preserve uncertain child ownership (actual orchestration with synthetic HTTP/children; no native actions)'],
   ['test-tray-gateway-stop.js', [], 'Tray verifies scoped gateway identity, waits graceful shutdown and owns only pinned tunnel processes (PowerShell synthetic HTTP/CIM/process fixtures; no tray UI or real signals)', { platform: 'win32' }],
   ['test-dot-desktop.js', [], 'Native Dot durable identity, scoped history, encrypted service boundaries and driver lifecycle (isolated fixtures; no native actions)'],
+  ['test-dot-desktop-text.js', [], 'Observed Dot fragment serialization preserves exact self-message whitespace in both native readers and receipt hashes (PowerShell pure functions and exact synthetic proof; no native actions)', { platform: 'win32' }],
   ['test-dot-desktop-journal.js', [], 'Encrypted Dot receipts, continuity, parent ownership and immutable delivery proof (isolated files; no native actions)'],
   ['test-dot-desktop-send.js', [], 'Framed Dot helper acknowledgements, child lifetime and shutdown fences (isolated fake children; no native actions)'],
   ['test-dot-desktop-private-store.js', [], 'Private Dot provisioning, snapshot continuity and orderly shutdown (injected protection/ACL/identity; no OS acceptance)'],
   ['test-dot-desktop-runtime.js', [], 'Lazy Dot connect provisioning, unavailable targets and owned shutdown (injected native/store; no real desktop actions)'],
   ['test-dot-desktop-gateway.js', [], 'Dot uses the real gateway login, device proof and encryption gates (isolated HTTP; synthetic native history)'],
   ['test-dot-desktop-ui.js', [], 'Dot phone connect, refresh, draft preservation and authenticated encryption in a real browser (synthetic native data)', { platform: 'win32' }],
+  ['test-dot-desktop-source-guard.js', [], 'Exact Dot composer proof and guarded current-view metadata recovery with stale Codex mode (synthetic UIA; no desktop actions)', { platform: 'win32' }],
   ['test-codex-desktop-mode.js', [], '桌面代发英文和中文模式控件身份（PowerShell 纯函数；不操作桌面）', { platform: 'win32' }],
+    ['test-codex-desktop-source-guard.js', [], 'Codex empty-draft source attestation accepts only the observed idle or active composer tree and refuses altered drafts, attachments and identities (PowerShell synthetic UIA; no desktop actions)', { platform: 'win32' }],
+    ['test-codex-desktop-process-identity.js', [], 'Continuously held read-only process identity refuses process exit, replacement and changed birth/path at every native boundary (actual owned harmless process and isolated production functions; no desktop actions)', { platform: 'win32' }],
+    ['test-codex-desktop-focus-readiness.js', [], 'One native SetFocus waits for the exact unchanged composer with strict process/window checks and no input during readiness (isolated PowerShell functions; no desktop actions)', { platform: 'win32' }],
   ['test-codex-desktop-relay-e2ee.js', [], '桌面代发的真实网关认证路由及客户端加密互通（隔离 HTTP；假设备和交付）'],
   ['test-e2ee-missing-key.js', [], 'Public protected HTTP and WebSocket routes fail closed when encryption keys become unavailable (isolated HTTP and upgrade)'],
+  ['test-relay-local-exemption.js', [], 'Relay and forwarded requests cannot claim the direct-loopback proof exemption with a local Host (isolated loopback HTTP)'],
   ['test-codex-desktop-relay.js', [], '桌面代发回执、实际 Windows 路径及防重复日志（隔离 HTTP/RPC/driver；不控制真桌面）', { platform: 'win32' }],
   ['test-codex-desktop-relay-ui.js', [], '桌面代发手机按钮、草稿和收据（真实浏览器事件；隔离 RPC/driver；Windows 与浏览器）', { platform: 'win32' }],
+  ['test-codex-phone-keyboard.js', [], 'Phone keyboard viewport, Safari-style offsets, history position and composer controls (actual browser interactions with simulated visualViewport; no physical-device acceptance)', { platform: 'win32' }],
   ['test-dot-inbox.js', [], 'Dot MCP 收件箱协议与存储安全（隔离 HTTP；不代表真实 Dot 已接通）'],
   ['test-codex-lock-ux.js', [], '手机查看、回前台、交还写锁与桌面占用时队列不误送（隔离夹具）'],
   ['test-codex-first-turn.js', [], '首条消息前尚未落盘的真实协议回归：空会话可发送且不被空闲计时删除（隔离夹具）'],
@@ -138,12 +146,16 @@ const SUITE = [
   ['test-review-boundaries.js', [], '历史状态与加密失败边界（隔离，不碰真会话）'],
   ['test-narrow-kill.js', ['--static-only'], '窄杀进程：源码检查；本机 cloudflared 查询显式跳过'],
   ['test-tunnel-security.js', [], '公网来源边界：禁用 ngrok，非本机 Host 必须经过管理端点与加密闸门（隔离）'],
+  ['test-tunnel-probe.js', ['--isolated-only'], 'Owned HTTP/TCP probes require the exact gateway 204, reject foreign services and enforce absolute deadlines (no production tunnel)'],
   ['similarity-audit.js', [], '重复代码审计（只看文件）'],
   // 这条需要浏览器 —— runner 上有就用，没有就跳过（见下面的处理）。
   ['test-codex-interactions.js', [], '授权、问题、自填与 MCP 确认（隔离执行端；需要浏览器）'],
   ['test-codex-queue-mobile-save.js', [], '只读手机按钮保存待办：真实浏览器事件、隔离 HTTP 与队列文件持久化（需要浏览器）'],
   ['test-codex-menus-interactions.js', [], '手机菜单、项目路径、附件、改名归档操作（隔离浏览器）'],
   ['test-codex-thread-list-interactions.js', [], '旧会话分页和搜索的实际浏览器交互（隔离执行端）'],
+  ['test-codex-history-pagination.js', [], 'Actual browser history ordering, indexed rows, explicit retry and delayed conversation-switch isolation (synthetic read RPCs; no live gateway)', { platform: 'win32' }],
+  ['test-codex-history-polling.js', [], 'Completed-history cooldown preserves small status polling, full burst pages, manual refresh, unknown-state fallback and content deadlines (isolated observer)'],
+  ['test-codex-history-transport.js', [], 'Authenticated bounded history compression, exact unchanged-page revisions, fragmented TCP and legacy browser/server fallback (isolated read-only transport)'],
   ['test-codex-observer.js', ['--expanded', '--attachments', '--queue'],
     '界面行为（自带假执行端与本地 HTTP 服务；需要浏览器）']
 ];
@@ -178,7 +190,7 @@ for (const [file, args, why, environment] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-codex-observer.js','test-codex-interactions.js','test-codex-queue-mobile-save.js','test-codex-desktop-relay-ui.js','test-dot-desktop-ui.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-codex-observer.js','test-codex-interactions.js','test-codex-queue-mobile-save.js','test-codex-desktop-relay-ui.js','test-codex-phone-keyboard.js','test-codex-history-pagination.js','test-dot-desktop-ui.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;

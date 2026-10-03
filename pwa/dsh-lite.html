@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#ffffff">
-  <title>DSH · 手机版</title>
+  <title data-i18n="DSH · 手机版">DSH · 手机版</title>
   <link rel="stylesheet" href="/dsh-lite.css">
   <script src="/i18n.js" defer></script>
   <!-- 轻量版自己的三套文案（中文 / English / Español），在 i18n.js 之后注册。 -->
@@ -24,79 +24,79 @@
 </head>
 <body>
   <div class="app" id="app">
-    <nav class="rail" aria-label="DSH 导航">
+    <nav class="rail" aria-label="DSH 导航" data-i18n-aria="DSH 导航">
       <div class="rail-logo" aria-label="DSH">
         <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3.2 16.7c0-5.8 5.4-10.4 12.3-10.4 3.4 0 6.1 1 8 2.8l3.9-3-.6 5.6 3.1 1.6-4.3 2.1c-.5 6-5.3 10.3-11.4 10.3-4.7 0-8.8-2.7-10.2-6.7l5.9 1.7-2.3-5.3-4.4 1.3Z"/><path d="M13.2 8.1c2.4 2.7 3.8 5.2 4.4 8.2M19.1 9.4c1.8 2.4 2.4 5.3 1.9 8.2" class="rail-logo-lines"/><circle cx="10.6" cy="13.8" r="1" class="rail-logo-eye"/></svg>
       </div>
-      <button id="projects-toggle" class="rail-button" type="button" aria-label="项目与对话" title="项目与对话" aria-controls="sidebar" aria-expanded="true">
+      <button id="projects-toggle" class="rail-button" type="button" aria-label="项目与对话" title="项目与对话" data-i18n-aria="项目与对话" data-i18n-title="项目与对话" aria-controls="sidebar" aria-expanded="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 9h18M7 3v2M12 3v2"/></svg>
       </button>
-      <button id="rail-new-session" class="rail-button" type="button" aria-label="新建对话" title="新建对话" disabled>
+      <button id="rail-new-session" class="rail-button" type="button" aria-label="新建对话" title="新建对话" data-i18n-aria="新建对话" data-i18n-title="新建对话" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-8-8"/><path d="M5.5 18.5 4 21l4-1.2M17 3v8M13 7h8"/></svg>
       </button>
-      <button id="rail-activity" class="rail-button" type="button" aria-label="查看轨迹" title="查看轨迹">
+      <button id="rail-activity" class="rail-button" type="button" aria-label="查看轨迹" title="查看轨迹" data-i18n-aria="查看轨迹" data-i18n-title="查看轨迹">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c1.5 5.5 4.5 8.5 10 10-5.5 1.5-8.5 4.5-10 10-1.5-5.5-4.5-8.5-10-10 5.5-1.5 8.5-4.5 10-10z"/></svg>
       </button>
-      <button id="rail-screen" class="rail-button" type="button" aria-label="看电脑屏幕" title="看电脑屏幕">
+      <button id="rail-screen" class="rail-button" type="button" aria-label="看电脑屏幕" title="看电脑屏幕" data-i18n-aria="看电脑屏幕" data-i18n-title="看电脑屏幕">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
       </button>
-      <button id="rail-new-project" class="rail-button" type="button" aria-label="添加项目" title="添加项目" disabled>
+      <button id="rail-new-project" class="rail-button" type="button" aria-label="添加项目" title="添加项目" data-i18n-aria="添加项目" data-i18n-title="添加项目" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h7l2 2h8v11H3zM17 2v7M13.5 5.5h7"/></svg>
       </button>
-      <button id="rail-search" class="rail-button" type="button" aria-label="搜索项目和对话" title="搜索项目和对话" aria-pressed="false">
+      <button id="rail-search" class="rail-button" type="button" aria-label="搜索项目和对话" title="搜索项目和对话" data-i18n-aria="搜索项目和对话" data-i18n-title="搜索项目和对话" aria-pressed="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
       </button>
       <div class="rail-spacer"></div>
-      <button id="rail-settings" class="rail-button" type="button" aria-label="设置" title="设置" aria-controls="settings-menu" aria-expanded="false">
+      <button id="rail-settings" class="rail-button" type="button" aria-label="设置" title="设置" data-i18n-aria="设置" data-i18n-title="设置" aria-controls="settings-menu" aria-expanded="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-.7 2.1-2 .8-2-.9-2 3.5 1.6 1.4-.3 2.2-1.6 1.4 2 3.5 2-.9 2 .8L9 21h4l.7-2.1 2-.8 2 .9 2-3.5-1.6-1.4.3-2.2 1.6-1.4-2-3.5-2 .9-2-.8L13 3z"/><circle cx="11" cy="12" r="2.5"/></svg>
       </button>
-      <div id="settings-menu" class="settings-menu" hidden><strong>DSH 手机版</strong><button id="rail-reconnect" type="button">重新连接</button><a id="settings-codex" href="/codex">切换到 Codex</a><a id="settings-classic" href="#">打开原版界面</a></div>
+      <div id="settings-menu" class="settings-menu" hidden><strong data-i18n="DSH 手机版">DSH 手机版</strong><button id="rail-reconnect" type="button" data-i18n="重新连接">重新连接</button><a id="settings-codex" href="/codex" data-i18n="切换到 Codex">切换到 Codex</a><a id="settings-classic" href="#" data-i18n="打开原版界面">打开原版界面</a></div>
     </nav>
 
     <div class="workspace">
-      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭项目列表"></button>
-      <aside id="sidebar" class="sidebar" aria-label="项目和对话">
-        <header class="sidebar-header"><div><strong>探索未尽之境</strong><small>DSH · 手机版</small></div><button id="sidebar-close" class="icon-button mobile-only" type="button" aria-label="关闭项目列表">×</button></header>
-        <label for="nav-search" class="sr-only">搜索当前项目和对话</label><input id="nav-search" class="nav-search" type="search" placeholder="搜索当前项目和对话" hidden>
-        <div class="section-heading"><h2>项目</h2><button id="new-project" class="text-action" type="button" disabled>＋ 添加项目</button></div>
-        <div id="project-list" class="item-list" role="listbox" aria-label="项目列表"></div>
-        <div class="section-heading sessions-heading"><h2>对话</h2><button id="new-session" class="text-action" type="button" disabled>＋ 新对话</button></div>
-        <div id="session-list" class="item-list" role="listbox" aria-label="对话列表"></div>
-        <div class="sidebar-footer"><span id="connection-status" class="status" role="status" aria-live="polite">正在连接</span><button id="reconnect" class="text-action" type="button">重连</button></div>
+      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭项目列表" data-i18n-aria="关闭项目列表"></button>
+      <aside id="sidebar" class="sidebar" aria-label="项目和对话" data-i18n-aria="项目和对话">
+        <header class="sidebar-header"><div><strong data-i18n="探索未尽之境">探索未尽之境</strong><small data-i18n="DSH · 手机版">DSH · 手机版</small></div><button id="sidebar-close" class="icon-button mobile-only" type="button" aria-label="关闭项目列表" data-i18n-aria="关闭项目列表">×</button></header>
+        <label for="nav-search" class="sr-only" data-i18n="搜索当前项目和对话">搜索当前项目和对话</label><input id="nav-search" class="nav-search" type="search" placeholder="搜索当前项目和对话" data-i18n-ph="搜索当前项目和对话" hidden>
+        <div class="section-heading"><h2 data-i18n="项目">项目</h2><button id="new-project" class="text-action" type="button" data-i18n="＋ 添加项目" disabled>＋ 添加项目</button></div>
+        <div id="project-list" class="item-list" role="listbox" aria-label="项目列表" data-i18n-aria="项目列表"></div>
+        <div class="section-heading sessions-heading"><h2 data-i18n="对话">对话</h2><button id="new-session" class="text-action" type="button" disabled>＋ 新对话</button></div>
+        <div id="session-list" class="item-list" role="listbox" aria-label="对话列表" data-i18n-aria="对话列表"></div>
+        <div class="sidebar-footer"><span id="connection-status" class="status" role="status" aria-live="polite">正在连接</span><button id="reconnect" class="text-action" type="button" data-i18n="重连">重连</button></div>
       </aside>
 
       <main class="chat" id="chat">
-        <div id="error-banner" class="error-banner" role="alert" hidden><span id="error-text"></span><button id="error-retry" type="button">重试</button></div>
-        <header class="chat-title"><div class="chat-heading"><h1 id="session-title">选择一个对话</h1><span id="project-name"></span></div><div class="chat-actions"><button id="crypto-chip" class="crypto-chip" type="button" hidden></button><button id="files-open" class="classic-link" type="button" disabled>文件</button><button id="stop-session" class="stop-button" type="button" hidden>停止</button><a id="classic-view" class="classic-link" href="#" title="打开原版界面">原版界面</a></div></header>
-        <nav class="chat-tabs" aria-label="对话视图"><button id="tab-conversation" class="chat-tab" type="button" aria-current="page">对话</button><button id="tab-activity" class="chat-tab" type="button">轨迹</button></nav>
+        <div id="error-banner" class="error-banner" role="alert" hidden><span id="error-text"></span><button id="error-retry" type="button" data-i18n="重试">重试</button></div>
+        <header class="chat-title"><div class="chat-heading"><h1 id="session-title">选择一个对话</h1><span id="project-name"></span></div><div class="chat-actions"><button id="crypto-chip" class="crypto-chip" type="button" hidden></button><button id="files-open" class="classic-link" type="button" data-i18n="文件" disabled>文件</button><button id="stop-session" class="stop-button" type="button" hidden>停止</button><a id="classic-view" class="classic-link" href="#" title="打开原版界面" data-i18n="原版界面" data-i18n-title="打开原版界面">原版界面</a></div></header>
+        <nav class="chat-tabs" aria-label="对话视图" data-i18n-aria="对话视图"><button id="tab-conversation" class="chat-tab" type="button" data-i18n="对话" aria-current="page">对话</button><button id="tab-activity" class="chat-tab" type="button" data-i18n="轨迹">轨迹</button></nav>
         <div id="empty-state" class="empty-state">选择项目和对话，或新建对话。</div>
         <div id="history-bar" class="history-bar" hidden><button id="load-older" type="button">加载更早内容</button></div>
         <ol id="record-list" class="record-list" aria-live="polite" aria-relevant="additions text"></ol>
-        <section id="interaction-list" class="interactions" aria-label="待处理请求" aria-live="polite"></section>
-        <p id="interaction-note" class="interaction-note" hidden>当前连接尚不能在手机端处理 DSH 的授权、选择或询问。遇到这类步骤，请在电脑端完成；对话内容仍可在此查看。</p>
+        <section id="interaction-list" class="interactions" aria-label="待处理请求" data-i18n-aria="待处理请求" aria-live="polite"></section>
+        <p id="interaction-note" class="interaction-note" data-i18n="当前连接尚不能在手机端处理 DSH 的授权、选择或询问。遇到这类步骤，请在电脑端完成；对话内容仍可在此查看。" hidden>当前连接尚不能在手机端处理 DSH 的授权、选择或询问。遇到这类步骤，请在电脑端完成；对话内容仍可在此查看。</p>
         <!-- C26 目标条：**照电脑端的 GoalBar 做** —— 图标 + 阶段 + 单行截断的目标正文，
              右边圆形图标按钮（暂停/恢复、编辑、清除），编辑是**同一条里的内联输入框**。
              电脑端完成的目标什么都不渲染，这里也一样（renderGoalBar 里直接隐藏）。 -->
-        <section id="goal-bar" class="goal-bar" aria-label="目标" hidden></section>
+        <section id="goal-bar" class="goal-bar" aria-label="目标" data-i18n-aria="目标" hidden></section>
         <!-- C12 排队消息。任务执行中发出的消息在电脑端会排队，原来手机端**完全看不到**
              （使用者原话：「在任务执行的时候发送信息，在手机端不显示」）。 -->
-        <section id="queue-panel" class="queue-panel" aria-label="排队中的消息" hidden>
+        <section id="queue-panel" class="queue-panel" aria-label="排队中的消息" data-i18n-aria="排队中的消息" hidden>
           <div class="queue-head"><strong id="queue-title">排队中（会在这一轮结束后发出）</strong></div>
           <ul id="queue-list" class="queue-list"></ul>
         </section>
         <form id="composer" class="composer">
           <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
           <div class="composer-row">
-            <label for="message-input" class="sr-only">发送给 DSH 的消息</label>
-            <textarea id="message-input" rows="2" placeholder="给 DSH 发送消息…" disabled></textarea>
+            <label for="message-input" class="sr-only" data-i18n="发送给 DSH 的消息">发送给 DSH 的消息</label>
+            <textarea id="message-input" rows="2" placeholder="给 DSH 发送消息…" data-i18n-ph="给 DSH 发送消息…" disabled></textarea>
             <div id="composer-bottom" class="composer-bottom">
               <input id="upload-input" class="sr-only" type="file" multiple>
-              <button id="upload-button" class="upload-button" type="button" aria-label="上传文件" title="上传文件" disabled>＋</button>
-              <div id="composer-picks" class="composer-picks" aria-label="模型、工具配置和目标"></div>
-              <button id="send-button" class="send-button" type="submit" aria-label="发送" disabled>↑</button>
+              <button id="upload-button" class="upload-button" type="button" aria-label="上传文件" title="上传文件" data-i18n-aria="上传文件" data-i18n-title="上传文件" disabled>＋</button>
+              <div id="composer-picks" class="composer-picks" aria-label="模型、工具配置和目标" data-i18n-aria="模型、工具配置和目标"></div>
+              <button id="send-button" class="send-button" type="submit" aria-label="发送" data-i18n-aria="发送" disabled>↑</button>
             </div>
           </div>
-          <div class="composer-status"><span id="composer-connection" class="status" data-state="connecting">正在连接</span><button id="composer-balance" type="button">余额 …</button></div>
+          <div class="composer-status"><span id="composer-connection" class="status" data-state="connecting">正在连接</span><button id="composer-balance" type="button" data-i18n="余额 …">余额 …</button></div>
         </form>
       </main>
     </div>
@@ -104,28 +104,28 @@
 
   <div id="project-modal" class="modal-backdrop" hidden>
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="project-modal-title">
-      <h2 id="project-modal-title">选择电脑上的文件夹</h2>
-      <p>这里选择的是电脑目录，手机文件不会成为项目目录。</p>
+      <h2 id="project-modal-title" data-i18n="选择电脑上的文件夹">选择电脑上的文件夹</h2>
+      <p data-i18n="这里选择的是电脑目录，手机文件不会成为项目目录。">这里选择的是电脑目录，手机文件不会成为项目目录。</p>
       <form id="project-form">
-        <label for="project-path">电脑文件夹路径</label>
-        <div class="path-row"><input id="project-path" type="text" autocomplete="off" spellcheck="false" placeholder="例如 D:\项目\我的应用" required><button id="browse-folder" type="button" hidden>浏览</button></div>
+        <label for="project-path" data-i18n="电脑文件夹路径">电脑文件夹路径</label>
+        <div class="path-row"><input id="project-path" type="text" autocomplete="off" spellcheck="false" placeholder="例如 D:\项目\我的应用" data-i18n-ph="例如 D:\项目\我的应用" required><button id="browse-folder" type="button" data-i18n="浏览" hidden>浏览</button></div>
         <div id="folder-browser" class="folder-browser" hidden></div>
-        <div class="modal-actions"><button id="project-cancel" type="button">取消</button><button id="project-submit" type="submit">选择此文件夹</button></div>
+        <div class="modal-actions"><button id="project-cancel" type="button" data-i18n="取消">取消</button><button id="project-submit" type="submit">选择此文件夹</button></div>
       </form>
     </section>
   </div>
   <div id="files-modal" class="modal-backdrop" hidden>
     <section class="modal files-modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
-      <h2 id="files-modal-title">电脑工作区文件</h2>
-      <p>只显示当前对话所属项目。点文件读取后，再点“保存”下载到手机。</p>
+      <h2 id="files-modal-title" data-i18n="电脑工作区文件">电脑工作区文件</h2>
+      <p data-i18n="只显示当前对话所属项目。点文件读取后，再点“保存”下载到手机。">只显示当前对话所属项目。点文件读取后，再点“保存”下载到手机。</p>
       <div id="files-project" class="files-project"></div>
-      <div class="files-navigation"><button id="files-up" type="button" disabled>↑ 上一级</button><span id="files-current">项目根目录</span></div>
+      <div class="files-navigation"><button id="files-up" type="button" data-i18n="↑ 上一级" disabled>↑ 上一级</button><span id="files-current">项目根目录</span></div>
       <label for="files-filter" class="sr-only" data-i18n="筛选当前列表">筛选当前列表</label>
       <input id="files-filter" class="files-filter" type="search" autocomplete="off" placeholder="筛选当前列表" data-i18n-ph="筛选当前列表">
       <div id="files-list" class="folder-browser files-list" role="list"></div>
-      <button id="files-more" class="files-more" type="button" hidden>加载更多文件</button>
+      <button id="files-more" class="files-more" type="button" data-i18n="加载更多文件" hidden>加载更多文件</button>
       <p id="files-status" class="files-status" role="status" aria-live="polite"></p>
-      <div class="modal-actions"><button id="files-close" type="button">关闭</button></div>
+      <div class="modal-actions"><button id="files-close" type="button" data-i18n="关闭">关闭</button></div>
     </section>
   </div>
 </body>

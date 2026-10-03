@@ -57,37 +57,55 @@ function journalFixture() {
   return { file, journal, options, body, failPersistence() { failRename = true; },
     loseContinuity() { marker = { ...marker, provisioned: false }; } };
 }
-function observedBaseline(request, operationId) {
+function observedBaseline(request, operationId, rowCount = 1) {
   const value = { schemaVersion: 1, requestId: request.requestId, operationId, requestFingerprint: P.fingerprint(request),
     threadId: request.threadId, hostId: 'durable', packageFamilyName: 'OpenAI.Codex_2p2nqsd0c76g0', version: VERSION,
     windowHandle: '1', processId: 1, creationTicks: '1', viewportRuntimeId: '1,2', messageListRuntimeId: '1,3',
-    observationSequence: 1, observedAt: 100, materializedRowCount: 1, completeMaterializedScope: true,
+    observationSequence: 1, observedAt: 100, materializedRowCount: rowCount, completeMaterializedScope: true,
     settled: true, viewportBounds: [0, 0, 800, 600],
-    rows: [{ observationId: P.sha(crypto.randomUUID()), role: 'assistant', textSha256: P.sha('prior fixture') }] };
+    rows: Array.from({ length: rowCount }, (_, index) =>
+      ({ observationId: P.sha(crypto.randomUUID()), role: 'assistant', textSha256: P.sha('prior fixture ' + index) })) };
   value.contextGeneration = P.contextGeneration(value); return P.normalizeObservation(value, request, operationId);
 }
 function harness(fixture, settings = {}) {
   const scheduler = createDesktopActionScheduler(), powershell = path.join(base, 'fixture-powershell.exe');
   const harness = { spawns: [], acknowledgements: [], phaseRecords: [], observations: [], scheduler, eof: 0, kills: 0,
-    child: null, input: null, mode: settings.mode || 'success', closeOnEOF: settings.closeOnEOF !== false };
+    child: null, input: null, inputs: [], frameSizes: [], mode: settings.mode || 'success', closeOnEOF: settings.closeOnEOF !== false };
   function spawn(executable, args, options) {
     const child = new EventEmitter(); child.pid = harness.mode === 'spawn-error-no-pid' ? undefined : 2001;
     child.stdout = new EventEmitter(); child.stderr = { resume() {} };
     child.stdin = new EventEmitter(); child.closed = false; child.helper = { pid: child.pid, creationTicks: '100001' };
     child.finish = () => { if (!child.closed) { child.closed = true; child.emit('close', 0); } };
-    child.emitFrame = value => child.stdout.emit('data', Buffer.from(JSON.stringify(value) + '\n'));
+    child.emitFrame = value => { const bytes = Buffer.from(JSON.stringify(value) + '\n');
+      harness.frameSizes.push(bytes.length); child.stdout.emit('data', bytes); };
     child.kill = () => { harness.kills++; return true; };
     child.stdin.end = () => { harness.eof++; if (harness.closeOnEOF) setImmediate(child.finish); };
     child.stdin.write = text => {
       const value = JSON.parse(text); if (harness.mode === 'initial-write-error' && value.action === 'send') throw new Error('fixture-initial-write-error');
+      if (value.action === 'observe') {
+        harness.inputs.push(value); harness.input = value;
+        const record = fixture.body().records.find(record => record.request.requestId === value.requestId);
+        assert.equal(record.state, 'unknown'); assert.equal(record.invokeAuthorized, true);
+        assert.equal(Object.hasOwn(value, 'text'), false); assert.equal(Object.hasOwn(value, 'testOnlyPermitSend'), false);
+        assert.equal(value.permitReadOnlyReceipt, true); assert.equal(value.operationId, record.operationId);
+        assert.deepEqual(value.receiptBaseline, record.baseline); assert.equal(value.baselineDigest, record.baselineDigest);
+        harness.request = record.request; harness.before = value.receiptBaseline;
+        harness.frame = (stage, sequence, fields = {}) => ({ protocol: 1, operationId: value.operationId,
+          requestId: value.requestId, requestFingerprint: value.requestFingerprint, sequence, stage, ...fields });
+        harness.after = { ...JSON.parse(JSON.stringify(harness.before)), observationSequence: harness.before.observationSequence + 1,
+          observedAt: 200, materializedRowCount: harness.before.rows.length + 1, rows: [...harness.before.rows,
+            { observationId: P.sha(crypto.randomUUID()), role: 'user', textSha256: value.textSha256 }] };
+        setImmediate(() => child.emitFrame(harness.frame('locked', 1, { helper: child.helper }))); return true;
+      }
       if (value.action === 'send') {
+        harness.inputs.push(value);
         harness.input = value; harness.request = { requestId: value.requestId, threadId: value.expectedThreadId, text: value.text };
-        harness.before = observedBaseline(harness.request, value.operationId);
+        harness.before = observedBaseline(harness.request, value.operationId, settings.baselineRows || 1);
         const frame = (stage, sequence, fields = {}) => ({ protocol: 1, operationId: value.operationId,
           requestId: value.requestId, requestFingerprint: value.requestFingerprint, sequence, stage, ...fields });
         harness.frame = frame;
         harness.after = { ...JSON.parse(JSON.stringify(harness.before)), observationSequence: 2, observedAt: 101,
-          materializedRowCount: 2, rows: [...harness.before.rows,
+          materializedRowCount: harness.before.rows.length + 1, rows: [...harness.before.rows,
             { observationId: P.sha(crypto.randomUUID()), role: 'user', textSha256: P.sha(value.text) }] };
         if (harness.mode === 'spawn-error-no-pid') setImmediate(() => child.emit('error', new Error('fixture-no-pid-spawn-error')));
         else if (harness.mode !== 'hold-locked') setImmediate(() => child.emitFrame(frame('locked', 1,
@@ -95,9 +113,29 @@ function harness(fixture, settings = {}) {
         return true;
       }
       harness.acknowledgements.push(value);
+      if (value.stage === 'observe') {
+        const manifest = JSON.parse(fs.readFileSync(path.join(fixture.file + '.owner-lock', 'owner.json'), 'utf8'));
+        assert.deepEqual(manifest.children, [child.helper]);
+        assert.equal(value.baselineDigest, P.baselineDigest(harness.before));
+        if (harness.mode === 'observe-hold') return true;
+        if (harness.mode === 'observe-error') {
+          setImmediate(() => child.emitFrame(harness.frame('error', 2, { baselineDigest: value.baselineDigest,
+            code: 'clipboard-unavailable', submitted: false, draftRemaining: false }))); setImmediate(child.finish); return true;
+        }
+        const observed = JSON.parse(JSON.stringify(harness.after));
+        if (settings.changeObservation) settings.changeObservation(observed, harness);
+        setImmediate(() => child.emitFrame(harness.frame(harness.mode === 'observe-send-stage' ? 'prepared' : 'observed', 2,
+          { baselineDigest: value.baselineDigest, observation: observed })));
+        return true;
+      }
+      if (value.stage === 'observe-complete') { if (harness.mode !== 'observe-before-close') setImmediate(child.finish); return true; }
       if (value.stage === 'continue-preflight') {
         const manifest = JSON.parse(fs.readFileSync(path.join(fixture.file + '.owner-lock', 'owner.json'), 'utf8'));
         assert.deepEqual(manifest.children, [child.helper]);
+        if (harness.mode === 'source-unverified') {
+          setImmediate(() => child.emitFrame(harness.frame('error', 2, { baselineDigest: null,
+            code: 'source-unverified', submitted: false, draftRemaining: false }))); setImmediate(child.finish); return true;
+        }
         if (harness.mode === 'eof-before-prepared') { setImmediate(child.finish); return true; }
         if (harness.mode === 'prepare-write-failure') fixture.failPersistence();
         setImmediate(() => child.emitFrame(harness.frame('prepared', 2,
@@ -143,7 +181,7 @@ function harness(fixture, settings = {}) {
     };
     harness.child = child; harness.spawns.push({ executable, args, options }); return child;
   }
-  const sender = createDotTextSender({ testOnlyEnableSend: settings.enable !== false, platform: 'win32', allowedSendVersions: [VERSION],
+  const sender = createDotTextSender({ ...(settings.senderSendOptions === undefined ? { testOnlyEnableSend: settings.enable !== false } : settings.senderSendOptions), platform: 'win32', allowedSendVersions: [VERSION],
     powershellPath: powershell, timeoutMs: settings.timeoutMs || 5000, spawn, runDesktopAction: scheduler.runDesktopAction,
     async observeHelper(pid) {
       harness.observations.push(pid); const child = harness.child;
@@ -161,11 +199,12 @@ function harness(fixture, settings = {}) {
 }
 async function serviceFixture(settings = {}, previous) {
   const f = previous || journalFixture(), h = harness(f, settings), target = settings.target || crypto.randomUUID();
-  const driver = { inspect: async () => ({ available: true, desktopRunning: true, version: VERSION }),
+  const driver = { inspect: async () => ({ available: true, desktopRunning: true, version: settings.inspectionVersion || VERSION }),
     snapshot: async () => ({ hostId: 'durable', threadId: target, observedAt: 1,
       historyScope: 'materialized-recent', materializedRowCount: 0, messages: [] }) };
-  const service = createDotDesktopService({ driver, journal: f.journal, textSender: h.sender, testOnlyEnableSend: settings.serviceEnable !== false });
-  await service.snapshot({ action: 'connect', threadId: target });
+  const service = createDotDesktopService({ driver, journal: settings.serviceJournal || f.journal, textSender: h.sender,
+    ...(settings.serviceSendOptions === undefined ? { testOnlyEnableSend: settings.serviceEnable !== false } : settings.serviceSendOptions) });
+  if (settings.connect !== false) await service.snapshot({ action: 'connect', threadId: target });
   const request = () => ({ action: 'send', requestId: crypto.randomUUID(), threadId: target, text: 'fixture text  \n' });
   return { f, h, service, target, request };
 }
@@ -179,10 +218,56 @@ async function httpCall(service, value, decrypted) {
 }
 
 (async () => {
+  await check('canonical sender and service opt-in deliver once through the existing committed ACK protocol', async () => {
+    for (const permission of [{ enableSend: true }, { testOnlyEnableSend: true }, { enableSend: true, testOnlyEnableSend: true }]) {
+      const x = await serviceFixture({ senderSendOptions: permission, serviceSendOptions: permission });
+      const request = x.request(), first = await x.service.send(request), repeated = await x.service.send(request);
+      assert.equal(first.receipt.state, 'accepted'); assert.equal(repeated.receipt.state, 'accepted'); assert.equal(x.h.spawns.length, 1);
+      assert.deepEqual(x.h.acknowledgements.map(value => value.stage), ['continue-preflight', 'paste', 'invoke']); x.service.close();
+    }
+  });
+  await check('missing permission and canonical false in either sender or service refuse dispatch', async () => {
+    for (const permission of [{}, { enableSend: false }, { enableSend: false, testOnlyEnableSend: false }]) {
+      for (const location of ['senderSendOptions', 'serviceSendOptions']) {
+        const x = await serviceFixture({ [location]: permission }); await rejects(x.service.send(x.request()), 'send-unavailable');
+        assert.equal(x.h.spawns.length, 0); x.service.close();
+      }
+    }
+  });
+  await check('sender and service reject nonboolean or conflicting capability declarations before any helper call', async () => {
+    let calls = 0;
+    const driver = { inspect: async () => { calls++; return {}; }, snapshot: async () => { calls++; return {}; } };
+    for (const permission of [{ enableSend: 'true' }, { enableSend: 1 }, { enableSend: null }, { enableSend: [] },
+      { testOnlyEnableSend: 'true' }, { testOnlyEnableSend: 0 }, { testOnlyEnableSend: null },
+      { enableSend: true, testOnlyEnableSend: false }, { enableSend: false, testOnlyEnableSend: true }]) {
+      assert.throws(() => createDotTextSender({ ...permission, spawn() { calls++; } }), cause => cause.code === 'invalid-request' && cause.submitted === false);
+      assert.throws(() => createDotDesktopService({ ...permission, driver }), cause => cause.code === 'invalid-request');
+    }
+    assert.equal(calls, 0);
+  });
+  await check('canonical permission still requires the supported version connected target ready journal and open admission', async () => {
+    const enabled = { senderSendOptions: { enableSend: true }, serviceSendOptions: { enableSend: true } };
+    const wrongVersion = await serviceFixture({ ...enabled, inspectionVersion: '9.9.9.9' });
+    await rejects(wrongVersion.service.send(wrongVersion.request()), 'send-unavailable'); assert.equal(wrongVersion.h.spawns.length, 0); wrongVersion.service.close();
+    const unbound = await serviceFixture({ ...enabled, connect: false });
+    await rejects(unbound.service.send(unbound.request()), 'not-connected'); assert.equal(unbound.h.spawns.length, 0); unbound.service.close();
+    let unavailableClosed = false;
+    const unavailable = await serviceFixture({ ...enabled, serviceJournal: { status() { return { available: false }; }, close() { unavailableClosed = true; } } });
+    await rejects(unavailable.service.send(unavailable.request()), 'journal-unavailable'); assert.equal(unavailable.h.spawns.length, 0); unavailable.service.close(); assert.equal(unavailableClosed, true); unavailable.f.journal.close({ allChildrenClosed: true });
+    const stopped = await serviceFixture(enabled); stopped.service.stopAcceptingSends();
+    await rejects(stopped.service.send(stopped.request()), 'send-unavailable'); assert.equal(stopped.h.spawns.length, 0); stopped.service.close();
+  });
   await check('default sender and service gates refuse Send without spawning a helper', async () => {
     const x = await serviceFixture({ serviceEnable: false }); await rejects(x.service.send(x.request()), 'send-unavailable');
     assert.equal(x.h.spawns.length, 0); assert.equal(x.h.sender.supports('9.9.9.9'), false); x.service.close();
     const y = await serviceFixture({ enable: false }); await rejects(y.service.send(y.request()), 'send-unavailable'); assert.equal(y.h.spawns.length, 0); y.service.close();
+  });
+  await check('unverified source refusal before prepare keeps its actionable code and grants no paste or Invoke ACK', async () => {
+    const x = await serviceFixture({ mode: 'source-unverified' });
+    await assert.rejects(x.service.send(x.request()), cause => cause.code === 'source-unverified' && cause.submitted === false &&
+      cause.message.includes('open Your dot and its profile') && cause.message.includes('keep any existing draft'));
+    assert.deepEqual(x.h.acknowledgements.map(value => value.stage), ['continue-preflight']);
+    assert.equal(x.f.body().records.length, 0); assert.equal(x.h.child.closed, true); x.service.close();
   });
   await check('prepared and sending are encrypted committed records before their ACK writes', async () => {
     const x = await serviceFixture(), request = x.request(), result = await x.service.send(request);
@@ -191,6 +276,17 @@ async function httpCall(service, value, decrypted) {
     assert(x.h.observations.length >= 4); assert.equal(result.receipt.serverAcknowledged, false); assert.equal(result.receipt.executionConfirmed, false);
     assert(!x.h.spawns[0].args.some(arg => [request.text, request.threadId, request.requestId].some(value => arg.includes(value))));
     assert.equal(x.h.spawns[0].options.windowsHide, true); x.service.close();
+  });
+  await check('a 128-row complete baseline traverses the unchanged framed sender within its output caps', async () => {
+    const x = await serviceFixture({ baselineRows: P.MAX_BASELINE_ROWS }), request = x.request();
+    const result = await x.service.send(request);
+    assert.equal(result.receipt.state, 'accepted'); assert.equal(x.h.spawns.length, 1);
+    const saved = x.f.body().records[0]; assert.equal(saved.baseline.rows.length, 128);
+    assert.deepEqual(saved.afterObservation.rows.slice(0, 128), saved.baseline.rows);
+    assert.equal(saved.afterObservation.rows.length, 129);
+    assert(x.h.frameSizes.every(bytes => bytes < 64 * 1024));
+    assert(x.h.frameSizes.reduce((sum, bytes) => sum + bytes, 0) < 128 * 1024);
+    assert.deepEqual(x.h.acknowledgements.map(value => value.stage), ['continue-preflight','paste','invoke']); x.service.close();
   });
   await check('actual spawned PID parent birth and executable independently gate all ACKs', async () => {
     for (const attestationField of ['pid', 'parentPid', 'creationTicks', 'path']) {
@@ -327,6 +423,98 @@ async function httpCall(service, value, decrypted) {
     const x = await serviceFixture({ loseContinuityAt: 3 }), cause = await x.service.send(x.request()).catch(value => value);
     assert.equal(cause.ok, undefined); assert.equal(cause.submitted, null);
     assert.deepEqual(x.h.acknowledgements.map(value => value.stage), ['continue-preflight']); x.service.close();
+  });
+  await check('receipt reconciliation observes the original unknown operation once without Send or public proof input', async () => {
+    const x = await serviceFixture({ mode: 'invalid-proof' }), request = x.request();
+    assert.equal((await x.service.send(request)).receipt.state, 'unknown');
+    const original = x.f.body().records[0]; x.h.mode = 'success';
+    const checked = await httpCall(x.service, { action: 'receipt', requestId: request.requestId, threadId: request.threadId }, true);
+    assert.equal(checked.status, 200); assert.equal(checked.body.receipt.state, 'accepted');
+    assert.equal(checked.body.receipt.serverAcknowledged, false); assert.equal(checked.body.receipt.executionConfirmed, false);
+    assert.deepEqual(x.h.inputs.map(input => input.action), ['send', 'observe']);
+    assert.deepEqual(x.h.acknowledgements.slice(3).map(ack => ack.stage), ['observe', 'observe-complete']);
+    const accepted = x.f.body().records[0]; assert.equal(accepted.operationId, original.operationId);
+    assert.deepEqual(accepted.baseline, original.baseline); assert.deepEqual(accepted.request, original.request);
+    assert.equal(JSON.stringify(checked.body).includes(request.text), false); assert.equal(Object.hasOwn(checked.body.receipt, 'baseline'), false);
+    await x.service.receipt({ action: 'receipt', requestId: request.requestId, threadId: request.threadId });
+    await x.service.send(request); assert.equal(x.h.spawns.length, 2);
+    assert.equal((await x.service.send(x.request())).receipt.state, 'accepted'); x.service.close();
+  });
+  await check('simultaneous receipt checks deduplicate and keep UI lease and drain through physical CLOSE', async () => {
+    const x = await serviceFixture({ mode: 'invalid-proof' }), request = x.request(); await x.service.send(request);
+    x.h.mode = 'observe-before-close'; const query = { action: 'receipt', requestId: request.requestId, threadId: request.threadId };
+    let settled = false, drained = false;
+    const first = x.service.receipt(query).then(value => { settled = true; return value; }), second = x.service.receipt(query);
+    await until(() => x.h.acknowledgements.some(ack => ack.stage === 'observe-complete'));
+    assert.equal(x.h.spawns.length, 2); assert.equal(settled, false); await assertBusy(x.h);
+    const drain = x.service.drainSends().then(() => { drained = true; }); await tick(); assert.equal(drained, false);
+    assert.throws(() => x.service.close(), cause => cause.code === 'desktop-busy');
+    x.h.child.finish(); assert.equal((await first).receipt.state, 'accepted'); assert.equal((await second).receipt.state, 'accepted');
+    await drain; assert.equal(drained, true); x.service.close();
+  });
+  await check('reconciliation refuses changed scope old-row proof extra user or changed previous assistant without replay', async () => {
+    for (const mutate of [after => { after.processId++; after.contextGeneration = P.contextGeneration(after); },
+      after => { after.creationTicks = '2'; after.contextGeneration = P.contextGeneration(after); },
+      after => { after.windowHandle = '2'; after.contextGeneration = P.contextGeneration(after); },
+      after => { after.version = '9.9.9.9'; }, after => { after.viewportBounds[0]++; },
+      after => { after.rows[0].textSha256 = P.sha('changed prior streaming assistant'); },
+      after => { after.rows.pop(); after.materializedRowCount--; },
+      after => { after.rows.push({ observationId: P.sha(crypto.randomUUID()), role: 'user', textSha256: P.sha('another user') }); after.materializedRowCount++; },
+      after => { after.rows[1].observationId = after.rows[0].observationId; },
+      after => { after.operationId = crypto.randomUUID(); }]) {
+      const x = await serviceFixture({ mode: 'invalid-proof', changeObservation: mutate }), request = x.request(); await x.service.send(request);
+      x.h.mode = 'success'; const checked = await x.service.receipt({ action: 'receipt', requestId: request.requestId, threadId: request.threadId });
+      assert.equal(checked.receipt.state, 'unknown'); assert.deepEqual(x.h.inputs.map(input => input.action), ['send', 'observe']);
+      await rejects(x.service.send(x.request()), 'pending-request-exists'); x.service.close();
+    }
+  });
+  await check('receipt reads before-send unknown failed accepted and unsupported contexts never spawn an observer', async () => {
+    for (const mode of ['prepared-failure', 'eof-prepared', 'success']) {
+      const x = await serviceFixture({ mode }), request = x.request(); await x.service.send(request);
+      await x.service.receipt({ action: 'receipt', requestId: request.requestId, threadId: request.threadId });
+      assert.equal(x.h.spawns.length, 1); x.service.close();
+    }
+    const x = await serviceFixture({ mode: 'invalid-proof' }), request = x.request(); await x.service.send(request);
+    x.service.stopAcceptingSends(); await x.service.receipt({ action: 'receipt', requestId: request.requestId, threadId: request.threadId });
+    assert.equal(x.h.spawns.length, 1); x.service.close();
+  });
+  await check('receipt foreign target public baseline or operation injection is refused without observation', async () => {
+    const x = await serviceFixture({ mode: 'invalid-proof' }), request = x.request(); await x.service.send(request);
+    const query = { action: 'receipt', requestId: request.requestId, threadId: request.threadId };
+    await rejects(x.service.receipt({ ...query, threadId: crypto.randomUUID() }), 'target-mismatch');
+    for (const fields of [{ baseline: x.h.before }, { operationId: crypto.randomUUID() }, { text: request.text }])
+      await rejects(x.service.receipt({ ...query, ...fields }), 'invalid-request');
+    assert.equal(x.h.spawns.length, 1); x.service.close();
+  });
+  await check('observe error or send-stage frame retains original unknown and never grants paste or invoke permission', async () => {
+    for (const mode of ['observe-error', 'observe-send-stage']) {
+      const x = await serviceFixture({ mode: 'invalid-proof' }), request = x.request(); await x.service.send(request);
+      x.h.mode = mode; const query = { action: 'receipt', requestId: request.requestId, threadId: request.threadId };
+      const checked = await x.service.receipt(query);
+      assert.equal(checked.receipt.state, 'unknown');
+      assert.equal(checked.checkCode, mode === 'observe-error' ? 'clipboard-unavailable' : 'unknown');
+      assert.match(checked.checkMessage, /original send remains unconfirmed; do not resend/);
+      assert.equal(x.f.body().records[0].code, 'delivery-unconfirmed');
+      assert.deepEqual(x.h.acknowledgements.slice(3).map(ack => ack.stage), ['observe']);
+      assert.equal(x.h.child.closed, true); assert.equal(x.f.body().records.length, 1); x.service.close();
+    }
+  });
+  await check('full 128-row original context reconciles through after-limit without exposing original text to helper', async () => {
+    const x = await serviceFixture({ mode: 'result-null', baselineRows: 128 }), request = x.request();
+    assert.equal((await x.service.send(request)).receipt.state, 'unknown'); x.h.mode = 'success';
+    assert.equal((await x.service.receipt({ action: 'receipt', requestId: request.requestId, threadId: request.threadId })).receipt.state, 'accepted');
+    assert.equal(x.f.body().records[0].afterObservation.rows.length, 129);
+    assert.equal(JSON.stringify(x.h.inputs[1]).includes(request.text), false);
+    assert(x.h.frameSizes.every(bytes => bytes < 64 * 1024)); x.service.close();
+  });
+  await check('receipt helper birth is independently reattested before both read ACKs and never turns unknown into accepted', async () => {
+    for (const attempt of [5, 6, 7]) {
+      const x = await serviceFixture({ mode: 'invalid-proof', badAttestationAt: attempt }), request = x.request();
+      assert.equal((await x.service.send(request)).receipt.state, 'unknown'); x.h.mode = 'success';
+      assert.equal((await x.service.receipt({ action: 'receipt', requestId: request.requestId, threadId: request.threadId })).receipt.state, 'unknown');
+      assert.deepEqual(x.h.acknowledgements.slice(3).map(ack => ack.stage), attempt === 7 ? ['observe'] : []);
+      assert.equal(x.h.child.closed, true); assert.equal(x.f.body().records[0].proof, null); x.service.close();
+    }
   });
   const passed = results.filter(value => value.passed).length;
   fs.writeFileSync(path.join(base, 'RESULT.json'), JSON.stringify({ nativeActions: false, productionKeys: false, passed,

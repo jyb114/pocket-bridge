@@ -4,6 +4,8 @@ Codex permits one active writer for a conversation. Reading its history and savi
 
 When another Codex instance owns the writer, the phone can continue in an independent copy or start a separate conversation in the same project. Pocket Bridge does not close a desktop process whose ownership it cannot verify.
 
+The experimental **Send through desktop Codex** option offers another route for the original conversation: the verified desktop app remains the writer and submits plain text through its normal composer. The bridge checks the exact conversation UUID and canonical project directory. This does not release a lock, close desktop Codex or promise immediate execution; a running target may queue the message. The desktop's model and mode apply, and attachments, approvals and questions are not forwarded through this text route. Leave the computer unused during native phone actions. Existing desktop drafts are preserved, and an unknown result must be checked rather than resent. See the exact operated cases and remaining limits in [Desktop relay acceptance](desktop-relay-experimental.md).
+
 ## Returning control to the computer
 
 The explicit handback action checks for running work, pending approvals or questions, queued messages, and unresolved control requests before proceeding. It cancels the subscription on the phone's actual Codex connection and requests that this connection close. Live updates remain paused until the user explicitly restores the phone connection.

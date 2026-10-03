@@ -33,6 +33,7 @@ const requestOrigin = require('./request-origin.js');
 const routes = require('./routes.js');
 const sessions = require('./sessions.js');
 const e2eeBridge = require('./ws-e2ee-bridge.js');
+const codexHistoryTransport = require('./codex-history-transport.js');
 const e2ee = require('./e2ee.js');
 const dshRuntime = require('./dsh-runtime.js');
 const codexFileAccess = require('./codex-file-access.js');
@@ -79,9 +80,10 @@ const codexDesktopRelay = require('./codex-desktop-relay.js').createDesktopRelay
   rpc: require('./codex-queue.js').createRpc(() => require('./targets.js').codex.port()),
   driver: require('./codex-desktop-driver.js').createDesktopDriver()
 });
-// Production remains read-only: no testOnlyEnableSend option is supplied.
-// Construction/status cannot provision keys or start a native helper.
-const dotDesktopRuntime = require('./dot-desktop-runtime.js').createDotDesktopRuntime({ base: BASE });
+// Native text Send is available only after an explicit verified Connect on
+// the accepted desktop package. Construction/status do not provision keys or
+// start a native helper. A journal receipt is display proof, not a server ACK.
+const dotDesktopRuntime = require('./dot-desktop-runtime.js').createDotDesktopRuntime({ base: BASE, enableSend: true });
 const dotDesktop = dotDesktopRuntime.service;
 // 「释放电脑端的锁」—— 手机被独占写锁挡住时的唯一出路。为什么只有那两条路、
 // 以及为什么**不**许删锁文件，都写在 codex-lock.js 头部。
@@ -1683,10 +1685,17 @@ function servePwa(req, res, route) {
     }
   }
 
+  // Validate the exact public source representation, including compression.
+  // This does not apply to authenticated history, files, or content handlers.
+  const etag = '"' + crypto.createHash('sha256').update(body).digest('hex') + '"';
+  const cacheControl = route.noCache ? 'no-cache' : 'public, max-age=86400';
   const headers = {
     'content-type': route.type,
     'content-length': body.length,
-    'cache-control': route.noCache ? 'no-cache' : 'public, max-age=86400'
+    'cache-control': cacheControl,
+    etag,
+    // Every representation varies by encoding, including an identity response.
+    vary: 'Accept-Encoding'
   };
   if (enc) {
     headers['content-encoding'] = enc;
@@ -1695,8 +1704,16 @@ function servePwa(req, res, route) {
     headers['vary'] = 'Accept-Encoding';
   }
   if (route.swAllowed) headers['service-worker-allowed'] = '/';
+  const ifNoneMatch = String(req?.headers?.['if-none-match'] || '');
+  if ((!req.method || req.method === 'GET' || req.method === 'HEAD') &&
+      ifNoneMatch.split(',').some(value => value.trim() === '*' || value.trim().replace(/^W\//, '') === etag)) {
+    delete headers['content-length'];
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
   res.writeHead(200, headers);
-  res.end(body);
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 /** 时间无关的字符串比较 —— 别让对端靠响应时间逐字节猜出正确值 */
@@ -1866,6 +1883,9 @@ function notifyRateOk() {
 }
 
 function isLocalRequest(req) {
+  // A relay can forward to loopback with a local Host. Forwarding evidence
+  // must never grant the direct-computer device/proof exemption.
+  if (requestOrigin.viaRelay(req)) return false;
   if (!isOwnAddress(req)) return false;
   // 访问本机网卡地址也算本机，但只有本机 socket 来源才走到这里。
   // Host 的判定与 viaRelay 共用一处，避免一个入口接受的地址被另一个
@@ -2066,6 +2086,7 @@ function currentTunnelUrl() {
 
 /** 中间层是否在 IPv6 上监听 —— 决定公网 IPv6 那条路值不值得列出来。 */
 function listeningOnV6() {
+  if (gatewayListeners) return gatewayListeners.ipv6;
   try {
     const addrs = server.address();
     if (!addrs) return false;
@@ -6223,10 +6244,27 @@ async function proxyCodexWs(req, socket, head) {
     const cxSecret = req.__dshWsE2eeSecret || e2eeBridge.readSecret();
     const cxUseE2ee = e2eeBridge.wanted(req.url, cxSecret);
     const cxBridge = cxUseE2ee ? e2eeBridge.attach(cxSecret) : null;
+    // Only an authenticated encrypted phone connection can use the lossless
+    // history envelope. Other RPCs retain their exact frames and semantics.
+    const cxHistory = cxUseE2ee ? codexHistoryTransport.createTransport({
+      encrypted: true,
+      onClientOutput: (frame) => {
+        if (!socket.destroyed) socket.write(cxBridge.fromUpstream(frame));
+      },
+      onError: () => {
+        log('WS Codex history transport refused an invalid or over-limit stream');
+        socket.destroy(); upstream.destroy();
+      }
+    }) : null;
+    if (cxHistory) {
+      socket.once('close', () => cxHistory.close());
+      upstream.once('close', () => cxHistory.close());
+    }
     if (cxUseE2ee) log('WS Codex 通道已启用端到端加密');
 
     if (head && head.length) {
-      upstream.write(cxBridge ? cxBridge.fromClient(head) : head);
+      const out = cxHistory ? cxHistory.fromEncryptedClient(head, chunk => cxBridge.fromClient(chunk)) : head;
+      if (out.length) upstream.write(out);
     }
 
     // 手动转发，而不是 socket.pipe(upstream)。
@@ -6252,7 +6290,9 @@ async function proxyCodexWs(req, socket, head) {
         log(`WS Codex→手机 ${chunk.length}B op=${op}`);
         frames++;
       }
-      socket.write(cxBridge ? cxBridge.fromUpstream(chunk) : chunk);
+      const transformed = cxHistory ? cxHistory.fromUpstream(chunk) : chunk;
+      const out = cxBridge ? cxBridge.fromUpstream(transformed) : transformed;
+      if (out.length && !socket.destroyed) socket.write(out);
     });
 
     socket.on('data', (chunk) => {
@@ -6260,14 +6300,14 @@ async function proxyCodexWs(req, socket, head) {
       // 加密过的上行是 binary 帧，直接看原始字节的话 isText 永远是 false，
       // 结果是「手机上发消息了，但网关认为没人在用」——
       // 任务完成通知就不会发，而且完全看不出原因。
-      const out = cxBridge ? cxBridge.fromClient(chunk) : chunk;
+      const out = cxHistory ? cxHistory.fromEncryptedClient(chunk, wire => cxBridge.fromClient(wire)) : chunk;
       if (isText(out)) markActivity();
       if (frames < MAX_FRAMES) {
         const op = chunk.length ? '0x' + (chunk[0] & 0x0f).toString(16) : '?';
         log(`WS 手机→Codex ${chunk.length}B op=${op}`);
         frames++;
       }
-      upstream.write(out);
+      if (out.length && !upstream.destroyed) upstream.write(out);
     });
 
     // 同 DSH 那条：加密通道的丢帧必须留下痕迹，否则「连上了但没反应」
@@ -6298,6 +6338,7 @@ async function proxyCodexWs(req, socket, head) {
 
 const server = http.createServer(handleRequest);
 server.on('upgrade', handleUpgrade);
+let gatewayListeners = null;
 
 // ── 内网 HTTPS（可选）────────────────────────────────────────────────────────
 //
@@ -6391,11 +6432,6 @@ process.on('unhandledRejection', (reason) => {
 // Repeated signals do not bypass a pending or failed close with process.exit.
 process.on('SIGINT', () => { desktopLifecycle.scheduleShutdown(); });
 process.on('SIGTERM', () => { desktopLifecycle.scheduleShutdown(); });
-
-server.on('error', (err) => {
-  log(`FATAL 监听失败: ${err.message}`);
-  process.exit(1);
-});
 
 /** 按扩展名给个 content-type。认不出来的当二进制流出去。 */
 const FILE_MIME = {
@@ -7115,17 +7151,26 @@ refresh();
   const config = cfg.loadConfig();
   try { await refreshDshRuntime(true); } catch (err) { log(`Initial DSH discovery failed: ${err.message}`); }
   const preferred = Number(process.env.DSH_GW_PORT || config.gatewayPort || 8080);
-  const chosen = await cfg.findAvailablePort(preferred, 20);
-
-  if (!chosen) {
-    log(`从 ${preferred} 开始找不到可用端口，无法启动`);
+  try {
+    gatewayListeners = await require('./gateway-listener.js').bindGateway({
+      server,
+      createSibling() {
+        const sibling = http.createServer(handleRequest);
+        sibling.on('upgrade', handleUpgrade);
+        return sibling;
+      },
+      preferred, tries: 20, enableLan: config.enableLanAccess !== false,
+      identity: { pid: process.pid, bootId: GATEWAY_BOOT_ID, instanceId: INSTANCE_ID },
+      onPortBound(port) { PORT = port; configureAuthCookieScope(PORT); },
+      onError(error) { log(`FATAL 监听失败: ${error.message}`); process.exit(1); }
+    });
+  } catch (error) {
+    log(`Gateway listener unavailable (${error.code || 'startup-failed'}); no new port was advertised.`);
     process.exit(1);
   }
-  if (chosen !== preferred) {
-    log(`端口 ${preferred} 已被占用，改用 ${chosen}`);
+  if (PORT !== preferred) {
+    log(`端口 ${preferred} 已被占用，改用 ${PORT}`);
   }
-  PORT = chosen;
-  configureAuthCookieScope(PORT);
 
   try {
     fs.mkdirSync(cfg.LOG_DIR, { recursive: true });
@@ -7134,7 +7179,7 @@ refresh();
     log(`写 gateway-port.txt 失败: ${err.message}`);
   }
 
-  server.listen(PORT, () => {
+  {
     loadAuthProven();
     // 端口抢到了才写配对码文件（理由见 writePairCodeFile 的注释）
     writePairCodeFile();
@@ -7162,5 +7207,5 @@ refresh();
         require('./codex-threads.js').start(t.codex.port(), log);
       } catch (err) { log(`会话列表预热未能启动: ${err.message}`); }
     }, 8000);
-  });
+  }
 })();

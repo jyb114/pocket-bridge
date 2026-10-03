@@ -22,7 +22,7 @@ main{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18p
 #receipt{max-width:680px;margin:0 auto 8px;display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--card);border-radius:12px;font-size:12px}#receipt-text{flex:1;overflow-wrap:anywhere}#check-receipt{min-width:44px;min-height:44px;padding:6px 12px;background:transparent;border:1px solid var(--line);border-radius:10px}
 footer{flex-shrink:0;padding:6px 12px calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg)}.compose{max-width:680px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:10px 10px 8px 14px}.compose textarea{width:100%;min-height:48px;max-height:160px;resize:none;border:0;background:transparent;color:var(--fg);font:inherit;line-height:1.5;padding:0 3px;outline:none}.compose-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.compose-note{color:var(--dim);font-size:11px;line-height:1.35}.send{border:0;border-radius:50%;width:44px;height:44px;min-width:44px;background:var(--fg);color:var(--bg);font-size:25px}.privacy{max-width:680px;margin:7px auto 0;color:var(--dim);font-size:10px;text-align:center}
 #jump{position:fixed;bottom:calc(168px + env(safe-area-inset-bottom,0px));left:calc(50% - 22px);width:44px;height:44px;background:var(--card);border:1px solid var(--line);border-radius:50%;font-size:22px;box-shadow:0 3px 12px #0005}
-dialog{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:18px;max-width:calc(100vw - 28px);width:420px;padding:20px}dialog::backdrop{background:#0009}dialog h2{font-size:19px;margin:0 0 14px}dialog p{font-size:13px;color:var(--dim)}dialog .close{width:100%;margin-top:12px;min-height:44px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+dialog{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:18px;max-width:calc(100vw - 28px);max-height:calc(100dvh - 32px);width:420px;padding:20px;overflow-y:auto;overscroll-behavior:contain}dialog::backdrop{background:#0009}dialog h2{font-size:19px;margin:0 0 14px}dialog p{font-size:13px;color:var(--dim)}dialog summary{cursor:pointer;min-height:44px;padding:10px 0;font-size:13px}dialog .close{position:sticky;bottom:0;width:100%;margin-top:12px;min-height:44px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
 @media(max-width:340px){header{padding-left:6px;padding-right:6px;gap:4px}.identity{gap:6px}main{padding-left:12px;padding-right:12px}.identity small{font-size:10px}}
 </style>
 </head>
@@ -35,22 +35,89 @@ dialog{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </header>
 <p id="notice" role="status" aria-live="polite">Connect to the real Your dot in the official desktop app.</p>
 <main id="main">
-  <div id="empty" class="empty"><div class="orb" aria-hidden="true"></div><h1>Your dot, on your phone</h1><p>Read the current desktop conversation through Pocket Bridge. Connecting opens Your dot on the computer.</p><button id="connect" class="primary">Connect to Your dot</button></div>
+  <div id="empty" class="empty"><div class="orb" aria-hidden="true"></div><h1>Your dot, on your phone</h1><p>Talk to your desktop Dot. Connecting opens Your dot on the computer.</p><button id="connect" class="primary">Connect to Your dot</button></div>
   <div id="history" class="history" aria-label="Recent Dot conversation"></div>
   <div id="scope" class="scope" hidden>Only messages currently loaded in the desktop app are shown. Older messages may be missing.</div>
 </main>
 <button id="jump" hidden aria-label="Jump to latest message">↓</button>
 <footer>
   <div id="receipt" hidden><span id="receipt-text" role="status" aria-live="polite"></span><button id="check-receipt">Check receipt</button></div>
-  <div class="compose"><textarea id="draft" rows="2" maxlength="16000" aria-label="Message to Your dot" placeholder="Write a draft for Your dot…"></textarea><div class="compose-row"><span id="send-note" class="compose-note">Sending is not available yet.<br>Your draft stays on this page.</span><button id="send" class="send" disabled aria-label="Send message to Your dot">↑</button></div></div>
+  <div class="compose"><textarea id="draft" rows="2" maxlength="16000" aria-label="Message to Your dot" placeholder="Write a draft for Your dot…"></textarea><div class="compose-row"><span id="send-note" class="compose-note">Connect to check text sending. Drafts stay in this tab.</span><button id="send" class="send" disabled aria-label="Send message to Your dot">↑</button></div></div>
+  <div id="draft-status" class="privacy" role="status" aria-live="polite"></div>
   <div class="privacy">Encrypted phone connection · Keep the computer free while using phone mode.</div>
 </footer>
-<dialog id="details"><h2>About this connection</h2><p>Your dot runs through the official desktop app. Keep it open and signed in.</p><p>Only messages currently loaded in the desktop app can be shown. Use the desktop for attachments, calls, approvals and task controls.</p><p>A connected computer does not prove that Dot can run local tasks. Local execution and task status remain unverified.</p><p>Connecting and refreshing briefly use the computer and its clipboard. An existing desktop draft is preserved. Do not use the computer at the same time.</p><p>When text sending is available, a receipt confirms only that the exact new message appeared in the desktop Dot conversation. An uncertain send is never retried automatically.</p><button id="close-details" class="close">Close</button></dialog>
+<dialog id="details" aria-labelledby="details-title"><h2 id="details-title" tabindex="-1" autofocus>About this connection</h2>
+<p>Keep the official desktop app open and signed in. Leave the computer free while using phone mode.</p>
+<p>Only recent loaded messages are shown. Use the desktop for files, calls, approvals and task controls. Local task execution remains unverified.</p>
+<p>After connecting, drafts can be recovered by reloading this tab and reconnecting to the same Dot. Closing the tab may lose them. Recovery never sends a message.</p>
+<details><summary>Privacy and delivery details</summary><p>Connecting and refreshing briefly use the computer and its clipboard. An existing desktop draft is preserved.</p><p>Drafts and unresolved request text are saved in this tab's session storage in plain text, separately for this phone connection and verified Dot. Browser storage is not encrypted at rest.</p><p>When sending is available, a receipt confirms only that the exact new message appeared in desktop Dot. Server acknowledgement and task execution are unverified. An uncertain send is never retried automatically.</p></details>
+<button id="close-details" class="close">Close</button></dialog>
 <script>
 (function(){
 'use strict';
 var $=function(id){return document.getElementById(id);};
 var state={connected:false,threadId:null,busy:false,stale:false,messages:[],sendAvailable:false,pending:null};
+var draftPrefix='pocket-bridge-dot-text-v1:',pendingPrefix='pocket-bridge-dot-pending-v1:';
+var connectionSecret=window.__dshE2eeSecret,connectionOrigin=location.origin,connectionFragment=location.hash,connectionScope=null,pendingStorageBlocked=false,storageReady=false;
+function connectionChanged(){return window.__dshE2eeSecret!==connectionSecret||location.origin!==connectionOrigin||location.hash!==connectionFragment;}
+function validId(value){return typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);}
+function boundedText(value){return typeof value==='string'&&value.length<=16000&&new TextEncoder().encode(value).length<=16000&&value.indexOf('\0')<0;}
+function draftStatus(text){$('draft-status').textContent=text;}
+function resizeDraft(){var box=$('draft');box.style.height='auto';box.style.height=Math.min(160,Math.max(48,box.scrollHeight))+'px';}
+function draftKey(){return connectionScope&&state.threadId?draftPrefix+connectionScope+':'+state.threadId.toLowerCase():null;}
+function saveDraft(){
+  var key=draftKey(),text=$('draft').value;
+  if(connectionChanged()){draftStatus('The phone link changed. Reload the complete link before saving this draft.');return false;}
+  if(!key){if(text)draftStatus('Connect to verify this Dot before saving the draft for reload.');return false;}
+  if(!boundedText(text)){draftStatus('This draft is too long to recover after reload. Keep this page open.');return false;}
+  try{
+    if(text)sessionStorage.setItem(key,JSON.stringify({version:1,threadId:state.threadId,text:text}));else sessionStorage.removeItem(key);
+    draftStatus(text?'Draft saved for this tab.':'');return true;
+  }catch(_){draftStatus('The browser cannot save this draft. Keep this page open.');return false;}
+}
+function restoreDraft(){
+  // A saved draft is not trusted until an authenticated snapshot verifies the
+  // same durable Dot. Fresh typing always wins over a restored record.
+  var key=draftKey();if(!key||$('draft').value){if($('draft').value)saveDraft();return;}
+  try{
+    var raw=sessionStorage.getItem(key);if(!raw)return;
+    if(raw.length>100000)throw Error('invalid-draft');
+    var saved=JSON.parse(raw);
+    if(!saved||Object.keys(saved).length!==3||saved.version!==1||saved.threadId!==state.threadId||!boundedText(saved.text)||!saved.text)throw Error('invalid-draft');
+    $('draft').value=saved.text;resizeDraft();draftStatus('Draft restored for this Dot.');
+  }catch(_){draftStatus('The saved draft could not be recovered safely. Your current text is preserved.');}
+}
+function storePending(){
+  if(!connectionScope)return false;
+  try{
+    var key=pendingPrefix+connectionScope;
+    if(state.pending)sessionStorage.setItem(key,JSON.stringify({version:1,requestId:state.pending.requestId,threadId:state.pending.threadId,text:state.pending.text}));
+    else sessionStorage.removeItem(key);
+    return true;
+  }catch(_){pendingStorageBlocked=true;return false;}
+}
+var sessionReady=Promise.resolve().then(function(){
+  if(!connectionSecret||!crypto.subtle)throw Error('no-connection');
+  // Domain-separated fingerprint: never put the phone key itself in our draft
+  // records. sessionStorage already isolates origin and browser tab.
+  return crypto.subtle.digest('SHA-256',new TextEncoder().encode('pocket-bridge|dot-drafts|v1\0'+connectionOrigin+'\0'+connectionSecret));
+}).then(function(hash){
+  if(connectionChanged())throw Error('connection-changed');
+  connectionScope=Array.from(new Uint8Array(hash),function(byte){return byte.toString(16).padStart(2,'0');}).join('');
+  try{
+    var raw=sessionStorage.getItem(pendingPrefix+connectionScope);
+    if(raw){
+      if(raw.length>100000)throw Error('invalid-receipt');
+      var saved=JSON.parse(raw);
+      if(!saved||Object.keys(saved).length!==4||saved.version!==1||!validId(saved.requestId)||!validId(saved.threadId)||!boundedText(saved.text)||!saved.text)throw Error('invalid-receipt');
+      state.pending={requestId:saved.requestId,threadId:saved.threadId,text:saved.text};
+      receiptText('Reconnect to check the previous send. It will never be resent automatically.');
+    }
+    // Earlier unscoped receipts cannot be assigned to a different connection.
+    // Preserve the record and stop sending rather than guessing its owner.
+    if(sessionStorage.getItem('pocket-bridge-dot-pending')){pendingStorageBlocked=true;receiptText('An older receipt has no verified connection. Do not resend it.');$('check-receipt').hidden=true;}
+  }catch(_){pendingStorageBlocked=true;receiptText('The saved receipt could not be recovered safely. Do not resend.');$('check-receipt').hidden=true;}
+}).catch(function(){draftStatus('Draft recovery is unavailable. Keep this page open.');}).finally(function(){storageReady=true;controls();});
 $('back').href='/codex'+location.hash;
 function notice(text,error){$('notice').textContent=text;$('notice').classList.toggle('error',!!error);}
 function controls(){
@@ -59,25 +126,27 @@ function controls(){
   $('connect').disabled=state.busy;
   $('connect').textContent=state.busy?'Connecting…':'Connect to Your dot';
   $('connection').textContent=state.busy?'Reading desktop…':state.stale?'Last read · Refresh needed':state.connected?'Desktop Dot · Recent messages':'Desktop connection';
-  $('send').disabled=state.busy||!state.connected||!state.sendAvailable||!!state.pending||!$('draft').value.length||tooLong;
-  $('check-receipt').disabled=state.busy||!state.connected;
-  $('send-note').textContent=state.pending?'Check the previous receipt before sending again.':tooLong?'Message is too long. Use up to 16 KB of text.':state.sendAvailable?'Text only · Sent through the desktop Dot.':'Sending is not available yet. Your draft stays on this page.';
+  $('send').disabled=state.busy||connectionChanged()||!storageReady||pendingStorageBlocked||!state.connected||!state.sendAvailable||!!state.pending||!$('draft').value.length||tooLong;
+  $('check-receipt').disabled=state.busy||connectionChanged()||!state.connected;
+  $('send-note').textContent=connectionChanged()?'Phone link changed. Reload before sending.':pendingStorageBlocked?'Receipt recovery is unavailable. Do not resend.':state.pending?'Check the previous receipt before sending again.':tooLong?'Message is too long. Use up to 16 KB of text.':!state.connected?'Connect to check text sending. Drafts stay in this tab.':state.sendAvailable?'Text only · Sent through the desktop Dot.':'Sending is not available on this connection. Drafts stay in this tab.';
 }
 function privateRequest(body){
   var secret=window.__dshE2eeSecret,E=window.DshE2EE;
   if(!secret)return Promise.reject(Error('The encryption key is missing. Open the complete phone link.'));
+  if(connectionChanged())return Promise.reject(Error('The phone connection changed. Reload the complete phone link.'));
   if(!E||!E.encryptedFetch||!E.available())return Promise.reject(Error('The encrypted connection is not ready. Refresh this page.'));
   var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},body.action==='send'?95000:45000);
   return E.encryptedFetch(secret,'/dot/desktop',{method:'POST',credentials:'same-origin',cache:'no-store',
     headers:{'content-type':'application/json','x-dsh-dot':'1'},body:JSON.stringify(body),signal:controller.signal})
   .then(function(response){
+    if(connectionChanged())throw Error('The phone connection changed. Reload the complete phone link.');
     if(response.headers.get('x-dsh-e2ee-decrypted')!=='1')throw Error('The encrypted response could not be verified.');
     return response.json().then(function(value){if(!response.ok||value.ok===false){var error=Error(value.message||'Dot could not be read.');error.code=value.code;error.submitted=value.submitted;throw error;}return value;});
   }).finally(function(){clearTimeout(timer);});
 }
 function validSnapshot(value){
   return value&&value.hostId==='durable'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.threadId||'')&&
-    (!state.threadId||value.threadId===state.threadId)&&value.historyScope==='materialized-recent'&&Array.isArray(value.messages)&&
+    (!state.threadId||value.threadId===state.threadId)&&(!state.pending||value.threadId===state.pending.threadId)&&value.historyScope==='materialized-recent'&&Array.isArray(value.messages)&&
     value.messages.length<=40&&value.messages.every(function(message){return message&&['user','assistant'].indexOf(message.role)>=0&&typeof message.text==='string'&&typeof message.hasText==='boolean';});
 }
 function renderHistory(messages){
@@ -96,10 +165,10 @@ function renderHistory(messages){
 function load(action){
   if(state.busy)return Promise.resolve(false);state.busy=true;controls();
   notice(action==='connect'?'Opening Your dot on the computer…':'Reading recent desktop messages…');
-  var body={action:action};if(state.threadId)body.threadId=state.threadId;
-  return privateRequest(body).then(function(value){
+  return sessionReady.then(function(){var body={action:action};if(state.threadId||state.pending)body.threadId=state.threadId||(state.pending&&state.pending.threadId);return privateRequest(body);}).then(function(value){
     if(!validSnapshot(value))throw Error('The desktop Dot conversation could not be verified.');
-    state.threadId=value.threadId;state.connected=true;state.stale=false;state.sendAvailable=value.sendAvailable===true;renderHistory(value.messages);
+    state.threadId=value.threadId;state.connected=true;state.stale=false;state.sendAvailable=value.sendAvailable===true;renderHistory(value.messages);restoreDraft();
+    if(state.pending&&!pendingStorageBlocked){receiptText('Check the previous receipt before sending again. It will never be resent automatically.');$('check-receipt').hidden=false;}
     notice('Recent desktop messages · Task execution is unknown.');return true;
   }).catch(function(error){
     state.stale=state.connected;
@@ -108,23 +177,27 @@ function load(action){
   }).finally(function(){state.busy=false;controls();});
 }
 function receiptText(text){$('receipt').hidden=false;$('receipt-text').textContent=text;}
-function storePending(){try{if(state.pending)sessionStorage.setItem('pocket-bridge-dot-pending',JSON.stringify({requestId:state.pending.requestId,threadId:state.pending.threadId}));else sessionStorage.removeItem('pocket-bridge-dot-pending');}catch(_){} }
 function requestId(){if(crypto.randomUUID)return crypto.randomUUID();var bytes=new Uint8Array(16);crypto.getRandomValues(bytes);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;return Array.from(bytes,function(b){return b.toString(16).padStart(2,'0');}).join('').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/,'$1-$2-$3-$4-$5');}
 function applyReceipt(value){
   var r=value&&value.receipt,p=state.pending;
   if(!p||!r||r.requestId!==p.requestId||r.threadId!==p.threadId||['checking','prepared','sending','accepted','failed','unknown'].indexOf(r.state)<0)throw Error('The Dot receipt could not be verified. Do not resend.');
   if(r.state==='accepted'){
-    if(r.shownInDesktopConversation!==true||r.serverAcknowledged!==false||r.executionConfirmed!==false)throw Error('The Dot receipt could not be verified. Do not resend.');
-    if(typeof p.text==='string'&&$('draft').value===p.text){$('draft').value='';$('draft').style.height='auto';}
-    state.pending=null;storePending();receiptText('Shown in the desktop Dot conversation. Server receipt and task execution are unverified.');$('check-receipt').hidden=true;
+    if(r.submitted!==true||r.shownInDesktopConversation!==true||r.serverAcknowledged!==false||r.executionConfirmed!==false)throw Error('The Dot receipt could not be verified. Do not resend.');
+    if(typeof p.text==='string'&&$('draft').value===p.text){$('draft').value='';resizeDraft();}
+    if(saveDraft()){state.pending=null;if(!storePending())state.pending=p;}else{pendingStorageBlocked=true;state.pending=p;}
+    receiptText('Shown in the desktop Dot conversation. Server receipt and task execution are unverified.');$('check-receipt').hidden=!state.pending;
     notice('Message appeared in desktop Dot. Refresh to read its reply.');
   }else if(r.state==='failed'&&r.submitted===false){
     state.pending=null;storePending();receiptText('Nothing was sent. Your phone draft is preserved.');$('check-receipt').hidden=true;notice('Nothing was sent. Check the desktop draft or connection, then retry.',true);
-  }else{receiptText('Sending could not yet be confirmed. Do not resend; check this receipt.');$('check-receipt').hidden=false;notice('Previous send is unresolved. Your draft is preserved.',true);}
+  }else{receiptText('Sending could not yet be confirmed. Do not resend; check this receipt.');$('check-receipt').hidden=false;notice(typeof value.checkMessage==='string'&&value.checkMessage.length<=500?value.checkMessage:'Previous send is unresolved. Your draft is preserved.',true);}
 }
 function send(){
-  if($('send').disabled)return;var text=$('draft').value;
-  state.pending={requestId:requestId(),threadId:state.threadId,text:text};storePending();state.busy=true;controls();
+  if($('send').disabled)return;
+  if(connectionChanged()){notice('The phone connection changed. Reload the complete phone link; nothing was sent.',true);controls();return;}
+  var text=$('draft').value;
+  state.pending={requestId:requestId(),threadId:state.threadId,text:text};
+  if(!storePending()){state.pending=null;receiptText('Nothing was sent. The browser could not save the receipt; keep this page open.');notice('Receipt storage is unavailable. Your draft is preserved.',true);controls();return;}
+  state.busy=true;controls();
   receiptText('Checking the desktop and sending once…');$('check-receipt').hidden=false;notice('Sending through the official desktop Dot…');
   return privateRequest({action:'send',requestId:state.pending.requestId,threadId:state.threadId,text:text}).then(applyReceipt).catch(function(error){
     if(error.submitted===false){state.pending=null;storePending();receiptText('Nothing was sent. Your phone draft is preserved.');$('check-receipt').hidden=true;}
@@ -136,16 +209,16 @@ function checkReceipt(){
   if(state.busy||!state.connected||!state.pending)return;state.busy=true;controls();
   return privateRequest({action:'receipt',requestId:state.pending.requestId,threadId:state.pending.threadId}).then(applyReceipt).catch(function(error){receiptText('The previous send is still unconfirmed. Do not resend.');notice(error.message,true);}).finally(function(){state.busy=false;controls();});
 }
-try{var saved=JSON.parse(sessionStorage.getItem('pocket-bridge-dot-pending')||'null');if(saved&&/^[0-9a-f-]{36}$/.test(saved.requestId)&&/^[0-9a-f-]{36}$/.test(saved.threadId)){state.pending=saved;receiptText('Reconnect to check the previous send. It will never be resent automatically.');}}catch(_){}
 function updateJump(){var main=$('main');$('jump').hidden=!state.messages.length||main.scrollHeight-main.scrollTop-main.clientHeight<100;}
 $('connect').onclick=function(){load('connect');};$('refresh').onclick=function(){load('snapshot');};
 $('send').onclick=send;$('check-receipt').onclick=checkReceipt;
-$('draft').oninput=function(){this.style.height='auto';this.style.height=Math.min(160,Math.max(48,this.scrollHeight))+'px';controls();};
+$('draft').oninput=function(){resizeDraft();saveDraft();controls();};
 $('draft').onkeydown=function(event){if(event.key==='Enter'&&!event.shiftKey)event.stopPropagation();};
 $('main').onscroll=updateJump;$('jump').onclick=function(){$('main').scrollTop=$('main').scrollHeight;updateJump();};
-$('about').onclick=function(){if($('details').showModal)$('details').showModal();else $('details').setAttribute('open','');};
+$('about').onclick=function(){if($('details').showModal)$('details').showModal();else $('details').setAttribute('open','');$('details').scrollTop=0;$('details-title').focus({preventScroll:true});};
 $('close-details').onclick=function(){if($('details').close)$('details').close();else $('details').removeAttribute('open');};
 $('details').onclick=function(event){if(event.target===this){var r=this.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)this.close();}};
+window.addEventListener('hashchange',function(){if(connectionChanged()){state.stale=state.connected;notice('The phone link changed. Reload the complete link; nothing new was sent.',true);controls();}});
 controls();
 })();
 </script>

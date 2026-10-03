@@ -172,6 +172,9 @@ function bootstrap(rows) {
     await page.send('Input.insertText', { text });
   }
   async function open(index) {
+    // Repeated navigation can take longer than goto's short settling delay on
+    // a busy machine. Wait for actual app startup before reading its globals.
+    await wait(() => E(() => typeof state !== 'undefined' && !!state && !!document.getElementById('main')), 'phone app startup');
     if (await E(() => state.view === 'thread')) await click('#back');
     await wait(() => E(() => state.listReady && document.querySelectorAll('#thlist .item').length === 2), 'two fixture conversations');
     const position = await page.eval(`(()=>{const el=document.querySelectorAll('#thlist .item')[${index}];el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);

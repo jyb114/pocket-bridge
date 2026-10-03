@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CODES = new Set(['desktop-unavailable', 'desktop-ambiguous', 'desktop-busy', 'dot-unavailable',
-  'target-mismatch', 'history-unavailable', 'clipboard-unavailable', 'draft-present', 'send-unavailable', 'unknown']);
+  'target-mismatch', 'history-unavailable', 'clipboard-unavailable', 'source-unverified', 'draft-present', 'send-unavailable', 'unknown']);
 const TEXT = Object.freeze({
   'desktop-unavailable': 'The official desktop app is unavailable. Open it and sign in first.',
   'desktop-ambiguous': 'More than one desktop window is open. Select one before using Dot.',
@@ -15,6 +15,7 @@ const TEXT = Object.freeze({
   'target-mismatch': 'The desktop dot changed. Nothing was sent.',
   'history-unavailable': 'The current Dot messages could not be read safely.',
   'clipboard-unavailable': 'The computer clipboard could not be preserved.',
+  'source-unverified': 'The current desktop chat could not be verified safely. On the computer, open Your dot and its profile, keep any existing draft, then retry Connect. Nothing was sent.',
   'draft-present': 'The desktop contains an unsent draft. Nothing was sent.',
   'send-unavailable': 'Text sending is not yet available for this desktop version.',
   'unknown': 'The desktop action could not be confirmed.'

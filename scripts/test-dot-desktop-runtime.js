@@ -38,7 +38,7 @@ function fixture(settings = {}) {
   const directory = path.join(base, crypto.randomUUID()); fs.mkdirSync(directory);
   const target = crypto.randomUUID(), activeChildren = new Set(), records = new Map();
   const count = { snapshot: 0, inspect: 0, store: 0, createJournal: 0, provider: 0, journalStatus: 0,
-    journalClose: 0, shutdown: 0, sender: 0, senderSupports: 0, registered: 0, discardSecrets: 0 };
+    journalClose: 0, shutdown: 0, sender: 0, observe: 0, senderSupports: 0, registered: 0, discardSecrets: 0 };
   const f = { directory, target, count, settings, activeChildren, readChildren: [], inspectChildren: [], sendChild: null,
     evidence: path.join(directory, 'incomplete-owner-evidence'), events: [], throwLookup: false,
     cachedSecret: null, originalSecret: null, providerUnavailable: false };
@@ -64,13 +64,19 @@ function fixture(settings = {}) {
     status() { count.provider++; count.journalStatus++; return { available: settings.unavailableJournal !== true, pending: false, capacityRemaining: 256 }; },
     lookup(request) { if (f.throwLookup) throw Object.assign(new Error('journal-unavailable'), { code: 'journal-unavailable' }); return records.has(request.requestId) ? receipt(get(request.requestId)) : null; },
     pending(threadId) { return [...records.values()].some(record => record.threadId === threadId && ['prepared', 'sending', 'unknown'].includes(record.state)); },
-    prepare(request) { records.set(request.requestId, { ...request, state: 'prepared' }); return { created: true, receipt: receipt(get(request.requestId)) }; },
-    markSending(id) { get(id).state = 'sending'; return receipt(get(id)); },
+    prepare(request, operationId, before) { records.set(request.requestId, { ...request, operationId, baseline: before, invokeAuthorized: false, state: 'prepared' }); return { created: true, receipt: receipt(get(request.requestId)) }; },
+    markSending(id) { get(id).state = 'sending'; get(id).invokeAuthorized = true; return receipt(get(id)); },
     assertReadyForAck(stage, id) { assert.equal(get(id).state, stage === 'paste' ? 'prepared' : 'sending'); assert.equal(count.registered, 1); return true; },
     markFailedBeforeSend(id) { get(id).state = 'failed'; return receipt(get(id)); },
     markUnknown(id) { get(id).state = 'unknown'; return receipt(get(id)); },
     accept(id) { get(id).state = 'accepted'; return receipt(get(id)); },
     receipt(id, threadId) { const record = get(id); assert.equal(record.threadId, threadId); return receipt(record); },
+    reconciliationContext(id, threadId) { const record = get(id); assert.equal(record.threadId, threadId);
+      if (record.state !== 'unknown' || !record.invokeAuthorized) return null;
+      return { request: { requestId: id, threadId, text: record.text }, operationId: record.operationId,
+        baseline: record.baseline, baselineDigest: P.baselineDigest(record.baseline) }; },
+    assertReadyForReconcile(id, digest) { assert.equal(get(id).state, 'unknown'); assert.equal(count.registered, 1);
+      assert.equal(digest, P.baselineDigest(get(id).baseline)); return true; },
     registerChild() { count.registered++; }, unregisterChild(_helper, closed) { assert.equal(closed, true); count.registered--; },
     close(detail) { assert.equal(detail.allChildrenClosed, true); assert.equal(count.registered, 0); assert.equal(activeChildren.size, 0);
       count.journalClose++; f.events.push('journal-close'); }
@@ -78,6 +84,28 @@ function fixture(settings = {}) {
   f.fakeJournal = fakeJournal;
   const sender = {
     supports(version) { count.senderSupports++; return settings.senderSupported !== false && version === VERSION; },
+    observe(context, callbacks) {
+      count.observe++; const child = new EventEmitter(); child.pid = 3002; child.creationTicks = '100002'; child.closed = false;
+      f.observeChild = child; activeChildren.add(child);
+      const { request, operationId, baseline: before, baselineDigest } = context;
+      const helper = { pid: child.pid, creationTicks: child.creationTicks };
+      const start = Promise.resolve().then(async () => {
+        await callbacks.onLocked(helper); await callbacks.beforeAck('observe', request, operationId, baselineDigest); f.observeReady = true;
+      });
+      child.finish = () => { if (!child.closed) { child.closed = true; child.emit('close'); } };
+      return new Promise((resolve, reject) => child.once('close', async () => {
+        activeChildren.delete(child); f.events.push('observe-close');
+        try { await start;
+          await callbacks.beforeAck('observe-complete', request, operationId, baselineDigest);
+          const observed = { ...JSON.parse(JSON.stringify(before)), observationSequence: before.observationSequence + 1,
+            observedAt: 200, materializedRowCount: before.rows.length + 1, rows: [...before.rows,
+              { observationId: P.sha(crypto.randomUUID()), role: 'user', textSha256: P.sha(request.text) }] };
+          if (settings.changeObserved) settings.changeObserved(observed);
+          const result = await callbacks.onObserved({ baselineDigest, observation: observed });
+          await callbacks.onClose(helper); resolve(result);
+        } catch (cause) { try { await callbacks.onClose(helper); } catch (_) {} reject(cause); }
+      }));
+    },
     send(request, callbacks) {
       count.sender++; const child = new EventEmitter(); child.pid = 3001; child.creationTicks = '100001'; child.closed = false;
       child.kill = () => {}; child.finish = () => { if (!child.closed) { child.closed = true; child.emit('close'); } };
@@ -146,7 +174,7 @@ function fixture(settings = {}) {
     };
   };
   const options = { base: directory, driver: native, textSender: sender, storeFactory,
-    testOnlyEnableSend: settings.enabled !== false };
+    ...(settings.sendOptions === undefined ? { testOnlyEnableSend: settings.enabled !== false } : settings.sendOptions) };
   f.options = options; f.runtime = createDotDesktopRuntime(options);
   f.connect = () => f.runtime.service.snapshot({ action: 'connect', threadId: target });
   f.refresh = () => f.runtime.service.snapshot({ action: 'snapshot', threadId: target });
@@ -155,6 +183,41 @@ function fixture(settings = {}) {
 }
 
 (async () => {
+  await check('canonical opt-in and the compatible same-value alias remain lazy until a verified Connect', async () => {
+    for (const sendOptions of [{ enableSend: true }, { testOnlyEnableSend: true }, { enableSend: true, testOnlyEnableSend: true }]) {
+      const f = fixture({ sendOptions }); await f.runtime.service.status();
+      assert.equal(f.count.snapshot, 0); assert.equal(f.count.inspect, 0); assert.equal(f.count.store, 0); assert.equal(f.count.sender, 0);
+      const connected = await f.connect(); assert.equal(connected.sendAvailable, true); assert.equal(f.count.store, 1);
+      await f.runtime.close(); assert.equal(f.count.sender, 0);
+    }
+  });
+  await check('omitted permission and either explicit false keep the runtime read-only without provisioning', async () => {
+    for (const sendOptions of [{}, { enableSend: false }, { testOnlyEnableSend: false }, { enableSend: false, testOnlyEnableSend: false }]) {
+      const f = fixture({ sendOptions }), connected = await f.connect(); assert.equal(connected.sendAvailable, false);
+      await rejects(f.runtime.service.send(f.request()), 'send-unavailable');
+      assert.equal(f.count.snapshot, 1); assert.equal(f.count.inspect, 0); assert.equal(f.count.store, 0); assert.equal(f.count.sender, 0);
+      await f.runtime.close();
+    }
+  });
+  await check('nonboolean and conflicting permission options are rejected before native or provider work', async () => {
+    const f = fixture({ sendOptions: {} }); await f.runtime.close();
+    for (const sendOptions of [{ enableSend: 'true' }, { enableSend: 1 }, { enableSend: null }, { enableSend: {} },
+      { testOnlyEnableSend: 'false' }, { testOnlyEnableSend: 0 }, { testOnlyEnableSend: null },
+      { enableSend: true, testOnlyEnableSend: false }, { enableSend: false, testOnlyEnableSend: true }])
+      assert.throws(() => createDotDesktopRuntime({ ...f.options, ...sendOptions }), cause => cause.code === 'invalid-request' && cause.submitted === false);
+    assert.equal(f.count.snapshot, 0); assert.equal(f.count.inspect, 0); assert.equal(f.count.store, 0); assert.equal(f.count.sender, 0);
+  });
+  await check('canonical opt-in cannot bypass missing connection exact version journal readiness or stopped admission', async () => {
+    const unbound = fixture({ sendOptions: { enableSend: true } });
+    await rejects(unbound.runtime.service.send(unbound.request()), 'not-connected'); assert.equal(unbound.count.sender, 0); await unbound.runtime.close();
+    for (const settings of [{ inspection: { version: '26.928.3736.1' } }, { senderSupported: false }, { unavailableJournal: true }]) {
+      const f = fixture({ ...settings, sendOptions: { enableSend: true } });
+      const connected = await f.connect(); assert.equal(connected.sendAvailable, false);
+      await rejects(f.runtime.service.send(f.request()), 'journal-unavailable'); assert.equal(f.count.sender, 0); await f.runtime.close();
+    }
+    const stopped = fixture({ sendOptions: { enableSend: true } }); await stopped.connect(); stopped.runtime.stop();
+    await rejects(stopped.runtime.service.send(stopped.request()), 'send-unavailable'); assert.equal(stopped.count.sender, 0); await stopped.runtime.close();
+  });
   await check('constructor and both status surfaces never call provider native inspect or snapshot', async () => {
     for (const enabled of [false, true]) {
       const f = fixture({ enabled }); for (let i = 0; i < 4; i++) { f.runtime.status(); await f.runtime.service.status(); }
@@ -311,6 +374,38 @@ function fixture(settings = {}) {
     const f = fixture(); await f.connect(); const first = f.runtime.close(), second = f.runtime.service.close();
     assert.equal(first, second); await Promise.all([first, second]); await f.runtime.close();
     assert.equal(f.count.shutdown, 1); assert.equal(f.count.journalClose, 1); await rejects(f.connect(), 'desktop-busy');
+  });
+  await check('runtime receipt reconciliation uses original private context and shutdown drains observer CLOSE', async () => {
+    for (const realJournal of [false, true]) {
+      const f = fixture({ realJournal }); await f.connect(); const request = f.request();
+      const send = f.runtime.service.send(request); await until(() => f.sendReady); f.sendChild.finish();
+      assert.equal((await send).receipt.state, 'unknown');
+      const query = { action: 'receipt', requestId: request.requestId, threadId: request.threadId };
+      const first = f.runtime.service.receipt(query), second = f.runtime.service.receipt(query);
+      await until(() => f.observeReady); assert.equal(f.count.observe, 1); let closed = false;
+      const closing = f.runtime.close().then(() => { closed = true; }); await tick();
+      assert.equal(closed, false); assert.equal(f.count.journalClose, 0);
+      if (!realJournal) assert.equal(f.count.registered, 1);
+      f.observeChild.finish(); assert.equal((await first).receipt.state, 'accepted'); assert.equal((await second).receipt.state, 'accepted');
+      await closing; assert.equal(closed, true); assert.equal(f.count.sender, 1); assert.equal(f.count.registered, 0);
+    }
+  });
+  await check('a rejected read proof retains the unknown fence without disabling a later exact reconciliation', async () => {
+    const f = fixture({ realJournal: true, changeObserved(value) { value.rows[0].textSha256 = P.sha('unrelated fixture text'); } });
+    await f.connect(); const request = f.request();
+    const send = f.runtime.service.send(request); await until(() => f.sendReady); f.sendChild.finish();
+    assert.equal((await send).receipt.state, 'unknown');
+    const query = { action: 'receipt', requestId: request.requestId, threadId: request.threadId };
+    const refused = f.runtime.service.receipt(query); await until(() => f.observeReady); f.observeChild.finish();
+    assert.equal((await refused).receipt.state, 'unknown');
+    assert.equal((await f.runtime.service.status()).sendAvailable, true);
+    await rejects(f.runtime.service.send(f.request()), 'pending-request-exists');
+    f.settings.changeObserved = null; f.observeReady = false;
+    const checked = f.runtime.service.receipt(query); await until(() => f.observeReady); f.observeChild.finish();
+    assert.equal((await checked).receipt.state, 'accepted');
+    assert.equal((await f.runtime.service.status()).sendAvailable, true);
+    assert.equal(f.count.sender, 1); assert.equal(f.count.observe, 2);
+    await f.runtime.close();
   });
   const passed = results.filter(value => value.passed).length;
   fs.writeFileSync(path.join(base, 'RESULT.json'), JSON.stringify({ nativeActions: false, productionProvider: false,

@@ -1,6 +1,7 @@
 # Source-view protection for independent Dot reading and sending. The caller
 # already binds the official package, process birth and genuine main window.
-# This module performs no focus, navigation, clipboard or message action.
+# This module performs no focus, conversation navigation, clipboard or message
+# action. An exact already-current blank Dot view may open its metadata profile.
 function Get-DotSourceModeKind([string]$Name) {
     $prefix=-join @([char]0x5207,[char]0x6362,[char]0x6A21,[char]0x5F0F,[char]0xFF0C,
         [char]0x5F53,[char]0x524D,[char]0x6A21,[char]0x5F0F,[char]0xFF1A)
@@ -18,17 +19,71 @@ function Get-DotSourceEvidence {
     $editors=@($root.FindAll([Windows.Automation.TreeScope]::Descendants,$edits)|Where-Object {
         (Has-Class $_ 'ProseMirror') -and $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and
         $_.Current.IsKeyboardFocusable -and -not $_.Current.IsPassword -and (Raw-Contains $root $_)})
-    if($modes.Count -ne 1 -or $editors.Count -ne 1){Fail-Dot 'draft-present'}
+    if($modes.Count -ne 1 -or $editors.Count -ne 1){Fail-Dot 'source-unverified'}
     $kind=Get-DotSourceModeKind ([string]$modes[0].Current.Name)
     $profiles=@(Dot-Profiles)
     $names=@('Message',(-join @([char]0x6D88,[char]0x606F)))
-    $dot=$kind -ceq 'chatgpt' -and $profiles.Count -eq 1 -and
+    # Your dot is a durable conversation even when opened from the Codex
+    # sidebar. The global mode selector does not identify the active thread.
+    # Retain the independent profile/editor/ancestry proof before identity copy.
+    $dot=(@('codex','chatgpt') -ccontains $kind) -and $profiles.Count -eq 1 -and
         $names -ccontains $editors[0].Current.Name -and (Raw-Contains $root $profiles[0])
-    return @{root=$root;mode=$kind;modeId=Key $modes[0];editor=$editors[0];editorId=Key $editors[0];currentDot=[bool]$dot}
+    return @{root=$root;mode=$kind;modeId=Key $modes[0];editor=$editors[0];editorId=Key $editors[0];
+        currentDot=[bool]$dot;profileCount=$profiles.Count}
+}
+function Get-DotCurrentSourceScope($Source) {
+    $viewport=Raw-Ancestor $Source.editor 'conversation-viewport'
+    $pane=Raw-Ancestor $viewport 'thread-pane'
+    if(-not(Raw-Contains $Source.root $pane) -or -not(Raw-Contains $viewport $Source.editor)){Fail-Dot 'source-unverified'}
+    return @{rootId=Key $Source.root;mode=$Source.mode;modeId=$Source.modeId;editorId=$Source.editorId;
+        viewportId=Key $viewport;paneId=Key $pane}
+}
+function Assert-DotCurrentBlankContext($Expected,[string]$DesktopVersion,[bool]$ProfileOpen) {
+    Assert-Foreground
+    $source=Get-DotSourceEvidence
+    if($source.profileCount -ne $(if($ProfileOpen){1}else{0}) -or
+        $source.currentDot -ne $ProfileOpen -or
+        -not(Test-PocketBridgeDotBlankSource $source.editor $source.root $DesktopVersion $true)){Fail-Dot 'source-unverified'}
+    $scope=Get-DotCurrentSourceScope $source
+    foreach($field in @('rootId','mode','modeId','editorId','viewportId','paneId')){
+        if([string]$scope[$field] -cne [string]$Expected[$field]){Fail-Dot 'source-unverified'}
+    }
+    return $source
+}
+function Open-DotCurrentBlankProfile($Source,[string]$DesktopVersion) {
+    # Only the complete independently tested Dot-specific composer signature
+    # can override a stale global Codex mode. No title/placeholder-only guess.
+    if($Source.profileCount -ne 0 -or $Source.currentDot -or
+        -not(Test-PocketBridgeDotBlankSource $Source.editor $Source.root $DesktopVersion $true)){Fail-Dot 'source-unverified'}
+    $scope=Get-DotCurrentSourceScope $Source
+    $button=Unique-Button 'Toggle profile' ''; $buttonId=Key $button; $toggle=$null
+    if(-not(Raw-Contains $Source.root $button) -or
+        -not $button.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern,[ref]$toggle)){Fail-Dot 'source-unverified'}
+    Before-Input
+    $null=Assert-DotCurrentBlankContext $scope $DesktopVersion $false
+    $fresh=Unique-Button 'Toggle profile' ''; $toggle=$null
+    if((Key $fresh) -cne $buttonId -or -not(Raw-Contains (Fresh-Root) $fresh) -or
+        -not $fresh.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern,[ref]$toggle)){Fail-Dot 'source-unverified'}
+    Before-Input
+    $null=Assert-DotCurrentBlankContext $scope $DesktopVersion $false
+    $toggle.Toggle()
+    for($settle=0;$settle -lt 12;$settle++){
+        Start-Sleep -Milliseconds 80; Assert-Foreground
+        $profiles=@(Dot-Profiles)
+        if($profiles.Count -gt 1){Fail-Dot 'source-unverified'}
+        if($profiles.Count -eq 1){break}
+    }
+    return Assert-DotCurrentBlankContext $scope $DesktopVersion $true
 }
 function Protect-DotOutgoingSource([bool]$ReadOnlyCurrentDot,[string]$DesktopVersion) {
     Assert-Foreground
     $source=Get-DotSourceEvidence
+    if(-not $source.currentDot -and $source.profileCount -eq 0){
+        . (Join-Path $PSScriptRoot 'dot-desktop-source-guard.ps1')
+        if(Test-PocketBridgeDotBlankSource $source.editor $source.root $DesktopVersion $true){
+            $source=Open-DotCurrentBlankProfile $source $DesktopVersion
+        }
+    }
     if($source.currentDot){
         # Reading the same physical Dot view is allowed with any unsent draft.
         # Sending requires the exact independently tested blank/attachment guard.
@@ -41,11 +96,11 @@ function Protect-DotOutgoingSource([bool]$ReadOnlyCurrentDot,[string]$DesktopVer
         if(-not(Test-PocketBridgeCodexBlankSource $source.editor $source.root $DesktopVersion $true)){Fail-Dot 'draft-present'}
     }else{
         # Ordinary ChatGPT and unverified Dot shapes remain untouched.
-        Fail-Dot 'draft-present'
+        Fail-Dot 'source-unverified'
     }
     Assert-Foreground
     $fresh=Get-DotSourceEvidence
     if($fresh.mode -cne $source.mode -or $fresh.modeId -cne $source.modeId -or
-        $fresh.editorId -cne $source.editorId -or $fresh.currentDot -ne $source.currentDot){Fail-Dot 'draft-present'}
+        $fresh.editorId -cne $source.editorId -or $fresh.currentDot -ne $source.currentDot){Fail-Dot 'source-unverified'}
     return [bool]$source.currentDot
 }

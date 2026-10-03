@@ -5,7 +5,11 @@ const { spawn, execFile } = require('node:child_process');
 const P = require('./dot-desktop-protocol.js');
 const { DotDesktopError } = require('./dot-desktop-driver.js');
 function createDotTextSender(options = {}) {
-  const permitted = options.testOnlyEnableSend === true;
+  if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      ['enableSend','testOnlyEnableSend'].some(key => options[key] !== undefined && typeof options[key] !== 'boolean') ||
+      options.enableSend !== undefined && options.testOnlyEnableSend !== undefined && options.enableSend !== options.testOnlyEnableSend)
+    throw Object.assign(new Error('Invalid Dot sender options.'), { code: 'invalid-request', submitted: false });
+  const permitted = options.enableSend === undefined ? options.testOnlyEnableSend === true : options.enableSend === true;
   const versions = new Set((options.allowedSendVersions || []).filter(v => typeof v === 'string' && /^\d+(?:\.\d+){3}$/.test(v)));
   const spawnHelper = options.spawn || spawn;
   const powershell = options.powershellPath || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -28,22 +32,33 @@ function createDotTextSender(options = {}) {
         observed.creationTicks !== helper.creationTicks || typeof observed.path !== 'string' ||
         path.resolve(observed.path).toLowerCase() !== path.resolve(powershell).toLowerCase()) throw new DotDesktopError('unknown', null);
   }
-  return {
-    supports(version) { return permitted && versions.has(version); },
-    async send(input, callbacks = {}) {
+  async function run(input, callbacks = {}, stored = null) {
+      const observing = stored !== null;
       if (!permitted || platform !== 'win32' || !versions.has(callbacks.version) ||
-          ['onLocked', 'onPrepared', 'onReady', 'beforeAck', 'onResult', 'onFailure', 'onClose'].some(key => typeof callbacks[key] !== 'function'))
+          (observing ? ['onLocked', 'beforeAck', 'onObserved', 'onFailure', 'onClose'] :
+            ['onLocked', 'onPrepared', 'onReady', 'beforeAck', 'onResult', 'onFailure', 'onClose']).some(key => typeof callbacks[key] !== 'function'))
         throw new DotDesktopError('send-unavailable', false);
-      const request = P.normalizeRequest(input), operationId = crypto.randomUUID();
-      return runDesktopAction('dot-send', () => new Promise((resolve, reject) => {
+      const request = P.normalizeRequest(input), operationId = observing ? stored.operationId : crypto.randomUUID();
+      let storedBaseline = null;
+      if (observing) {
+        if (!stored || Object.keys(stored).length !== 4 ||
+            Object.keys(stored).some(key => !['request', 'operationId', 'baseline', 'baselineDigest'].includes(key)) ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId || ''))
+          throw new DotDesktopError('unknown', null);
+        storedBaseline = P.normalizeObservation(stored.baseline, request, operationId);
+        if (stored.baselineDigest !== P.baselineDigest(storedBaseline) || storedBaseline.version !== callbacks.version ||
+            storedBaseline.observationSequence >= Number.MAX_SAFE_INTEGER)
+          throw new DotDesktopError('unknown', null);
+      }
+      return runDesktopAction(observing ? 'dot-read' : 'dot-send', () => new Promise((resolve, reject) => {
         const env = { ...process.env };
         for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'DSH_API_KEY', 'ACCESS_TOKEN']) delete env[key];
         const temporary = path.join(path.dirname(__dirname), 'logs', 'native-temp');
         fs.mkdirSync(temporary, { recursive: true }); env.TEMP = temporary; env.TMP = temporary;
-        let child, helper = null, baseline = null, result = null, forced = null, nativeFailure = null;
+        let child, helper = null, baseline = storedBaseline, result = null, forced = null, nativeFailure = null;
         let received = 0, buffer = '', nextSequence = 1, closed = false, terminal = false, timer, killTimer;
         let tail = Promise.resolve();
-        const stages = ['locked', 'prepared', 'ready-to-send', 'result'];
+        const stages = observing ? ['locked', 'observed'] : ['locked', 'prepared', 'ready-to-send', 'result'];
         const stop = cause => {
           if (!forced) forced = cause instanceof DotDesktopError ? cause : new DotDesktopError('unknown', null);
           // EOF withdraws permission at either handshake and lets PowerShell
@@ -68,7 +83,11 @@ function createDotTextSender(options = {}) {
           P.frame(value, request, operationId, nextSequence, stages[nextSequence - 1], baseline); nextSequence++;
           if (value.stage === 'locked') {
             helper = value.helper; await attest(helper, child); await callbacks.onLocked(helper, request, operationId);
-            await ack('continue-preflight');
+            await ack(observing ? 'observe' : 'continue-preflight');
+          } else if (value.stage === 'observed') {
+            // Original operation/baseline only; no new Send authorization.
+            await ack('observe-complete');
+            terminal = true; result = await callbacks.onObserved(value, request, operationId, baseline);
           } else if (value.stage === 'prepared') {
             baseline = P.normalizeObservation(value.baseline, request, operationId);
             await callbacks.onPrepared(request, operationId, baseline); await ack('paste');
@@ -118,12 +137,18 @@ function createDotTextSender(options = {}) {
           }).catch(() => reject(new DotDesktopError('unknown', null)));
         });
         try {
-          child.stdin.write(JSON.stringify({ action: 'send', protocol: 1, operationId, requestId: request.requestId,
+          const payload = { action: observing ? 'observe' : 'send', protocol: 1, operationId, requestId: request.requestId,
             requestFingerprint: P.fingerprint(request), textSha256: P.sha(request.text), expectedThreadId: request.threadId,
-            text: request.text, expectedVersion: callbacks.version, testOnlyPermitSend: true }) + '\n');
+            expectedVersion: callbacks.version };
+          if (observing) Object.assign(payload, { permitReadOnlyReceipt: true,
+            receiptBaseline: baseline, baselineDigest: P.baselineDigest(baseline) });
+          else Object.assign(payload, { text: request.text, testOnlyPermitSend: true });
+          child.stdin.write(JSON.stringify(payload) + '\n');
         } catch (_) { stop(new DotDesktopError('unknown', null)); }
       }));
-    }
-  };
+  }
+  return { supports(version) { return permitted && versions.has(version); },
+    send(input, callbacks) { return run(input, callbacks); },
+    observe(context, callbacks) { return run(context?.request, callbacks, context); } };
 }
 module.exports = { createDotTextSender };

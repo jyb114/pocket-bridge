@@ -7,6 +7,8 @@ $watch=[Diagnostics.Stopwatch]::StartNew(); $clipboardSaved=$false; $result=$nul
 $nativeMutex=$null; $mutexOwned=$false
 $framedReady=$false;$sequence=0;$sendAttempted=$false;$sendBaseline=$null;$sendBaselineDigest=$null;$ownDraftPasted=$false
 $sendEvidence=@{};$request=$null
+$observing=$false
+$maxBaselineRows=128;$maxAfterRows=133
 function Dot-Hash([string]$Value) {
     $algorithm=[Security.Cryptography.SHA256]::Create()
     try{return ([BitConverter]::ToString($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value)))).Replace('-','').ToLowerInvariant()}
@@ -33,8 +35,29 @@ function Wait-DotAck([string]$Stage,[string]$Digest) {
         ($Stage -ne 'continue-preflight' -and ($Digest -cnotmatch '^[0-9a-f]{64}$' -or $ack.baselineDigest -cne $Digest))){Fail-Dot 'unknown'}
 }
 function Fail-Dot([string]$Code) { $script:failure=$Code; throw 'Dot desktop action stopped.' }
+function Join-DotObservedMessage([string[]]$Fragments,[bool]$Self) {
+    # Native self-row Text nodes already carry their literal separators.
+    # Adding an LF between them corrupts multiline text and its exact hash.
+    # Preserve the existing CRLF history convention; never trim/collapse text.
+    $normalized=@($Fragments|ForEach-Object {$_.Replace(([string][char]13+[string][char]10),[string][char]10)})
+    if($Self){return [string]::Concat($normalized)}
+    return [string]::Join([string][char]10,$normalized)
+}
 function Test-DotMainWindowEvidence([bool]$RootIsWindow,[bool]$NativeHandleMatches,[int]$SidebarYourDotCount) {
     return $RootIsWindow -and $NativeHandleMatches -and $SidebarYourDotCount -eq 1
+}
+function Test-DotReceiptBoundWindow($Expected,[int]$ProcessId,[string]$CreationTicks,[string]$WindowHandle,[string]$Family,[string]$Version) {
+    return $null -ne $Expected -and $ProcessId -eq $Expected.processId -and
+        $CreationTicks -ceq $Expected.creationTicks -and $WindowHandle -ceq $Expected.windowHandle -and
+        $Family -ceq $Expected.packageFamilyName -and $Version -ceq $Expected.version
+}
+function Test-DotReceiptRenderedScope($Expected,$Observed) {
+    if($null -eq $Expected -or $null -eq $Observed){return $false}
+    foreach($key in @('threadId','hostId','packageFamilyName','version','windowHandle','processId','creationTicks',
+        'viewportRuntimeId','messageListRuntimeId','contextGeneration')){
+        if($null -eq $Expected.$key -or $Expected.$key -cne $Observed.$key){return $false}
+    }
+    return $true
 }
 function Test-DotSidebarLabel([string]$Name) {
     if($Name -ceq 'Your dot'){return $true}
@@ -46,13 +69,24 @@ function Test-DotSidebarLabel([string]$Name) {
 }
 try {
     $raw=[Console]::In.ReadLine()
-    if ([Text.Encoding]::UTF8.GetByteCount($raw) -gt 32768) { Fail-Dot 'target-mismatch' }
+    if ([Text.Encoding]::UTF8.GetByteCount($raw) -gt 65536) { Fail-Dot 'target-mismatch' }
     $request=$raw | ConvertFrom-Json
-    if ($request.action -cne 'send' -or $request.testOnlyPermitSend -ne $true -or $request.protocol -ne 1){Fail-Dot 'send-unavailable'}
+    $observing=$request.action -ceq 'observe'
+    if ($request.protocol -ne 1 -or (-not $observing -and ($request.action -cne 'send' -or $request.testOnlyPermitSend -ne $true)) -or
+        ($observing -and ($request.permitReadOnlyReceipt -ne $true -or $null -ne $request.text -or $null -ne $request.testOnlyPermitSend))){Fail-Dot 'send-unavailable'}
     foreach($field in @('operationId','requestId','expectedThreadId')){if([string]$request.$field -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'){Fail-Dot 'target-mismatch'}}
-    if($request.text -isnot [string] -or $request.text.Length -eq 0 -or $request.text.Contains([string][char]0) -or
+    if(-not $observing -and ($request.text -isnot [string] -or $request.text.Length -eq 0 -or $request.text.Contains([string][char]0) -or
         [Text.Encoding]::UTF8.GetByteCount($request.text) -gt 16000 -or [string]$request.requestFingerprint -cnotmatch '^[0-9a-f]{64}$' -or
-        [string]$request.textSha256 -cne (Dot-Hash $request.text)){Fail-Dot 'target-mismatch'}
+        [string]$request.textSha256 -cne (Dot-Hash $request.text))){Fail-Dot 'target-mismatch'}
+    if($observing){
+        $sendBaseline=$request.receiptBaseline;$sendBaselineDigest=[string]$request.baselineDigest
+        if($null -eq $sendBaseline -or $sendBaselineDigest -cnotmatch '^[0-9a-f]{64}$' -or
+            $sendBaselineDigest -cne (Dot-Hash ($sendBaseline|ConvertTo-Json -Depth 10 -Compress)) -or
+            $sendBaseline.requestId -cne $request.requestId -or $sendBaseline.operationId -cne $request.operationId -or
+            $sendBaseline.requestFingerprint -cne $request.requestFingerprint -or $sendBaseline.threadId -cne $request.expectedThreadId -or
+            $sendBaseline.hostId -cne 'durable' -or $sendBaseline.version -cne $request.expectedVersion -or
+            [long]$sendBaseline.observationSequence -lt 1 -or [long]$sendBaseline.observationSequence -ge 2147483647){Fail-Dot 'target-mismatch'}
+    }
     $framedReady=$true
     if ($request.expectedThreadId -and [string]$request.expectedThreadId -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { Fail-Dot 'target-mismatch' }
     # Match Codex's cross-process guard before any foreground/input/clipboard action.
@@ -62,7 +96,7 @@ try {
     if (-not $mutexOwned) {Fail-Dot 'desktop-busy'}
     $helper=Get-CimInstance Win32_Process -Filter ('ProcessId='+$PID)
     Emit-DotFrame 'locked' @{helper=@{pid=[int]$PID;creationTicks=$helper.CreationDate.ToUniversalTime().Ticks.ToString()}}
-    Wait-DotAck 'continue-preflight' $null
+    if($observing){Wait-DotAck 'observe' $sendBaselineDigest}else{Wait-DotAck 'continue-preflight' $null}
     Add-Type -AssemblyName System.Windows.Forms, UIAutomationClient, UIAutomationTypes
     Add-Type -TypeDefinition @'
 using System;
@@ -127,6 +161,7 @@ public static class DotDesktopNative {
     if ($windows.Count -ne 1) { if ($windows.Count -gt 1) { Fail-Dot 'desktop-ambiguous' }; Fail-Dot 'desktop-unavailable' }
     $bound=$windows[0]; $ownerId=[DotDesktopNative]::WindowProcess($bound)
     $owner=@($processes | Where-Object {$_.ProcessId -eq $ownerId})[0]; $creationTicks=$owner.CreationDate.ToUniversalTime().Ticks
+    if($observing -and -not(Test-DotReceiptBoundWindow $sendBaseline ([int]$ownerId) ($creationTicks.ToString()) ($bound.ToInt64().ToString()) ([string]$package.PackageFamilyName) ([string]$package.Version))){Fail-Dot 'target-mismatch'}
     function Assert-Process {
         if ($watch.ElapsedMilliseconds -gt 74000) { Fail-Dot 'unknown' }
         $actual=Get-CimInstance Win32_Process -Filter ('ProcessId='+$ownerId)
@@ -353,7 +388,10 @@ public static class DotDesktopNative {
         }
         Collect-DotConversation $viewport 0 $null $null $null
         $nodes=@($raw.ToArray());$rows=@($nodes|Where-Object {$_.type -eq [Windows.Automation.ControlType]::Group -and $_.tokens -ccontains 'message-row'})
-        if($rows.Count -gt 45){Fail-Dot 'history-unavailable'}
+        # Keep the complete rendered scope; no tail slicing can hide changed
+        # prior rows. Oversized/native-node/stream limits still fail closed.
+        $maximumRows=if($observing -or $ObservationSequence -ge 3){$maxAfterRows}else{$maxBaselineRows}
+        if($rows.Count -gt $maximumRows){Fail-Dot 'history-unavailable'}
         $rowParent=$null;$descriptions=@()
         foreach($row in $rows){
             if(-not $row.parentKey -or @($nodes|Where-Object {$_.key -ceq $row.parentKey}).Count -ne 1){Fail-Dot 'history-unavailable'}
@@ -362,8 +400,8 @@ public static class DotDesktopNative {
             if($bodies.Count -ne 1){Fail-Dot 'history-unavailable'}
             $texts=@($nodes|Where-Object {$_.type -eq [Windows.Automation.ControlType]::Text -and $_.bodyKey -ceq $bodies[0].key})
             if($texts.Count -gt 200){Fail-Dot 'history-unavailable'};$fragments=@()
-            foreach($text in $texts){if($text.name){$fragments+=([string]$text.name).Replace(([string][char]13+[string][char]10),[string][char]10)}}
-            $value=[string]::Join([string][char]10,$fragments)
+            foreach($text in $texts){if($text.name){$fragments+=[string]$text.name}}
+            $value=Join-DotObservedMessage $fragments ($row.tokens -ccontains 'self')
             if($value.Length -gt 32768){Fail-Dot 'history-unavailable'}
             $descriptions+=@{observationId=Dot-Hash ($beforeId+'|'+$creationTicks+'|'+$row.key);
                 role=if($row.tokens -ccontains 'self'){'user'}else{'assistant'};textSha256=Dot-Hash $value}
@@ -383,9 +421,50 @@ public static class DotDesktopNative {
             observedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();materializedRowCount=$rows.Count;completeMaterializedScope=$true;
             settled=$true;viewportBounds=$bounds;rows=@($descriptions|ForEach-Object {[ordered]@{observationId=$_.observationId;role=$_.role;textSha256=$_.textSha256}})}
     }
+    function Assert-DotReceiptReadScope {
+        # Before opening metadata, bind the exact already-materialized scope
+        # of the original operation. No conversation navigation is authorized.
+        $composer=Dot-Composer
+        if(-not(Raw-Contains (Fresh-Root) (Raw-Ancestor $composer 'thread-pane'))){Fail-Dot 'target-mismatch'}
+        $candidate=Capture-DotObservation ([int]$sendBaseline.observationSequence+1)
+        if(-not(Test-DotReceiptRenderedScope $sendBaseline $candidate)){Fail-Dot 'target-mismatch'}
+    }
+    function Open-DotReceiptProfile {
+        Assert-DotReceiptReadScope
+        $profiles=@(Dot-Profiles)
+        if($profiles.Count -eq 0){
+            $button=Unique-Button 'Toggle profile' '';$buttonKey=Key $button;$toggle=$null
+            if(-not $button.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern,[ref]$toggle)){Fail-Dot 'source-unverified'}
+            Before-Input;Assert-DotReceiptReadScope
+            $fresh=Unique-Button 'Toggle profile' ''
+            if((Key $fresh) -cne $buttonKey -or @(Dot-Profiles).Count -ne 0){Fail-Dot 'source-unverified'}
+            Before-Input;$toggle.Toggle()
+            for($settle=0;$settle -lt 12;$settle++){
+                Start-Sleep -Milliseconds 80;Assert-Foreground;Assert-DotReceiptReadScope
+                $profiles=@(Dot-Profiles);if($profiles.Count -eq 1){break}
+            }
+        }
+        if($profiles.Count -ne 1){Fail-Dot 'source-unverified'}
+        Assert-DotReceiptReadScope
+    }
     Assert-Process;Assert-ReleasedInput
     if([DotDesktopNative]::IsIconic($bound)){$null=[DotDesktopNative]::ShowWindow($bound,9)}
     $null=[DotDesktopNative]::SetForegroundWindow($bound);Start-Sleep -Milliseconds 100;Assert-Foreground
+    if($observing){
+        # Read the original bound Dot only. A dismissed metadata popover may
+        # be reopened within its exact original rendered scope; never navigate,
+        # read/replace a draft, paste, stop, or invoke Send for a receipt check.
+        $beforeId=[string]$sendBaseline.threadId
+        Open-DotReceiptProfile
+        $original=[Windows.Forms.Clipboard]::GetDataObject();$backup=New-Object Windows.Forms.DataObject
+        if($null -ne $original){foreach($format in $original.GetFormats($false)){$value=$original.GetData($format,$false)
+            if($value -is [IO.Stream]){$position=$value.Position;$copy=New-Object IO.MemoryStream;$value.Position=0;$value.CopyTo($copy);$value.Position=$position;$copy.Position=0;$value=$copy}
+            elseif($value -is [ICloneable]){$value=$value.Clone()};$backup.SetData($format,$false,$value)}};$clipboardSaved=$true
+        $beforeId=Copy-DurableIdentity
+        $after=Capture-DotObservation ([int]$sendBaseline.observationSequence+1)
+        if((Copy-DurableIdentity) -cne $beforeId){Fail-Dot 'target-mismatch'}
+        $result=@{stage='observed';data=@{baselineDigest=$sendBaselineDigest;observation=$after}}
+    }else{
     # Prove the outgoing source before any conversation navigation. Preserve
     # the current exact Dot view; unknown ordinary ChatGPT stays untouched.
     . (Join-Path $PSScriptRoot 'dot-desktop-navigation-guard.ps1')
@@ -412,7 +491,7 @@ public static class DotDesktopNative {
     $beforeId=Copy-DurableIdentity
     if(-not(Test-DotActualBlank)){Fail-Dot 'draft-present'}
     $sendBaseline=Capture-DotObservation 1
-    if($sendBaseline.rows.Count -gt 40){Fail-Dot 'history-unavailable'}
+    if($sendBaseline.rows.Count -gt $maxBaselineRows){Fail-Dot 'history-unavailable'}
     Start-Sleep -Milliseconds 80;$settled=Capture-DotObservation 2
     if(($sendBaseline.rows|ConvertTo-Json -Depth 4 -Compress) -cne ($settled.rows|ConvertTo-Json -Depth 4 -Compress) -or
         $sendBaseline.contextGeneration -cne $settled.contextGeneration){Fail-Dot 'history-unavailable'}
@@ -441,6 +520,7 @@ public static class DotDesktopNative {
     if((Copy-DurableIdentity) -cne $beforeId){Fail-Dot 'target-mismatch'}
     $result=@{stage='result';data=@{baselineDigest=$sendBaselineDigest;observation=$after;submitted=$true;
         draftRemaining=-not(Test-DotActualBlank);draftCleared=Test-DotActualBlank}}
+    }
 } catch {
     $result=@{stage='error';data=@{code=$failure;submitted=if($sendAttempted){$null}else{$false};baselineDigest=$sendBaselineDigest;draftRemaining=$ownDraftPasted}}
 } finally {
@@ -452,4 +532,6 @@ public static class DotDesktopNative {
         try {if ($mutexOwned) {$nativeMutex.ReleaseMutex()}} finally {$nativeMutex.Dispose()}
     }
 }
-if($framedReady){Emit-DotFrame $result.stage $result.data}else{[Console]::Out.WriteLine('{"ok":false,"code":"send-unavailable","submitted":false}')}
+if($framedReady){Emit-DotFrame $result.stage $result.data
+    if($observing -and $result.stage -ceq 'observed'){Wait-DotAck 'observe-complete' $sendBaselineDigest}
+}else{[Console]::Out.WriteLine('{"ok":false,"code":"send-unavailable","submitted":false}')}

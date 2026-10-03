@@ -136,8 +136,10 @@
 
     var finalText = '';
     var stopped = false;
+    var aborted = false;
 
     r.onresult = function (ev) {
+      if (stopped || aborted) return;
       var interim = '';
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var t = ev.results[i][0].transcript;
@@ -148,6 +150,7 @@
     };
 
     r.onerror = function (ev) {
+      if (stopped || aborted) return;
       // not-allowed = 使用者拒绝了麦克风权限；no-speech = 没听到
       var copy = words();
       var msg = ev.error === 'not-allowed'
@@ -159,7 +162,7 @@
 
     r.onend = function () {
       stopped = true;
-      if (o.onFinal && finalText) o.onFinal(finalText);
+      if (!aborted && o.onFinal && finalText) o.onFinal(finalText);
       if (o.onEnd) o.onEnd(finalText);
     };
 
@@ -171,9 +174,29 @@
       return null;
     }
 
+    // 停：**先 stop，再 abort 兜一道**。
+    //
+    // 为什么不能只 stop()：iOS 上 stop() 只是"我说完了，你把结果给我"，
+    // 真机上经常既不回 onend 也不真停 —— 于是识别继续往输入框里灌字，
+    // 而界面那边已经复位成"没在听"了。
+    // 使用者原话：「我刚刚说了一长串，无法关闭，关闭了无法开启」。
+    //
+    // abort() 是硬停（直接丢弃、必定结束），但它**不返回已经识别到的内容**，
+    // 所以顺序必须是 stop 在前 —— 正常路径靠 stop 把话收下，收不了才 abort。
+    function hardAbort() {
+      if (aborted || stopped) return;
+      aborted = true;
+      try { r.abort(); } catch (e) { /* 已经死了 */ }
+    }
     return {
-      stop: function () { if (!stopped) { try { r.stop(); } catch (e) { } } },
-      abort: function () { if (!stopped) { try { r.abort(); } catch (e) { } } }
+      stop: function () {
+        if (stopped) return;
+        try { r.stop(); } catch (e) { /* 已经死了 */ }
+        // 200ms 还不结束就硬停 —— 这个延时只影响"卡住"那条路，
+        // 正常结束的 onend 早就把 stopped 置上了，abort 不会执行。
+        setTimeout(hardAbort, 200);
+      },
+      abort: function () { hardAbort(); }
     };
   }
 

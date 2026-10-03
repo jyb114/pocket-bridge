@@ -6,6 +6,14 @@ $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 $watch=[Diagnostics.Stopwatch]::StartNew(); $clipboardSaved=$false; $result=$null; $failure='unknown'
 $nativeMutex=$null; $mutexOwned=$false
 function Fail-Dot([string]$Code) { $script:failure=$Code; throw 'Dot desktop action stopped.' }
+function Join-DotObservedMessage([string[]]$Fragments,[bool]$Self) {
+    # Native self-row Text nodes already carry their literal separators.
+    # Adding an LF between them corrupts multiline text and its exact hash.
+    # Preserve the existing CRLF history convention; never trim/collapse text.
+    $normalized=@($Fragments|ForEach-Object {$_.Replace(([string][char]13+[string][char]10),[string][char]10)})
+    if($Self){return [string]::Concat($normalized)}
+    return [string]::Join([string][char]10,$normalized)
+}
 function Test-DotMainWindowEvidence([bool]$RootIsWindow,[bool]$NativeHandleMatches,[int]$SidebarYourDotCount) {
     return $RootIsWindow -and $NativeHandleMatches -and $SidebarYourDotCount -eq 1
 }
@@ -16,6 +24,50 @@ function Test-DotSidebarLabel([string]$Name) {
     $count=[int]$match.Groups[1].Value
     return ($count -eq 1 -and $match.Groups[2].Value -ceq 'message') -or
         ($count -gt 1 -and $match.Groups[2].Value -ceq 'messages')
+}
+function Get-DotNavigationReadiness {
+    # Only metadata is sampled while the one intended sidebar navigation mounts.
+    # Every sample retains the same official process birth, HWND and foreground.
+    $root=Fresh-Root
+    if ($root.Current.ControlType -ne [Windows.Automation.ControlType]::Window -or
+        [long]$root.Current.NativeWindowHandle -ne $bound.ToInt64() -or
+        $root.Current.ProcessId -ne $ownerId) { Fail-Dot 'desktop-unavailable' }
+    $buttonsCondition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button)
+    $buttons=@($root.FindAll([Windows.Automation.TreeScope]::Descendants,$buttonsCondition) | Where-Object {
+        $_.Current.IsEnabled -and -not $_.Current.IsOffscreen })
+    $sidebar=@($buttons | Where-Object { (Test-DotSidebarLabel ([string]$_.Current.Name)) -and (Has-Class $_ 'sidebar-item') })
+    $toggles=@($buttons | Where-Object { $_.Current.Name -ceq 'Toggle profile' })
+    $editorCondition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Edit)
+    $names=@('Message',(-join @([char]0x6D88,[char]0x606F)))
+    $editors=@($root.FindAll([Windows.Automation.TreeScope]::Descendants,$editorCondition) | Where-Object {
+        $names -ccontains $_.Current.Name -and (Has-Class $_ 'ProseMirror') -and $_.Current.IsEnabled -and
+        -not $_.Current.IsOffscreen -and $_.Current.IsKeyboardFocusable -and -not $_.Current.IsPassword })
+    $profileCondition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Window)
+    $profiles=@($root.FindAll([Windows.Automation.TreeScope]::Descendants,$profileCondition) | Where-Object {
+        $_.Current.Name -ceq ('Your dot'+[string][char]0x2019+'s profile') -and (Has-Class $_ 'codex-dialog') -and -not $_.Current.IsOffscreen })
+    Assert-Foreground
+    return @{sidebarCount=$sidebar.Count;editorCount=$editors.Count;profileCount=$profiles.Count;toggleCount=$toggles.Count}
+}
+function Test-DotNavigationReadiness($Evidence) {
+    # Zero candidates can be a transient remount. Ambiguity never authorizes a
+    # retry or another invocation; the existing profile/identity guards follow.
+    foreach($name in @('sidebarCount','editorCount','profileCount','toggleCount')) {
+        if ($Evidence[$name] -lt 0 -or $Evidence[$name] -gt 1) { Fail-Dot 'dot-unavailable' }
+    }
+    return $Evidence.sidebarCount -eq 1 -and $Evidence.editorCount -eq 1 -and
+        ($Evidence.profileCount -eq 1 -or $Evidence.toggleCount -eq 1)
+}
+function Wait-DotSelectedView {
+    $settleWatch=[Diagnostics.Stopwatch]::StartNew()
+    while ($settleWatch.ElapsedMilliseconds -lt 3000) {
+        $ready=Test-DotNavigationReadiness (Get-DotNavigationReadiness)
+        if ($settleWatch.ElapsedMilliseconds -ge 3000) { break }
+        if ($ready) { return }
+        $remaining=3000-$settleWatch.ElapsedMilliseconds
+        if ($remaining -le 0) { break }
+        Start-Sleep -Milliseconds ([Math]::Min(80,$remaining))
+    }
+    Fail-Dot 'dot-unavailable'
 }
 try {
     $raw=[Console]::In.ReadToEnd()
@@ -193,7 +245,7 @@ public static class DotDesktopNative {
             if (-not $dot.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$invoke)) { Fail-Dot 'dot-unavailable' }
             Before-Input
             if(Protect-DotOutgoingSource $true ([string]$package.Version)){Fail-Dot 'target-mismatch'}
-            $invoke.Invoke(); Start-Sleep -Milliseconds 400; Assert-Foreground
+            $invoke.Invoke(); Wait-DotSelectedView; Assert-Foreground
         }
         $dot=Unique-Button 'Your dot' 'sidebar-item'; $profiles=@(Dot-Profiles)
         if ($profiles.Count -eq 0) {
@@ -236,9 +288,9 @@ public static class DotDesktopNative {
                 if ($nodes.Count -gt 200) { Fail-Dot 'history-unavailable' }; $fragments=@()
                 foreach ($node in $nodes) {
                     if (-not (Raw-Contains $bodies[0] $node) -or $node.Current.IsPassword) { Fail-Dot 'history-unavailable' }
-                    if ($node.Current.Name) { $fragments+=([string]$node.Current.Name).Replace("`r`n","`n") }
+                    if ($node.Current.Name) { $fragments+=[string]$node.Current.Name }
                 }
-                $text=[string]::Join("`n",$fragments); $bytes+=[Text.Encoding]::UTF8.GetByteCount($text)
+                $text=Join-DotObservedMessage $fragments (Has-Class $row 'self'); $bytes+=[Text.Encoding]::UTF8.GetByteCount($text)
                 if ($text.Length -gt 32768 -or $bytes -gt 131072) { Fail-Dot 'history-unavailable' }
                 $hash=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($beforeId+'|'+$creationTicks+'|'+(Key $row)))
                 $observationId=[BitConverter]::ToString($hash).Replace('-','').ToLowerInvariant()

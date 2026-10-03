@@ -12,7 +12,9 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-source-install-'));
-const source = path.join(scratch, 'source');
+// Always exercise a real Unicode installation path, even when CI's TEMP is
+// ASCII. The same path also contains spaces so command quoting is tested.
+const source = path.join(scratch, 'source-桥 with spaces');
 const desktop = path.join(source, 'desktop');
 const home = path.join(scratch, 'home');
 let failures = 0;
@@ -80,7 +82,9 @@ try {
     assert(end >= 0, 'setup node assignment not found');
     const probe = path.join(desktop, 'probe-setup.cmd');
     fs.writeFileSync(probe, lines.slice(0, end).join('\r\n') + '\r\necho PB_BASE=%BASE%\r\nexit /b 0\r\n', 'ascii');
-    const result = run('cmd.exe', ['/d', '/c', probe], { cwd: scratch });
+    // cmd's internal echo uses the OEM code page by default. /u writes its
+    // redirected output as UTF-16LE, preserving the actual Unicode BASE value.
+    const result = run('cmd.exe', ['/d', '/u', '/c', probe], { cwd: scratch, encoding: 'utf16le' });
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
     const actual = result.stdout.match(/PB_BASE=(.+)/)?.[1].trim();
     assert(actual, 'resolved base path missing');
@@ -168,13 +172,16 @@ try {
     assert.strictEqual(installed.status, 0, installed.stdout + installed.stderr);
     const link = path.join(startup, 'Pocket Bridge.lnk');
     assert(fs.existsSync(link), 'isolated autostart shortcut missing');
+    const probeOutput = path.join(scratch, 'probe-autostart-output.txt');
     const probe = '$ws = New-Object -ComObject WScript.Shell; ' +
       `$link = $ws.CreateShortcut('${link.replace(/'/g, "''")}'); ` +
-      'Write-Output ("PB_TARGET=" + $link.TargetPath); Write-Output ("PB_ARGS=" + $link.Arguments)';
+      `$report = 'PB_TARGET=' + $link.TargetPath + [Environment]::NewLine + 'PB_ARGS=' + $link.Arguments; ` +
+      `[IO.File]::WriteAllText('${probeOutput.replace(/'/g, "''")}', $report, [Text.Encoding]::Unicode)`;
     const read = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', probe], { env });
     assert.strictEqual(read.status, 0, read.stdout + read.stderr);
-    assert(/PB_TARGET=.*wscript\.exe/i.test(read.stdout), 'autostart does not use hidden WScript launcher');
-    assert(read.stdout.toLowerCase().includes(path.join(desktop, 'launch-tray.vbs').toLowerCase()),
+    const actual = readUtf16(probeOutput);
+    assert(/PB_TARGET=.*wscript\.exe/i.test(actual), 'autostart does not use hidden WScript launcher');
+    assert(actual.toLowerCase().includes(path.join(desktop, 'launch-tray.vbs').toLowerCase()),
       'autostart points outside the source installation');
     const removed = run(process.execPath, [script, 'uninstall'], { cwd: source, env });
     assert.strictEqual(removed.status, 0, removed.stdout + removed.stderr);

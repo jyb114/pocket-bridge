@@ -145,5 +145,40 @@ const changedCopy = android.win.DshVoice.whyNot();
 check('Changing the interface language updates the existing voice module without reload',
   /This browser/.test(changedCopy) && matchesLanguage('en', changedCopy), changedCopy);
 
+// A stuck mobile recognizer must really stop; late callbacks must not refill
+// an input after its owner has moved on to a new recording.
+function controlledVoice() {
+  const env = sandbox('en', true), calls = [], timers = [], partials = [], finals = [];
+  env.win.SpeechRecognition = function () {
+    env.instances.push(this);
+    this.start = () => calls.push('start');
+    this.stop = () => calls.push('stop');
+    this.abort = () => calls.push('abort');
+  };
+  env.box.setTimeout = (fn, delay) => { timers.push({ fn, delay }); return timers.length; };
+  vm.runInContext(voiceSource, env.box);
+  const controller = env.win.DshVoice.start({ onPartial: text => partials.push(text), onFinal: text => finals.push(text) });
+  const recognition = env.instances[0];
+  return { controller, recognition, calls, timers, partials, finals };
+}
+function result(text, final) { return { resultIndex: 0, results: [Object.assign([{ transcript: text }], { isFinal: final })] }; }
+const normalStop = controlledVoice();
+normalStop.recognition.onresult(result('Kept final text.', true));
+normalStop.controller.stop();
+normalStop.recognition.onend();
+normalStop.timers.forEach(timer => timer.fn());
+check('Normal voice completion keeps its final words and cancels the hard abort path',
+  normalStop.calls.join(',') === 'start,stop' && normalStop.finals.join('') === 'Kept final text.', normalStop.calls);
+const stuckStop = controlledVoice();
+stuckStop.recognition.onresult(result('Already displayed text.', false));
+stuckStop.controller.stop();
+check('Stuck voice first requests final results and schedules only a 200ms abort fallback',
+  stuckStop.calls.join(',') === 'start,stop' && stuckStop.timers.length === 1 && stuckStop.timers[0].delay === 200, stuckStop.calls);
+stuckStop.timers[0].fn(); stuckStop.controller.abort();
+stuckStop.recognition.onresult(result('Late stale text.', true)); stuckStop.recognition.onend();
+check('The abort fallback runs once and ignores late text while preserving text already shown',
+  stuckStop.calls.join(',') === 'start,stop,abort' && stuckStop.partials.join('') === 'Already displayed text.' && !stuckStop.finals.length,
+  stuckStop.calls);
+
 console.log(`\nVoice localization: ${failures} failure(s)`);
 process.exitCode = failures ? 1 : 0;

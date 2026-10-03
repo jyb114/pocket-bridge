@@ -25,7 +25,7 @@ function uuid(value) {
   if (typeof value !== 'string' || !UUID.test(value)) throw error('invalid-request');
   return value.toLowerCase();
 }
-function observation(value, valueRequest, operationId, maximum = 40) {
+function observation(value, valueRequest, operationId, maximum = protocol.MAX_BASELINE_ROWS) {
   try {
     const normalized = protocol.normalizeObservation(value, valueRequest, operationId, maximum);
     if (!ownKeys(value, Object.keys(normalized)) || typeof value.version !== 'string' ||
@@ -164,7 +164,7 @@ function implementation(fileSystem, acquireOwner) {
             (['sending', 'accepted'].includes(value.state) && !value.invokeAuthorized)) throw error('journal-unavailable');
         let afterObservation = null, proof = null;
         if (value.state === 'accepted') {
-          afterObservation = observation(value.afterObservation, valueRequest, operationId, 45);
+          afterObservation = observation(value.afterObservation, valueRequest, operationId, protocol.MAX_AFTER_ROWS);
           proof = protocol.verifyFreshDesktopRow(baseline, afterObservation, valueRequest, operationId);
           if (!proof || !ownKeys(value.proof, Object.keys(proof)) || Object.keys(proof).some(field => value.proof[field] !== proof[field]))
             throw error('journal-unavailable');
@@ -289,6 +289,21 @@ function implementation(fileSystem, acquireOwner) {
           ready();
           return true;
         },
+        // Internal trusted-service context only. Never include this in HTTP
+        // receipts: it contains the original request and complete private proof.
+        reconciliationContext(id, threadId) {
+          const current = get(id);
+          if (current.request.threadId !== uuid(threadId)) throw error('target-mismatch');
+          if (current.state !== 'unknown' || !current.invokeAuthorized) return null;
+          return clone({ request: current.request, operationId: current.operationId,
+            baseline: current.baseline, baselineDigest: current.baselineDigest });
+        },
+        assertReadyForReconcile(id, digest) {
+          const current = get(id);
+          if (current.state !== 'unknown' || !current.invokeAuthorized || digest !== current.baselineDigest)
+            throw error('invalid-transition');
+          owner.assertOneChild(); ready(); return true;
+        },
         markFailedBeforeSend(id, code) {
           const current = get(id);
           if (current.state !== 'prepared') throw error('invalid-transition');
@@ -303,7 +318,7 @@ function implementation(fileSystem, acquireOwner) {
           const current = get(id);
           if (!['sending', 'unknown', 'accepted'].includes(current.state) || !current.invokeAuthorized) throw error('invalid-transition');
           let after;
-          try { after = observation(afterValue, current.request, current.operationId, 45); }
+          try { after = observation(afterValue, current.request, current.operationId, protocol.MAX_AFTER_ROWS); }
           catch (_) { throw error('delivery-proof-unavailable'); }
           const proof = protocol.verifyFreshDesktopRow(current.baseline, after, current.request, current.operationId);
           if (!proof) throw error('delivery-proof-unavailable');

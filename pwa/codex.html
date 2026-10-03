@@ -34,16 +34,17 @@
     --rail:44px;           /* 左侧图标栏宽度，和 DSH 那种窄栏一致 */
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{height:100%}
+  html,body{height:100%;overflow:hidden}
   body{
     margin:0;background:var(--bg);color:var(--fg);
     font-family:-apple-system,system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
     font-size:16px;line-height:1.62;
     display:flex;flex-direction:column;
-    /* 100dvh 管的是浏览器地址栏收放，**管不到软键盘** —— iOS 上键盘弹出时
-       只改 visualViewport，不改布局视口，于是输入框会被盖住。
-       所以再减去 --kb（由下面的 visualViewport 监听写进来，桌面上恒为 0）。 */
-    height:calc(100dvh - var(--kb,0px));overflow:hidden;
+    /* Safari may pan the layout viewport while focusing an input. Use the
+       visible viewport directly instead of subtracting a second keyboard
+       estimate from dvh; only the conversation itself should scroll. */
+    position:fixed;left:0;right:0;top:var(--phone-viewport-top,0px);
+    height:100vh;height:var(--phone-viewport-height,100dvh);overflow:hidden;
   }
   button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
   /* 键盘焦点必须看得见。
@@ -108,6 +109,7 @@
   #task-more{font-size:12px;color:var(--accent);background:none;border:0;padding:4px;
     min-width:44px;min-height:44px;flex:none;cursor:pointer}
   #task-more[hidden]{display:none}
+  #history-full-page[hidden]{display:none}
   #task-activity{font-size:13px;color:var(--dim2);margin-top:3px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
   #task-activity[hidden]{display:none}
   #task-status.expanded #task-activity{display:block;overflow:visible}
@@ -131,7 +133,7 @@
   .queued-row button{color:var(--dim2);font-size:12px;flex:none}
 
   main{
-    flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+    flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
     /* 关掉浏览器自带的「滚动锚定」。
        它会在我往上插入旧内容时自动调整 scrollTop —— 而我自己也在调整，
        两边各补一次就翻倍：实测我补了 2513px，它又补了 2920px，
@@ -140,6 +142,8 @@
   }
   main *{overflow-anchor:none}
   .pad{padding:13px}
+  #apprs:empty{padding:0}
+  #body > .msg:last-child{margin-bottom:0}
 
   /* ── 会话列表 ───────────────────────────────────────────────────────────── */
   .search{
@@ -316,17 +320,21 @@
      里面上面写内容、下面一排小图标，发送键是右侧一个实心圆。
      照这个结构做，两个界面切换时才不会有割裂感。 */
   footer{
-    flex:none;padding:8px 12px calc(8px + var(--safe-b));
+    flex:none;display:flex;flex-direction:column;max-height:55%;
+    padding:8px 12px calc(8px + var(--safe-b));
     background:var(--bg);
   }
+  .composer-options{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
   .composer{
+    flex:none;
     background:var(--card);border:1px solid var(--line);border-radius:16px;
     padding:10px 12px 8px;
   }
   .composer:focus-within{border-color:var(--line2)}
   textarea{
     width:100%;background:none;border:0;color:var(--fg);font:inherit;
-    padding:2px 2px 6px;resize:none;max-height:150px;min-height:26px;
+    padding:2px 2px 6px;resize:none;max-height:150px;
+    max-height:min(150px,calc(var(--phone-viewport-height,100dvh) * .2));min-height:26px;
     line-height:1.5;outline:none;
   }
   textarea::placeholder{color:var(--dim)}
@@ -361,6 +369,21 @@
   .stop{background:var(--bad);color:#fff;font-size:13.5px;padding:0 15px;
     height:34px;border-radius:17px;flex:none;font-weight:600}
 
+  /* While writing above a mobile keyboard, keep a few conversation lines in
+     view. Fold secondary status text into Details, leaving the actual state,
+     navigation, Refresh, send mode and authorization cards accessible. */
+  body.compact-phone-keyboard header{padding:calc(var(--safe-t) + 3px) 10px 3px}
+  body.compact-phone-keyboard #task-status{padding:2px 10px}
+  body.compact-phone-keyboard #task-status .task-top strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  body.compact-phone-keyboard #task-refresh{padding:0 8px}
+  body.compact-phone-keyboard #task-status:not(.expanded) #task-detail,
+  body.compact-phone-keyboard #task-status:not(.expanded) #task-activity{display:none}
+  body.compact-phone-keyboard footer{padding:4px 10px calc(4px + var(--safe-b))}
+  body.compact-phone-keyboard .composer{padding:6px 10px 4px}
+  body.compact-phone-keyboard .send{height:44px}
+  body.compact-phone-keyboard .send:not(.queue){width:44px;font-size:20px}
+  body.compact-phone-keyboard .stop{height:44px}
+
   /* ── 状态 ───────────────────────────────────────────────────────────────── */
   .empty{text-align:center;color:var(--dim);padding:52px 22px;font-size:14px;line-height:2}
   .empty .big{font-size:34px;margin-bottom:10px;opacity:.45}
@@ -382,12 +405,12 @@
   @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
   /* 弹出面板 */
-  .sheet{position:fixed;inset:0;background:#000a;z-index:20;display:none;
+  .sheet{position:absolute;inset:0;background:#000a;z-index:20;display:none;
     align-items:flex-end;justify-content:center}
   .sheet.on{display:flex}
   .sheet .inner{background:var(--card);width:100%;max-width:520px;
     border-radius:18px 18px 0 0;padding:8px 12px calc(14px + var(--safe-b));
-    max-height:88dvh;overflow-y:auto}
+    max-height:88%;overflow-y:auto}
 
   /* 账户卡 */
   .acct{background:var(--bg);border:1px solid var(--line);border-radius:14px;
@@ -464,6 +487,7 @@
   <div class="task-top"><span class="task-dot"></span><strong id="task-label" data-i18n="正在确认任务状态…">正在确认任务状态…</strong><button id="task-refresh" type="button" data-i18n="刷新状态">刷新状态</button><button id="task-more" type="button" hidden data-i18n="详情">详情</button></div>
   <div id="task-detail"></div>
   <div id="task-activity"></div>
+  <button id="history-full-page" type="button" class="btn" hidden style="min-height:44px;margin:6px 0;font-size:12px" data-i18n="完整读取这一页">完整读取这一页</button>
 </section>
 
 <div id="phone-observation-paused" hidden style="margin:8px 12px;padding:10px;border:1px solid var(--line);border-radius:12px;font-size:12px">
@@ -482,6 +506,7 @@
 </main>
 
 <footer id="footer" style="display:none">
+  <div class="composer-options">
   <div id="connect-thread-panel" hidden style="margin-bottom:8px">
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button id="fork-from-composer" class="btn p" style="flex:1;min-width:140px;margin:0;font-size:13px" data-i18n="复制上下文，在手机独立续聊">复制上下文，在手机独立续聊</button>
@@ -500,6 +525,7 @@
   <div id="attachments" aria-live="polite"></div>
   <input type="file" id="pick-images" accept="image/*" multiple hidden>
   <input type="file" id="pick-files" multiple hidden>
+  </div>
   <div class="composer">
     <textarea id="input" rows="1" placeholder="说点什么…" data-i18n-ph="说点什么…"></textarea>
     <div class="iconrow">
@@ -556,6 +582,11 @@ var t = (window.DshI18n && window.DshI18n.t) ? window.DshI18n.t : function (s) {
 var tr = t;
 
 if (window.DshI18n) window.DshI18n.register({
+  "历史响应验证失败，请点击重试。": {en:"History response verification failed. Retry to read it again.",es:"No se pudo verificar la respuesta del historial. Reintenta para leerla de nuevo."},
+  "历史缓存已失效，请点击重试。": {en:"The history cache is unavailable. Retry to read the full page.",es:"La caché del historial no está disponible. Reintenta para leer la página completa."},
+  "历史连接已变化，请点击重试。": {en:"The history connection changed. Retry on the current connection.",es:"La conexión del historial cambió. Reintenta en la conexión actual."},
+  "历史响应超过安全解压上限；现有内容已保留。可选择完整读取这一页。": {en:"This history page exceeds the safe decompression limit. Existing content is kept; you can load the full page.",es:"Esta página supera el límite de descompresión segura. El contenido actual se conserva; puedes cargar la página completa."},
+  "完整读取这一页": {en:"Load full page",es:"Cargar página completa"},
   "通过电脑 Codex 发送": {en:"Send through desktop Codex",es:"Enviar mediante Codex de escritorio"},
   "由电脑 Codex 决定": {en:"Set in desktop Codex",es:"Se configura en Codex de escritorio"},
   "电脑输入框仍有未发送的草稿，请在电脑检查后再试。手机草稿已保留。": {en:"The desktop composer still contains an unsent draft. Check it on your computer before trying again. Your phone draft has been kept.",es:"El cuadro de texto de la computadora aún contiene un borrador sin enviar. Revísalo en la computadora antes de volver a intentarlo. Se ha conservado el borrador del móvil."},
@@ -1616,7 +1647,9 @@ function renderTaskStatus() {
   var statusLimit = 42;
   var statusFull = String(detail || '');
   // A clock alone must not keep an earlier long-running status expanded.
-  var hasLongStatus = relayStatus || detailContent.length > statusLimit;
+  var compactStatus = document.body.classList.contains('compact-phone-keyboard');
+  var hasLongStatus = relayStatus || detailContent.length > statusLimit ||
+    (compactStatus && (!!detailContent || !!task.activity));
   var statusShort = hasLongStatus ? detailContent.slice(0, statusLimit) + '…' : statusFull;
   if (!hasLongStatus) taskStatusExpanded = false;
   panel.classList.toggle('expanded', taskStatusExpanded);
@@ -1639,6 +1672,11 @@ function renderTaskStatus() {
   $('task-refresh').textContent=relayStatus?'↻':t('刷新状态');
   $('task-refresh').setAttribute('aria-label',t('刷新状态'));
   $('task-refresh').title=t('刷新状态');
+  var fullPage = $('history-full-page'), fullRequest = state.historyFullPage;
+  if (fullPage) {
+    fullPage.hidden = !fullRequest || !state.thread || fullRequest.threadId !== state.thread.id || fullRequest.ws !== state.ws;
+    fullPage.disabled = !state.ready || !!state.loadingFullHistory;
+  }
 }
 function setTask(kind, detail) {
   task.kind = kind; task.detail = detail || ''; task.syncedAt = Date.now();
@@ -1735,20 +1773,37 @@ function displayThreadTitle(thread, fallback) {
   }
   return raw || fallback || '';
 }
-function refreshObservedThread() {
+function refreshObservedThread(forceHistory) {
+  // A manual Refresh during a pending read runs once more after that read;
+  // it must not disappear merely because the current observer is busy.
+  if (forceHistory === true) state.forceHistoryRefresh = true;
   if (state.view !== 'thread' || !state.thread || !state.ready || document.hidden || observerBusy) return;
   clearTimeout(observerTimer);
   var epoch = observerEpoch, tid = state.thread.id, version = activityVersion, ws = state.ws;
   observerBusy = true;
   refreshQueue();
-  var read = function(method,params) { return call(method,params,8000).then(function(r){return {ok:true,value:r};},function(e){return {ok:false,error:e && e.message || ''};}); };
-  // Turn pagination recovers the last lifecycle even when this server has not loaded the desktop thread.
+  var force = state.forceHistoryRefresh === true;
+  state.forceHistoryRefresh = false;
+  var cache = state.historyPoll;
+  var deferHistory = !force && cache && cache.threadId === tid && Date.now() - cache.lastContentAt >= 0 && Date.now() - cache.lastContentAt < 15000;
+  var read = function(method,params) { return call(method,params,method === 'thread/items/list' ? 30000 : 8000).then(function(r){return {ok:true,value:r};},function(e){return {ok:false,error:e && e.message || '',errorCode:e && e.code};}); };
+  // Completed history can be quiet for at most fifteen seconds. Small status
+  // and latest-turn reads retain their normal cadence; a new or uncertain turn
+  // requests the full page immediately in this same observation, with no tail
+  // limit that could lose intermediate messages during a burst of tools.
   Promise.all([
     read('thread/read',{threadId:tid,includeTurns:false}),
     read('thread/turns/list',{threadId:tid,limit:1,sortDirection:'desc',itemsView:'notLoaded'}),
-    read('thread/items/list',{threadId:tid,limit:PAGE_SIZE,sortDirection:'desc'}),
+    deferHistory ? Promise.resolve({ok:true,value:{data:[]},deferred:true}) : read('thread/items/list',{threadId:tid,limit:PAGE_SIZE,sortDirection:'desc'}),
     read('thread/loaded/list',{})
   ]).then(function(results) {
+    if (!results[2].deferred || epoch !== observerEpoch || !state.thread || state.thread.id !== tid || state.ws !== ws ||
+      version !== activityVersion || state.resuming || state.sending || state.handingBack || state.queueActivating) return results;
+    var meta = results[0], turns = results[1], latest = turns.ok && (turns.value.data || [])[0];
+    var kind = meta.ok && statusKind(meta.value.thread && meta.value.thread.status);
+    if (meta.ok && (kind === 'idle' || kind === 'notLoaded') && latest && latest.id === cache.turnId && latest.status === 'completed') return results;
+    return read('thread/items/list',{threadId:tid,limit:PAGE_SIZE,sortDirection:'desc'}).then(function(items){results[2]=items;return results;});
+  }).then(function(results) {
     if (epoch !== observerEpoch || !state.thread || state.thread.id !== tid || state.ws !== ws ||
       version !== activityVersion || state.resuming || state.sending || state.handingBack || state.queueActivating) return;
     var meta = results[0], turns = results[1], items = results[2];
@@ -1776,25 +1831,34 @@ function refreshObservedThread() {
       }
       else setTask('unknown',t('同步失败，暂时无法确认是否完成；将自动重试。'));
     }
+    if (!items.deferred) {
+      var latestTurn = turns.ok && (turns.value.data || [])[0];
+      var metadataKind = meta.ok && statusKind(meta.value.thread && meta.value.thread.status);
+      state.historyPoll = items.ok && meta.ok && (metadataKind === 'idle' || metadataKind === 'notLoaded') &&
+        latestTurn && latestTurn.id && latestTurn.status === 'completed'
+        ? {threadId:tid,turnId:latestTurn.id,lastContentAt:Date.now()} : null;
+    }
     if (items.ok && version === activityVersion) {
-      var rows = items.value.data || [];
+      var rows = items.value.data || [], changed = false;
       rows.slice().reverse().forEach(function(row) {
         var item = row.item || row, rec = state.items[item.id];
         var snapshot = JSON.stringify(item);
         if (!rec || rec.snapshot !== snapshot) {
+          changed = true;
           upsertItem(item,true);
           if (state.items[item.id]) state.items[item.id].snapshot = snapshot;
         }
         noteActivity(item,row.turnId);
       });
       if (!rows.length && !state.order.length) task.activity = '';
-      if (rows.length) tidyItems();
-    } else if (!items.ok && !state.awaitingFirstTurn) task.detail += t(' 进度内容暂未同步。');
+      if (changed) tidyItems();
+    } else if (!items.ok && !state.awaitingFirstTurn) task.detail += items.errorCode === -32071 ? ' ' + t('历史响应超过安全解压上限；现有内容已保留。可选择完整读取这一页。') : t(' 进度内容暂未同步。');
+    if (!items.deferred) state.historyFullPage = !items.ok && items.errorCode === -32071 ? {threadId:tid,ws:ws} : null;
     renderTaskStatus();
   }).finally(function() {
     if (epoch !== observerEpoch) return;
     observerBusy = false;
-    observerTimer = setTimeout(refreshObservedThread,2500);
+    observerTimer = setTimeout(refreshObservedThread,state.forceHistoryRefresh ? 0 : 2500);
   });
 }
 
@@ -2056,6 +2120,8 @@ function scrollDown(force) {
 function updateJump() {
   var b = $('jump');
   if (!b) return;
+  // Keep the shortcut above multiline drafts and queued-message controls.
+  b.style.bottom = ($('footer').offsetHeight + 8) + 'px';
   b.style.display = state.view !== 'thread' || !state.order.length || stick ? 'none' : 'flex';
 }
 
@@ -2073,7 +2139,7 @@ function initScrollWatch() {
   b.id = 'jump';
   b.textContent = t('↓ 最新');
   b.style.cssText = [
-    'position:fixed', 'right:14px', 'bottom:calc(104px + var(--safe-b))',
+    'position:absolute', 'right:14px', 'bottom:calc(104px + var(--safe-b))',
     'z-index:12', 'display:none', 'align-items:center', 'gap:5px',
     'padding:8px 14px', 'border-radius:999px', 'font-size:12.5px',
     'background:var(--accent2)', 'color:#fff', 'font-weight:600',
@@ -2081,6 +2147,7 @@ function initScrollWatch() {
   ].join(';');
   b.onclick = function () { stick = true; toBottom(true); };
   document.body.appendChild(b);
+  if (window.ResizeObserver) new ResizeObserver(updateJump).observe($('footer'));
 
   m.addEventListener('scroll', function () {
     var was = stick;
@@ -2154,7 +2221,12 @@ function connect() {
     if (m.id !== undefined && state.pending[m.id]) {
       var p = state.pending[m.id];
       delete state.pending[m.id];
-      if (m.error) p.reject(new Error(m.error.message || JSON.stringify(m.error)));
+      if (m.error) {
+        var rpcError = new Error(m.error.message || JSON.stringify(m.error));
+        if (typeof m.error.code === 'number') rpcError.code = m.error.code;
+        rpcError.rpcMethod = p.method;
+        p.reject(rpcError);
+      }
       else p.resolve(m.result);
     }
   };
@@ -2198,7 +2270,134 @@ function restorePhoneConnection() {
  * 大会话加载要几分钟，必然超时，表现就是「发不出消息」。
  * 这种「参数写了但没接」的错最阴：调用处看着完全正确。
  */
-function call(method, params, timeoutMs) {
+// This extension affects history reads only. The AES WebSocket wrapper still
+// authenticates the entire envelope before any revision or gzip is inspected.
+// No transport error retries a send, resume, subscription, or other operation.
+var HISTORY_WIRE_LIMIT = 8 * 1024 * 1024;
+function historyQueryScope(query) {
+  if (!query || typeof query !== 'object' || Array.isArray(query) ||
+      Object.keys(query).some(function(k){return ['threadId','limit','cursor','sortDirection'].indexOf(k) < 0;}) ||
+      typeof query.threadId !== 'string' || !query.threadId.length || query.threadId.length > 200 ||
+      (query.limit !== undefined && (typeof query.limit !== 'number' || !Number.isInteger(query.limit) || query.limit < 1 || query.limit > 2000)) ||
+      (query.cursor != null && (typeof query.cursor !== 'string' || query.cursor.length > 4096)) ||
+      (query.sortDirection !== undefined && query.sortDirection !== 'asc' && query.sortDirection !== 'desc')) return null;
+  return {threadId:query.threadId,limit:query.limit == null ? null : query.limit,cursor:query.cursor == null ? null : query.cursor,sortDirection:query.sortDirection == null ? null : query.sortDirection};
+}
+function historyWireContext(ws) {
+  var context = state.historyTransport;
+  if (context && context.ws === ws) return context;
+  var gzip = false;
+  try { gzip = typeof window.DecompressionStream === 'function' && typeof Blob === 'function' && typeof TextDecoder === 'function' && !!new window.DecompressionStream('gzip'); } catch (e) {}
+  context = {ws:ws,unsupported:false,gzip:gzip,pages:Object.create(null),order:[],bytes:0};
+  state.historyTransport = context;
+  return context;
+}
+function forgetHistoryWirePage(context, key) {
+  var entry = context.pages[key];
+  if (!entry) return;
+  context.bytes -= entry.bytes;
+  delete context.pages[key];
+  var at = context.order.indexOf(key); if (at >= 0) context.order.splice(at,1);
+}
+function cacheHistoryWirePage(context, key, revision, text, bytes) {
+  forgetHistoryWirePage(context,key);
+  if (bytes > HISTORY_WIRE_LIMIT) return;
+  while (context.order.length >= 4 || context.bytes + bytes > HISTORY_WIRE_LIMIT) forgetHistoryWirePage(context,context.order[0]);
+  context.pages[key] = {revision:revision,text:text,bytes:bytes};
+  context.order.push(key); context.bytes += bytes;
+}
+function historyWireError(kind) {
+  return new Error(t(kind === 'cache' ? '历史缓存已失效，请点击重试。' : kind === 'connection' ? '历史连接已变化，请点击重试。' : '历史响应验证失败，请点击重试。'));
+}
+function inflateHistoryWire(envelope) {
+  var length = envelope.decodedBytes, body = envelope.body;
+  if (!Number.isInteger(length) || length < 1 || length > HISTORY_WIRE_LIMIT ||
+      typeof body !== 'string' || !body.length || body.length > Math.ceil(HISTORY_WIRE_LIMIT / 3) * 4 ||
+      body.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return Promise.reject(historyWireError());
+  var bytes, reader;
+  try {
+    var raw = atob(body);
+    if (raw.length > HISTORY_WIRE_LIMIT) throw historyWireError();
+    bytes = new Uint8Array(raw.length);
+    for (var i=0;i<raw.length;i++) bytes[i] = raw.charCodeAt(i);
+    reader = new Blob([bytes]).stream().pipeThrough(new window.DecompressionStream('gzip')).getReader();
+  } catch (e) { return Promise.reject(historyWireError()); }
+  var parts = [], total = 0;
+  function readPart() {
+    return reader.read().then(function(part){
+      if (part.done) {
+        if (total !== length) throw historyWireError();
+        var plain = new Uint8Array(total), offset = 0;
+        parts.forEach(function(chunk){plain.set(chunk,offset);offset+=chunk.length;});
+        return new TextDecoder('utf-8',{fatal:true}).decode(plain);
+      }
+      total += part.value.byteLength;
+      if (total > length || total > HISTORY_WIRE_LIMIT) {
+        reader.cancel().catch(function(){});
+        throw historyWireError();
+      }
+      parts.push(part.value);
+      return readPart();
+    });
+  }
+  return readPart().catch(function(){parts=[];return reader.cancel().catch(function(){}).then(function(){throw historyWireError();});});
+}
+function decodeHistoryWire(envelope, request, context, key) {
+  if (!envelope || envelope.__pbHistory !== 1 || envelope.nonce !== request.nonce ||
+      JSON.stringify(envelope.scope) !== JSON.stringify(historyQueryScope(request.query)) ||
+      typeof envelope.revision !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.revision) ||
+      typeof envelope.unchanged !== 'boolean') return Promise.reject(historyWireError());
+  if (envelope.unchanged) {
+    var cached = context.pages[key];
+    if (!request.revision || request.revision !== envelope.revision || !cached || cached.revision !== envelope.revision ||
+        Object.keys(envelope).some(function(k){return ['__pbHistory','nonce','scope','revision','unchanged'].indexOf(k)<0;})) return Promise.reject(historyWireError('cache'));
+    try { return Promise.resolve(JSON.parse(cached.text)); } catch (e) { return Promise.reject(historyWireError('cache')); }
+  }
+  var allowed = envelope.encoding === 'gzip' ? ['__pbHistory','nonce','scope','revision','unchanged','encoding','decodedBytes','body'] : ['__pbHistory','nonce','scope','revision','unchanged','encoding','decodedBytes','value'];
+  if (Object.keys(envelope).some(function(k){return allowed.indexOf(k)<0;})) return Promise.reject(historyWireError());
+  var content;
+  if (envelope.encoding === 'gzip' && context.gzip && request.acceptEncoding.indexOf('gzip') >= 0) content = inflateHistoryWire(envelope);
+  else if (envelope.encoding === 'identity' && envelope.value && typeof envelope.value === 'object') {
+    try { content = Promise.resolve(JSON.stringify(envelope.value)); } catch (e) { content = Promise.reject(historyWireError()); }
+  } else content = Promise.reject(historyWireError());
+  return content.then(function(text){
+    var value, bytes;
+    try { value = JSON.parse(text); bytes = new TextEncoder().encode(text).byteLength; } catch (e) { throw historyWireError(); }
+    if (!value || !Array.isArray(value.data) || !Number.isInteger(envelope.decodedBytes) || bytes !== envelope.decodedBytes || bytes > HISTORY_WIRE_LIMIT) throw historyWireError();
+    if (state.ws !== context.ws || context.ws.readyState !== 1) throw historyWireError('connection');
+    cacheHistoryWirePage(context,key,envelope.revision,text,bytes);
+    return value;
+  });
+}
+function callHistoryWire(params, timeoutMs) {
+  var ws = state.ws, scope = historyQueryScope(params), context = historyWireContext(ws), key = JSON.stringify(scope);
+  if (context.unsupported) return callRaw('thread/items/list',params,timeoutMs);
+  var random = new Uint8Array(16);
+  try { window.crypto.getRandomValues(random); } catch (e) { return callRaw('thread/items/list',params,timeoutMs); }
+  var nonce = Array.prototype.map.call(random,function(n){return ('0'+n.toString(16)).slice(-2);}).join('');
+  var request = {v:1,nonce:nonce,query:JSON.parse(JSON.stringify(params)),acceptEncoding:context.gzip?['gzip']:[]};
+  if (context.pages[key]) request.revision = context.pages[key].revision;
+  return callRaw('bridge/history/list',request,timeoutMs).then(function(result){
+    if (state.ws !== ws || ws.readyState !== 1) throw historyWireError('connection');
+    return decodeHistoryWire(result,request,context,key);
+  }).catch(function(error){
+    if (state.ws !== ws || ws.readyState !== 1) throw historyWireError('connection');
+    forgetHistoryWirePage(context,key);
+    if (error.code === -32601 && error.rpcMethod === 'bridge/history/list') {
+      context.unsupported = true;
+      return callRaw('thread/items/list',params,timeoutMs);
+    }
+    if (error.code === -32071) error.message = t('历史响应超过安全解压上限；现有内容已保留。可选择完整读取这一页。');
+    throw error;
+  });
+}
+function call(method, params, timeoutMs, legacyHistory) {
+  if (method === 'thread/items/list' && legacyHistory !== true && historyQueryScope(params) &&
+      window.__dshE2eeOn === true && window.WebSocket && window.WebSocket.__dshE2ee === true &&
+      window.crypto && typeof window.crypto.getRandomValues === 'function') return callHistoryWire(params,timeoutMs);
+  return callRaw(method,params,timeoutMs);
+}
+function callRaw(method, params, timeoutMs) {
   return new Promise(function (resolve, reject) {
     if(state.handingBack && /^(thread\/(start|fork|resume)|turn\/(start|steer))$/.test(method)) { reject(new Error(t('正在检查交还，请稍候再操作。'))); return; }
     if (!state.ws || state.ws.readyState !== 1) { reject(new Error(t('连接没就绪'))); return; }
@@ -3919,6 +4118,7 @@ function openThread(t, options) {
   markSeen(t);       // 记下「这条我看过了」，列表里的未读点靠它消掉
   queueEntries=[];renderQueue();refreshQueue();
   state.items = {}; state.order = [];
+  state.historyPoll = null; state.forceHistoryRefresh = false;
   resetConversationScroll();
   // 换会话时把「等回推的占位」也清掉：它们属于上一条会话，留着会认错人
   state.pendingLocal = [];
@@ -3930,7 +4130,11 @@ function openThread(t, options) {
   state.resumed = state.awaitingFirstTurn;
   state.olderCursor = null;
   state.loadingOlder = false;
+  state.olderLoadFailed = false;
   state.noMore = false;
+  state.moreHistoryLoaded = false;
+  state.historyFullPage = null;
+  state.loadingFullHistory = false;
   renderPendingApprovals();
 
   $('title').textContent = displayThreadTitle(t,tr('会话'));
@@ -3941,43 +4145,80 @@ function openThread(t, options) {
   // The footer was hidden on the list. Measure the restored textarea only
   // after it is visible, otherwise scrollHeight is zero and the text vanishes.
   restoreTextDraft(t);
-  var epoch = observerEpoch;
+  loadInitialThreadHistory(t);
+}
 
-  call('thread/items/list', {
-    threadId: t.id, limit: PAGE_SIZE, sortDirection: 'desc'
-  }).then(function (r) {
-    if (epoch !== observerEpoch || state.view !== 'thread') return;
-    $('body').innerHTML = '';
+/** Retry the same read-only page without resetting its composer or writer. */
+function loadInitialThreadHistory(thread, legacyHistory) {
+  var epoch = observerEpoch, ws = state.ws;
+  var isCurrentPage = function () {
+    return epoch === observerEpoch && state.view === 'thread' && state.thread === thread && state.ws === ws;
+  };
+  return call('thread/items/list', {
+    threadId: thread.id, limit: PAGE_SIZE, sortDirection: 'desc'
+  },30000,legacyHistory === true).then(function (r) {
+    if (!isCurrentPage()) return;
+    state.historyFullPage = null;
+    // The observer may already have recovered real rows while Retry was in
+    // flight. Keep those indexed nodes instead of clearing and losing them.
+    Array.prototype.forEach.call($('body').querySelectorAll('.skel,.empty,.history-load-error'),function(node){node.remove();});
     var rows = (r && r.data) || [];
-    state.olderCursor = (r && r.nextCursor) || null;
-    state.noMore = !state.olderCursor;
-
-    if (!rows.length) {
+    if (!state.moreHistoryLoaded) {
+      state.olderCursor = (r && r.nextCursor) || null;
+      state.noMore = !state.olderCursor;
+    }
+    if (!rows.length && !state.order.length) {
       $('body').innerHTML = '<div class="empty"><div class="big">👋</div>' + tr('这是一个新会话。<br>在下面输入框里说点什么。') + '</div>';
     }
-    // 服务端给的是「从新到旧」，界面要从上到下越来越新，所以倒过来渲染
-    rows.slice().reverse().forEach(function (row) { appendItem(row.item || row); });
+    rows.slice().reverse().forEach(function (row) {
+      var item = row.item || row, rec = item && state.items[item.id];
+      if (!rec) appendItem(item);
+      else {
+        var snapshot = JSON.stringify(item);
+        if (rec.snapshot !== snapshot) { upsertItem(item,true); state.items[item.id].snapshot = snapshot; }
+      }
+    });
     if (window.DshI18n) window.DshI18n.apply($('body'));
-
     if (state.olderCursor) prependOlderHint();
     renderFooter();
     tidyItems();
     scrollDown(true);
     startObserving();
-
   }).catch(function (e) {
-    if (epoch !== observerEpoch || state.view !== 'thread') return;
+    if (!isCurrentPage()) return;
     startObserving();
-    // 刚建出来的会话还没有落盘的记录，服务端会回「not supported yet」之类的话。
-    // 那不是错误 —— 它就是「还没有历史」，按空会话显示就好。
-    // 把它当错误弹出来，使用者会以为开新会话失败了。
-    if (/not supported|no rollout|not found|not loaded/i.test(e.message)) {
+    // Unsupported methods, missing old history and generic not-loaded errors
+    // are failures. Only actual first-message evidence describes an empty chat.
+    if (state.awaitingFirstTurn || beforeFirstTurn(e.message)) {
       $('body').innerHTML = '<div class="empty"><div class="big">👋</div>' + tr('这是一个新会话。<br>在下面输入框里说点什么。') + '</div>';
       renderFooter();
       return;
     }
-    $('body').innerHTML = '';
-    addError(tr('读不到会话内容：') + e.message);
+    Array.prototype.forEach.call($('body').querySelectorAll('.skel,.empty,.history-load-error'),function(node){node.remove();});
+    var panel = el('history-load-error');
+    panel.setAttribute('role','status');
+    var message = document.createElement('div');
+    message.textContent = tr('读不到会话内容：') + e.message;
+    var retry = document.createElement('button');
+    retry.type = 'button'; retry.className = 'btn'; retry.style.minHeight = '44px';
+    retry.textContent = t('重试');
+    retry.onclick = function () {
+      if (state.view !== 'thread' || state.thread !== thread) return;
+      retry.disabled = true;
+      loadInitialThreadHistory(thread);
+    };
+    panel.appendChild(message); panel.appendChild(retry);
+    if (e.code === -32071) {
+      var full = document.createElement('button');
+      full.type = 'button'; full.className = 'btn'; full.style.minHeight = '44px'; full.textContent = t('完整读取这一页');
+      full.onclick = function () {
+        if (state.view !== 'thread' || state.thread !== thread || state.ws !== ws) return;
+        full.disabled = true;
+        loadInitialThreadHistory(thread,true);
+      };
+      panel.appendChild(full);
+    }
+    $('body').appendChild(panel);
   });
 }
 
@@ -4030,15 +4271,18 @@ function appendItem(it) {
 
 /** 把一批（从新到旧）插到最前面，保持时间顺序 */
 function prependItems(rows) {
-  var frag = document.createDocumentFragment();
+  var frag = document.createDocumentFragment(), olderIds = [];
+  // The server is newest-first. Reverse once, then append in chronological
+  // order. Prepending each reversed row reversed the page a second time.
   rows.slice().reverse().forEach(function (row) {
     var it = row.item || row;
     if (!it || !it.id || state.items[it.id]) return;
-    var rec = state.items[it.id] = { item: it, acc: it.text || '', created: false };
-    // 插到最前面，但顺序要保持：倒着遍历时用 insertBefore 逐个往前放
+    var rec = state.items[it.id] = { item: it, acc: it.text || '', created: false, snapshot: JSON.stringify(it) };
     rec.el = buildItem(it, rec);
-    frag.insertBefore(rec.el, frag.firstChild);
+    frag.appendChild(rec.el);
+    olderIds.push(it.id);
   });
+  state.order = olderIds.concat(state.order);
   var body = $('body');
   body.insertBefore(frag, body.firstChild);
 }
@@ -4047,11 +4291,14 @@ function prependItems(rows) {
 function prependOlderHint() {
   var old = document.getElementById('older-hint');
   if (old) old.remove();
-  var d = document.createElement('div');
+  var d = document.createElement('button');
+  d.type = 'button';
   d.id = 'older-hint';
-  d.style.cssText = 'text-align:center;color:var(--dim);font-size:12.5px;' +
+  d.style.cssText = 'display:block;width:100%;min-height:44px;text-align:center;color:var(--dim);font-size:12.5px;' +
     'padding:14px 0 10px';
   d.textContent = state.noMore ? t('已经是最早的了') : t('往上滑加载更早的');
+  d.disabled = state.noMore;
+  d.onclick = function () { loadOlder(false,true); };
   $('body').insertBefore(d, $('body').firstChild);
 }
 
@@ -4067,12 +4314,19 @@ function prependOlderHint() {
  * 改成**锚定一个元素**：记下「此刻视野最上面那一条」相对视口的位置，
  * 更新完再把它对回同一个位置。这样中间高度怎么变都不影响。
  */
-function loadOlder() {
-  if (state.loadingOlder || state.noMore || !state.olderCursor || state.view !== 'thread') return;
+function loadOlder(legacyHistory, userRetry) {
+  if (state.loadingOlder || state.noMore || !state.olderCursor || state.view !== 'thread' || (state.olderLoadFailed && userRetry !== true)) return;
   state.loadingOlder = true;
+  state.olderLoadFailed = false;
+  var epoch = observerEpoch, thread = state.thread, ws = state.ws;
+  var isCurrentPage = function () {
+    return epoch === observerEpoch && state.view === 'thread' && state.thread === thread && state.ws === ws;
+  };
 
   var hint = document.getElementById('older-hint');
-  if (hint) hint.textContent = t('正在加载更早的…');
+  var fullRetry = document.getElementById('older-full-history');
+  if (fullRetry) fullRetry.remove();
+  if (hint) { hint.textContent = t('正在加载更早的…'); hint.disabled = true; }
 
   var main = $('main');
   var anchor = firstVisibleBlock();
@@ -4083,10 +4337,14 @@ function loadOlder() {
   var prevTop = main.scrollTop;
 
   call('thread/items/list', {
-    threadId: state.thread.id, limit: PAGE_SIZE,
+    threadId: thread.id, limit: PAGE_SIZE,
     sortDirection: 'desc', cursor: state.olderCursor
-  }).then(function (r) {
+  },30000,legacyHistory === true).then(function (r) {
+    // A slow tunnel reply belongs to the page that requested it. Navigating
+    // away must never inject its history or cursor into another conversation.
+    if (!isCurrentPage()) return;
     var rows = (r && r.data) || [];
+    state.moreHistoryLoaded = true;
     state.olderCursor = (r && r.nextCursor) || null;
     state.noMore = !state.olderCursor;
 
@@ -4145,9 +4403,19 @@ function loadOlder() {
       prependOlderHint();
     }
   }).catch(function (e) {
-    if (hint) hint.textContent = t('加载更早的失败：') + e.message;
+    if (isCurrentPage() && hint && hint.isConnected) {
+      state.olderLoadFailed = true;
+      hint.textContent = t('加载更早的失败：') + e.message + ' · ' + t('重试');
+      hint.disabled = false;
+      if (e.code === -32071) {
+        var full = document.createElement('button'), cursor = state.olderCursor;
+        full.type = 'button'; full.className = 'btn'; full.id = 'older-full-history'; full.style.minHeight = '44px'; full.textContent = t('完整读取这一页');
+        full.onclick = function () { if (isCurrentPage() && state.olderCursor === cursor) loadOlder(true,true); };
+        $('body').insertBefore(full,hint.nextSibling);
+      }
+    }
   }).then(function () {
-    state.loadingOlder = false;
+    if (isCurrentPage()) state.loadingOlder = false;
   });
 }
 
@@ -5578,7 +5846,7 @@ function toast(msg) {
   if (!t) {
     t = document.createElement('div');
     t.id = 'toast';
-    t.style.cssText = 'position:fixed;left:50%;bottom:78px;transform:translateX(-50%);' +
+    t.style.cssText = 'position:absolute;left:50%;bottom:78px;transform:translateX(-50%);' +
       'background:#25252d;border:1px solid #35353f;color:#eee;padding:9px 18px;' +
       'border-radius:11px;font-size:13.5px;z-index:30;opacity:0;transition:opacity .18s;' +
       'pointer-events:none;max-width:84vw;text-align:center';
@@ -5592,7 +5860,15 @@ function toast(msg) {
 
 // ── 绑定 ─────────────────────────────────────────────────────────────────────
 $('back').onclick = function () { loadThreads(); };
-$('task-refresh').onclick = function () { refreshObservedThread(); };
+$('task-refresh').onclick = function () { refreshObservedThread(true); };
+$('history-full-page').onclick = function () {
+  var request = state.historyFullPage;
+  if (!request || !state.thread || request.threadId !== state.thread.id || request.ws !== state.ws || !state.ready || state.loadingFullHistory) return;
+  var token = {}; state.loadingFullHistory = token;
+  var thread = state.thread;
+  renderTaskStatus();
+  Promise.resolve(loadInitialThreadHistory(thread,true)).finally(function(){if(state.loadingFullHistory===token)state.loadingFullHistory=false;renderTaskStatus();});
+};
 document.addEventListener('visibilitychange',function() {
   if (document.hidden) { clearTimeout(observerTimer); return; }
   if (state.view === 'thread') { renderFooter(); startObserving(); }
@@ -5620,33 +5896,62 @@ $('fork-from-composer').onclick=function(){forkCurrentThread(state.thread);};
 $('send-mode').onchange=function(){setSendModePref(this.value);renderFooter();};
 $('send-mode').value=sendModePref();
 
-/**
- * 软键盘占掉的高度 → --kb。
- *
- * iOS Safari 弹键盘时**不改布局视口**，只改 visualViewport，所以
- * height:100dvh 一点用都没有，底部的输入框会被键盘盖住（这是老问题）。
- * 这里把「被吃掉的高度」量出来写成 CSS 变量，让容器跟着缩。
- *
- * 三条保守做法，都是怕算错：
- *   · 只取正数（算出来是负的就当 0）
- *   · 只缩不放 —— 算错时宁可留一条缝，也不能把整个界面顶出屏幕
- *   · 没有 visualViewport 就整个跳过（老浏览器上行为完全不变）
- *
- * ⚠️ 这一段**没有在真机上验过**（手上没有 iPhone，无头浏览器也不会弹键盘）。
- *    桌面浏览器不会触发它：visualViewport 高度始终等于窗口高度，--kb 恒为 0。
- *    真机验证在计划里单列（「Android/iOS 的真实前后台与锁屏测试需要真机参与」）。
- */
+// Use Safari's visible viewport directly. During keyboard/address-bar animation,
+// dvh and innerHeight can update at different times. Preserve history scroll,
+// or keep following the latest reply if that was already the user's choice.
 (function () {
   var vv = window.visualViewport;
   if (!vv) return;
+  var scheduled = false, lastHeight = -1, lastTop = -1;
+  var fullHeight = Number(vv.height) || 0;
   function apply() {
+    scheduled = false;
     try {
-      var kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      document.documentElement.style.setProperty('--kb', Math.round(kb) + 'px');
-    } catch (e) { /* 量不出来就保持原样，不能因此把界面弄坏 */ }
+      // Pinch zoom is browser navigation, not a keyboard resize.
+      if (vv.scale && Math.abs(vv.scale - 1) > .01) return;
+      var height = Number(vv.height), top = Number(vv.offsetTop);
+      if (!isFinite(height) || height <= 0 || !isFinite(top) || top < 0) return;
+      fullHeight = Math.max(fullHeight, height);
+      var wasCompact = document.body.classList.contains('compact-phone-keyboard');
+      // Keep the compact layout during a tap on Refresh/Details/Menu until the
+      // keyboard's visible viewport recovers; otherwise blur can move a button
+      // between pointer-down and pointer-up and swallow the user's tap.
+      var compact = (document.activeElement === $('input') || wasCompact) && height < 500 && height < fullHeight * .8;
+      var compactChanged = wasCompact !== compact;
+      if (height === lastHeight && top === lastTop && !compactChanged) return;
+      var main = $('main'), follow = stick, previousTop = main.scrollTop;
+      var style = document.documentElement.style;
+      style.setProperty('--phone-viewport-height', height + 'px');
+      style.setProperty('--phone-viewport-top', top + 'px');
+      document.body.classList.toggle('compact-phone-keyboard', compact);
+      if (compactChanged) renderTaskStatus();
+      // Force the new layout before restoring scroll, so the next scroll event
+      // sees the right bottom and cannot accidentally turn following off.
+      var maximum = Math.max(0, main.scrollHeight - main.clientHeight);
+      main.scrollTop = follow ? maximum : Math.min(previousTop, maximum);
+      lastHeight = height; lastTop = top;
+      updateJump();
+    } catch (e) { /* A bad viewport sample must not discard a draft. */ }
   }
-  vv.addEventListener('resize', apply);
-  vv.addEventListener('scroll', apply);
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(apply);
+  }
+  vv.addEventListener('resize', schedule);
+  vv.addEventListener('scroll', schedule);
+  window.addEventListener('resize', schedule);
+  window.addEventListener('orientationchange', schedule);
+  function focusChanged() {
+    schedule();
+    setTimeout(schedule, 260);
+  }
+  document.addEventListener('focusin', focusChanged, true);
+  document.addEventListener('focusout', focusChanged, true);
+  document.addEventListener('visibilitychange', schedule);
+  // Preserve the live app's recovery when Safari omits a final resize event.
+  // Unchanged samples do no layout/scroll work; hidden pages do not poll.
+  setInterval(function () { if (!document.hidden) apply(); }, 400);
   apply();
 })();
 // 输入区那两个小图标是有实际作用的，不是摆设：
@@ -5755,6 +6060,7 @@ input.addEventListener('input', function () {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 140) + 'px';
   rememberTextDraft();
+  updateJump();
 });
 input.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !e.shiftKey && !/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {

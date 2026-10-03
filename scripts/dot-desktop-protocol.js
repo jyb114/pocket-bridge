@@ -6,6 +6,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
 const RUNTIME = /^-?\d+(?:,-?\d+){0,31}$/;
 const FAMILY = 'OpenAI.Codex_2p2nqsd0c76g0';
+// Complete materialized scope, never a sliced tail. Keep at most five new rows
+// after dispatch, with exactly one request-bound self row and an intact prefix.
+const MAX_BASELINE_ROWS = 128, MAX_AFTER_ROWS = 133;
 const failure = code => Object.assign(new Error(code), { code, submitted: null });
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const contextKeys = ['threadId', 'hostId', 'packageFamilyName', 'version', 'windowHandle', 'processId',
@@ -54,7 +57,7 @@ function observation(value, request, operationId, maximumRows) {
     value.viewportBounds.every(n => Number.isFinite(n) && Math.abs(n) < 100000) &&
     value.viewportBounds[2] > 0 && value.viewportBounds[3] > 0;
 }
-function normalizeObservation(value, request, operationId, maximumRows = 40) {
+function normalizeObservation(value, request, operationId, maximumRows = MAX_BASELINE_ROWS) {
   if (!observation(value, request, operationId, maximumRows)) throw failure('baseline-unavailable');
   // Retain only the closed technical schema. Accessibility strings/drafts are
   // never copied into a public receipt or accepted as arbitrary proof fields.
@@ -68,7 +71,7 @@ function normalizeObservation(value, request, operationId, maximumRows = 40) {
 function baselineDigest(baseline) { return sha(JSON.stringify(baseline)); }
 function verifyFreshDesktopRow(baseline, afterValue, request, operationId) {
   let after;
-  try { baseline = normalizeObservation(baseline, request, operationId); after = normalizeObservation(afterValue, request, operationId, 45); }
+  try { baseline = normalizeObservation(baseline, request, operationId); after = normalizeObservation(afterValue, request, operationId, MAX_AFTER_ROWS); }
   catch (_) { return null; }
   if (contextKeys.some(key => baseline[key] !== after[key]) ||
       after.observationSequence <= baseline.observationSequence ||
@@ -89,7 +92,7 @@ function verifyFreshDesktopRow(baseline, afterValue, request, operationId) {
 function proofOwnerKey(value) { return JSON.stringify([value.threadId, value.contextGeneration, value.observationId]); }
 function frame(value, request, operationId, expectedSequence, expectedStage, expectedBaseline) {
   const fields = { locked: ['helper'], prepared: ['baseline', 'baselineDigest'],
-    'ready-to-send': ['baselineDigest', 'composerTextHash'],
+    'ready-to-send': ['baselineDigest', 'composerTextHash'], observed: ['baselineDigest', 'observation'],
     result: ['baselineDigest', 'observation', 'submitted', 'code', 'draftCleared', 'draftRemaining'] };
   const allowed = fields[expectedStage];
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.protocol !== 1 ||
@@ -109,17 +112,18 @@ function frame(value, request, operationId, expectedSequence, expectedStage, exp
     const normalized = normalizeObservation(value.baseline, request, operationId);
     if (value.baselineDigest !== baselineDigest(normalized)) throw failure('native-protocol-error');
   }
-  if (['ready-to-send', 'result'].includes(expectedStage)) {
+  if (['ready-to-send', 'result', 'observed'].includes(expectedStage)) {
     if (!expectedBaseline || value.baselineDigest !== baselineDigest(normalizeObservation(expectedBaseline, request, operationId)))
       throw failure('native-protocol-error');
   }
   if (expectedStage === 'ready-to-send' && value.composerTextHash !== sha(request.text)) throw failure('native-protocol-error');
   if (expectedStage === 'result' && ![true, false, null].includes(value.submitted)) throw failure('native-protocol-error');
+  if (expectedStage === 'observed') normalizeObservation(value.observation, request, operationId, MAX_AFTER_ROWS);
   return value;
 }
 function acknowledgement(request, operationId, sequence, stage, baseline) {
   if (!UUID.test(operationId || '') || !Number.isSafeInteger(sequence) || sequence < 1 ||
-      !['continue-preflight', 'paste', 'invoke'].includes(stage)) throw failure('native-protocol-error');
+      !['continue-preflight', 'paste', 'invoke', 'observe', 'observe-complete'].includes(stage)) throw failure('native-protocol-error');
   let digest = null;
   if (stage !== 'continue-preflight') digest = baselineDigest(normalizeObservation(baseline, request, operationId));
   else if (baseline != null) throw failure('native-protocol-error');
@@ -138,5 +142,5 @@ function failureFrame(value, request, operationId, expectedSequence, baseline) {
       value.baselineDigest !== (baseline ? baselineDigest(baseline) : null)) throw failure('native-protocol-error');
   return value;
 }
-module.exports = { normalizeRequest, fingerprint, contextGeneration, normalizeObservation, baselineDigest,
+module.exports = { MAX_BASELINE_ROWS, MAX_AFTER_ROWS, normalizeRequest, fingerprint, contextGeneration, normalizeObservation, baselineDigest,
   verifyFreshDesktopRow, proofOwnerKey, frame, failureFrame, acknowledgement, sha };

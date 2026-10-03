@@ -13,12 +13,14 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 
 const BASE = path.resolve(__dirname, '..');
 const LOG_DIR = path.join(BASE, 'logs');
 const tunnel = require('./tunnel.js');
 
 const PORT = Number(process.env.DSH_GW_PORT || 8080);
+const ISOLATED_ONLY = process.argv.includes('--isolated-only');
 
 let failed = 0;
 const ok = (name, cond, detail) => {
@@ -46,8 +48,81 @@ function readStatus() {
   catch (err) { return null; }
 }
 
+async function isolatedProbeChecks() {
+  const ownedSockets = new Set();
+  let status = 204, mode = 'status';
+  const server = http.createServer((req, res) => {
+    if (req.url !== '/__probe') { res.writeHead(500); res.end(); return; }
+    if (mode === 'reset') { req.socket.destroy(); return; }
+    if (mode === 'silent') return;
+    res.writeHead(status);
+    if (mode === 'endless-body') { res.write('owned foreign response'); return; }
+    res.end();
+  });
+  server.on('connection', socket => { ownedSockets.add(socket); socket.on('close', () => ownedSockets.delete(socket)); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port, origin = `http://127.0.0.1:${port}`;
+  try {
+    for (status of [204, 404, 403, 200, 302, 500, 502, 503]) {
+      const value = await tunnel.probeUrl(origin, 1000);
+      ok(`owned HTTP ${status} ${status === 204 ? 'is the gateway probe' : 'is not gateway health'}`,
+        value.ok === (status === 204) && value.status === status &&
+        (status === 204 ? value.error === null : typeof value.error === 'string' && value.error.length > 0));
+    }
+    mode = 'reset';
+    const reset = await tunnel.probeUrl(origin, 1000);
+    ok('owned peer reset is a bounded unreachable outcome', reset.ok === false && reset.status === 0 && !!reset.error);
+    mode = 'silent';
+    let started = Date.now(); const silent = await tunnel.probeUrl(origin, 60);
+    ok('silent owned HTTP peer cannot keep the health check pending',
+      silent.ok === false && silent.status === 0 && !!silent.error && Date.now() - started < 1000);
+    mode = 'endless-body'; status = 200;
+    const foreign = await tunnel.probeUrl(origin, 1000);
+    // Allow the actual response destroy to reach the owned server socket.
+    for (let index = 0; index < 10 && ownedSockets.size; index++) await new Promise(resolve => setTimeout(resolve, 10));
+    ok('unrelated 200 body is rejected and its owned connection is closed',
+      foreign.ok === false && foreign.status === 200 && ownedSockets.size === 0);
+    const invalid = await tunnel.probeUrl('not-a-url', 1000);
+    ok('invalid probe origin is unreachable without throwing', invalid.ok === false && invalid.status === 0 && !!invalid.error);
+  } finally {
+    for (const socket of ownedSockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+  }
+  const closedStarted = Date.now();
+  const refused = await tunnel.probeUrl(origin, 300);
+  ok('closed owned HTTP port is unreachable within its deadline',
+    refused.ok === false && refused.status === 0 && !!refused.error && Date.now() - closedStarted < 1000);
+
+  // Continuous incomplete HTTP headers reset socket inactivity, but must not
+  // defeat the absolute probe deadline. All connections belong to this fixture.
+  const partialSockets = new Set();
+  const partial = net.createServer(socket => {
+    partialSockets.add(socket); socket.write('HTTP/1.1 200 OK\r\n');
+    const progress = setInterval(() => socket.write('X-Owned-Progress: pending\r\n'), 10);
+    socket.on('error', () => {});
+    socket.on('close', () => { clearInterval(progress); partialSockets.delete(socket); });
+  });
+  await new Promise((resolve, reject) => { partial.once('error', reject); partial.listen(0, '127.0.0.1', resolve); });
+  try {
+    const partialStarted = Date.now();
+    const value = await tunnel.probeUrl(`http://127.0.0.1:${partial.address().port}`, 70);
+    ok('continuous incomplete HTTP headers cannot reset the absolute deadline',
+      value.ok === false && value.status === 0 && !!value.error && Date.now() - partialStarted < 1000);
+  } finally {
+    for (const socket of partialSockets) socket.destroy();
+    await new Promise(resolve => partial.close(resolve));
+  }
+}
+
 (async () => {
   console.log('\n=== 隧道可达性探测 ===\n');
+
+  await isolatedProbeChecks();
+  if (ISOLATED_ONLY) {
+    console.log(`\n${failed ? failed + ' failed' : 'All isolated HTTP probe checks passed'}; no production gateway or tunnel was probed.\n`);
+    process.exitCode = failed ? 1 : 0;
+    return;
+  }
 
   const status = readStatus();
   const liveUrl = status && status.tunnel && status.tunnel.url;

@@ -20,6 +20,7 @@ $script:FailureForegroundObservation = $null
 $script:IdentityModifierObservation = $null
 $script:DesktopUiMutex = $null
 $script:DesktopUiMutexOwned = $false
+$script:DesktopProcessPins = @{}
 
 # Keep this exact allowlist separate from UI queries. Chromium localizes the
 # mode control and newer desktops call the former Work mode simply ChatGPT.
@@ -167,6 +168,76 @@ public static class BridgeDesktopNative {
         }
     }
 }
+// A continuously held process object prevents a PID-only cache from admitting
+// a replacement. This pin has query/synchronize rights only, never input,
+// memory-write, suspension or termination authority.
+public sealed class BridgeDesktopProcessIdentity : IDisposable {
+    [StructLayout(LayoutKind.Sequential)] private struct NativeFileTime { public uint Low, High; }
+    private struct Snapshot { public uint ProcessId; public long CreationFileTime; public string Image; }
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern uint GetProcessId(SafeWaitHandle process);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern uint WaitForSingleObject(SafeWaitHandle process, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError=true)] private static extern bool GetProcessTimes(SafeWaitHandle process,
+        out NativeFileTime creation, out NativeFileTime exit, out NativeFileTime kernel, out NativeFileTime user);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] private static extern bool QueryFullProcessImageName(
+        SafeWaitHandle process, uint flags, StringBuilder image, ref uint size);
+    private readonly SafeWaitHandle handle;
+    private readonly uint processId;
+    private bool captured;
+    private long creationFileTime;
+    private string executablePath;
+    private BridgeDesktopProcessIdentity(SafeWaitHandle value, uint id) { handle=value; processId=id; }
+    private void CheckLive() {
+        if (handle.IsClosed || handle.IsInvalid || WaitForSingleObject(handle,0)!=0x102)
+            throw new InvalidOperationException("The pinned desktop process is not continuously live.");
+    }
+    public static BridgeDesktopProcessIdentity Open(uint id) {
+        IntPtr value=OpenProcess(0x00101000,false,id); // PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+        if (value==IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var pin=new BridgeDesktopProcessIdentity(new SafeWaitHandle(value,true),id);
+        try {
+            pin.CheckLive();
+            if (GetProcessId(pin.handle)!=id) throw new InvalidOperationException("The pinned process ID differs.");
+            pin.CheckLive();
+            return pin;
+        } catch { pin.Dispose(); throw; }
+    }
+    private Snapshot Read() {
+        CheckLive();
+        NativeFileTime creation,exit,kernel,user;
+        if (!GetProcessTimes(handle,out creation,out exit,out kernel,out user))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var image=new StringBuilder(32768); uint size=(uint)image.Capacity;
+        if (!QueryFullProcessImageName(handle,0,image,ref size))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        uint id=GetProcessId(handle);
+        if (id==0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        CheckLive();
+        return new Snapshot { ProcessId=id, Image=System.IO.Path.GetFullPath(image.ToString()),
+            CreationFileTime=unchecked((long)(((ulong)creation.High<<32)|creation.Low)) };
+    }
+    // Called only AFTER the existing exact fresh CIM birth/path comparison.
+    // CIM's microsecond timestamp remains unchanged in the public receipt;
+    // native 100 ns identity is independently captured, never rounded/tolerated.
+    public void Capture(uint id, string image) {
+        if (captured) throw new InvalidOperationException("The process identity was already captured.");
+        string expected=System.IO.Path.GetFullPath(image);
+        Snapshot current=Read();
+        if (id!=processId || current.ProcessId!=id || !String.Equals(current.Image,expected,StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The process identity differs.");
+        creationFileTime=current.CreationFileTime; executablePath=expected; captured=true;
+        Verify(id,image);
+    }
+    public void Verify(uint id, string image) {
+        if (!captured) throw new InvalidOperationException("The process identity has not been captured.");
+        Snapshot current=Read();
+        if (id!=processId || current.ProcessId!=processId || current.CreationFileTime!=creationFileTime ||
+            !String.Equals(System.IO.Path.GetFullPath(image),executablePath,StringComparison.OrdinalIgnoreCase) ||
+            !String.Equals(current.Image,executablePath,StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The continuously pinned process identity differs.");
+    }
+    public void Dispose() { handle.Dispose(); }
+}
 '@
 
     function Get-TrustedDesktop {
@@ -242,12 +313,40 @@ public static class BridgeDesktopNative {
     function Check-ProcessIdentity($Desktop, [int]$ProcessId) {
         Check-Deadline
         $expected = @($Desktop.Processes | Where-Object { $_.ProcessId -eq $ProcessId })
-        $actual = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $ProcessId) -ErrorAction SilentlyContinue
-        if ($expected.Count -ne 1 -or $null -eq $actual -or -not $actual.ExecutablePath -or
-            -not [string]::Equals([IO.Path]::GetFullPath($actual.ExecutablePath), $Desktop.ExecutablePath, [StringComparison]::OrdinalIgnoreCase) -or
-            $actual.CreationDate.ToUniversalTime().Ticks -ne $expected[0].CreationTicks) {
+        if ($expected.Count -ne 1 -or -not $expected[0].ExecutablePath -or
+            -not [string]::Equals([IO.Path]::GetFullPath($expected[0].ExecutablePath), $Desktop.ExecutablePath, [StringComparison]::OrdinalIgnoreCase)) {
             Fail-Relay 'target-mismatch' 'The verified desktop process changed. No message was sent.'
         }
+        $entry = $script:DesktopProcessPins[$ProcessId]
+        if ($null -ne $entry) {
+            if ($entry.CreationTicks -ne $expected[0].CreationTicks -or
+                -not [string]::Equals($entry.ExecutablePath, $Desktop.ExecutablePath, [StringComparison]::OrdinalIgnoreCase)) {
+                Fail-Relay 'target-mismatch' 'The verified desktop process changed. No message was sent.'
+            }
+            try { $entry.Pin.Verify([uint32]$ProcessId, [string]$Desktop.ExecutablePath) }
+            catch { Fail-Relay 'target-mismatch' 'The verified desktop process changed. No message was sent.' }
+            return
+        }
+        $pin = $null
+        try {
+            # Hold the object BEFORE the fresh CIM check. If that process exits
+            # and the numeric PID is reused, the old held object is signaled and
+            # Capture refuses it; exact CIM birth/path rules are not relaxed.
+            $pin = [BridgeDesktopProcessIdentity]::Open([uint32]$ProcessId)
+            $actual = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $ProcessId) -ErrorAction SilentlyContinue
+            if ($null -eq $actual -or [int]$actual.ProcessId -ne $ProcessId -or -not $actual.ExecutablePath -or
+                -not [string]::Equals([IO.Path]::GetFullPath($actual.ExecutablePath), $Desktop.ExecutablePath, [StringComparison]::OrdinalIgnoreCase) -or
+                $actual.CreationDate.ToUniversalTime().Ticks -ne $expected[0].CreationTicks) {
+                Fail-Relay 'target-mismatch' 'The verified desktop process changed. No message was sent.'
+            }
+            $pin.Capture([uint32]$ProcessId, [string]$Desktop.ExecutablePath)
+            $script:DesktopProcessPins[$ProcessId] = [pscustomobject]@{
+                Pin=$pin; CreationTicks=$expected[0].CreationTicks; ExecutablePath=[string]$Desktop.ExecutablePath
+            }
+            $pin = $null # ownership transferred to the helper's finally
+        } catch {
+            Fail-Relay 'target-mismatch' 'The verified desktop process changed. No message was sent.'
+        } finally { if ($null -ne $pin) { $pin.Dispose() } }
     }
     function Check-BoundForeground {
         Check-ProcessIdentity $script:Desktop $script:BoundProcess
@@ -727,8 +826,17 @@ public static class BridgeDesktopNative {
         }
         $mode = Get-DesktopModeKind $modes[0].Current.Name
         if ($mode -ceq 'codex') {
-            if ((Get-ComposerText $composers[0]).Length -ne 0 -or
-                -not (Test-EmptyPlaceholderComposer $composers[0])) {
+            # A running task has the independently observed compact Stop
+            # layout. It can be truly blank while Chromium exposes no text
+            # selection. Reuse the complete source-only raw-tree proof used
+            # by the Dot adapter instead of interpreting missing selection as
+            # an unavailable composer. Drafts and attachments still fail closed.
+            $guardFile = Join-Path $PSScriptRoot 'codex-desktop-source-guard.ps1'
+            if (-not [IO.File]::Exists($guardFile)) {
+                Fail-Relay 'draft-present' 'The current desktop draft could not be verified. No conversation was opened.'
+            }
+            . $guardFile
+            if (-not (Test-PocketBridgeCodexBlankSource $composers[0] $script:WindowElement ([string]$script:Desktop.Package.Version) $true)) {
                 Fail-Relay 'draft-present' 'The current desktop draft and attachments were preserved. No conversation was opened.'
             }
         } elseif ($mode -ceq 'chatgpt') {
@@ -774,7 +882,35 @@ public static class BridgeDesktopNative {
     function Focus-Composer($Element) {
         Check-BoundForeground
         $Element.SetFocus()
-        Check-ComposerFocus $Element
+        # SetFocus can complete before Chromium updates its focused element.
+        # Wait for readiness on this SAME composer, never focus it again or
+        # send keys/clipboard input while another control is still focused.
+        $focusWatch = [Diagnostics.Stopwatch]::StartNew()
+        while ($focusWatch.ElapsedMilliseconds -lt 1200) {
+            Check-BoundForeground
+            $fresh = Find-Composer
+            if (-not (Runtime-IdsEqual $fresh $Element)) {
+                Fail-Relay 'composer-unavailable' 'The verified composer changed while waiting for focus. No further input was sent.'
+            }
+            $focused = [Windows.Automation.AutomationElement]::FocusedElement
+            if ($null -ne $focused) {
+                if ($focused.Current.ProcessId -ne $script:BoundProcess -or -not (Element-IsInBoundWindow $focused)) {
+                    Fail-Relay 'target-mismatch' 'Desktop input focus left the verified window. No further input was sent.'
+                }
+                $current = $focused
+                for ($depth = 0; $depth -lt 25 -and $null -ne $current; $depth++) {
+                    Check-Deadline
+                    if (Runtime-IdsEqual $current $Element) {
+                        if ($focusWatch.ElapsedMilliseconds -ge 1200) { break }
+                        Check-ComposerFocus $Element
+                        return
+                    }
+                    $current = [Windows.Automation.TreeWalker]::RawViewWalker.GetParent($current)
+                }
+            }
+            if ($focusWatch.ElapsedMilliseconds -lt 1200) { Start-Sleep -Milliseconds 20 }
+        }
+        Fail-Relay 'target-mismatch' 'The verified composer did not receive keyboard focus in time. No further input was sent.'
     }
     function Check-ComposerFocus($Element) {
         Check-BoundForeground
@@ -1031,5 +1167,9 @@ public static class BridgeDesktopNative {
         if ($script:DesktopUiMutexOwned) { try { $script:DesktopUiMutex.ReleaseMutex() } catch { } }
         try { $script:DesktopUiMutex.Dispose() } catch { }
     }
+    foreach ($entry in @($script:DesktopProcessPins.Values)) {
+        try { $entry.Pin.Dispose() } catch { }
+    }
+    $script:DesktopProcessPins.Clear()
 }
 [Console]::Out.WriteLine(($result | ConvertTo-Json -Depth 6 -Compress))

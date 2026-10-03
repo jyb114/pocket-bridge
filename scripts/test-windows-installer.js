@@ -192,6 +192,12 @@ function nativeDependencies() {
   return visited;
 }
 const requiredPayload = requiredPayloadFiles(stager);
+check('the actual gateway loopback listener is a hard payload requirement before compilation', () => {
+  const gateway = fs.readFileSync(path.join(root, 'scripts/mobile-proxy.js'), 'utf8');
+  assert.match(gateway, /require\(['"]\.\/gateway-listener\.js['"]\)\.bindGateway/);
+  assert(requiredPayload.includes('scripts/gateway-listener.js'),
+    'the gateway must never be packaged without its actual loopback listener');
+});
 check('all current native imports and dot-sourced guards are hard payload requirements and installed hash checks', () => {
   const dependencies = nativeDependencies();
   const installed = builder.match(/foreach\s*\(\$relative\s+in\s+@\(([\s\S]*?)\)\)\s*\{/);
@@ -223,7 +229,7 @@ check('real staging rejects each missing new required module and excludes privat
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.writeFileSync(destination, 'isolated private fixture; never a real credential', 'utf8');
     }
-    const newRequired = ['scripts/dot-desktop-protocol.js', 'scripts/dot-desktop-owner.js',
+    const newRequired = ['scripts/gateway-listener.js', 'scripts/codex-history-transport.js', 'scripts/dot-desktop-protocol.js', 'scripts/dot-desktop-owner.js',
       'scripts/dot-desktop-journal.js', 'scripts/dot-desktop-send-driver.js', 'scripts/dot-desktop-send.ps1',
       'scripts/dot-desktop-source-guard.ps1', 'scripts/dot-desktop-navigation-guard.ps1',
       'scripts/codex-desktop-source-guard.ps1', 'scripts/dot-desktop-private-store.js',

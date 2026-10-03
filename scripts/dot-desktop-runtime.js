@@ -10,13 +10,17 @@ const { createDotDesktopPrivateStore } = require('./dot-desktop-private-store.js
 const SUPPORTED_VERSIONS = Object.freeze(['26.928.3736.0']);
 const fail = code => Object.assign(new Error(code), { code, submitted: false });
 function createDotDesktopRuntime(options = {}) {
-  if (Object.keys(options).some(key => !['base','testOnlyEnableSend','driver','textSender','storeFactory'].includes(key)) ||
+  if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      Object.keys(options).some(key => !['base','enableSend','testOnlyEnableSend','driver','textSender','storeFactory'].includes(key)) ||
       typeof options.base !== 'string' || !path.isAbsolute(options.base) ||
-      options.testOnlyEnableSend !== undefined && typeof options.testOnlyEnableSend !== 'boolean')
+      ['enableSend','testOnlyEnableSend'].some(key => options[key] !== undefined && typeof options[key] !== 'boolean') ||
+      options.enableSend !== undefined && options.testOnlyEnableSend !== undefined && options.enableSend !== options.testOnlyEnableSend)
     throw fail('invalid-request');
-  const enabled = options.testOnlyEnableSend === true;
+  // Explicit trusted opt-in only. The old private harness name remains an
+  // alias, but can never override an explicit canonical false.
+  const enabled = options.enableSend === undefined ? options.testOnlyEnableSend === true : options.enableSend === true;
   const native = options.driver || createDotDesktopDriver();
-  const sender = options.textSender || createDotTextSender({ testOnlyEnableSend: enabled, allowedSendVersions: SUPPORTED_VERSIONS });
+  const sender = options.textSender || createDotTextSender({ enableSend: enabled, allowedSendVersions: SUPPORTED_VERSIONS });
   const makeStore = options.storeFactory || createDotDesktopPrivateStore;
   if (!native || typeof native.snapshot !== 'function' || typeof native.inspect !== 'function' ||
       !sender || typeof sender.supports !== 'function' || typeof sender.send !== 'function' || typeof makeStore !== 'function')
@@ -33,7 +37,7 @@ function createDotDesktopRuntime(options = {}) {
     catch (_) { /* No owner cleanup or provider reset is permitted on failure. */ }
   }
   const methods = ['lookup','pending','prepare','markSending','assertReadyForAck','markFailedBeforeSend',
-    'markUnknown','accept','receipt','registerChild','unregisterChild'];
+    'markUnknown','accept','receipt','reconciliationContext','assertReadyForReconcile','registerChild','unregisterChild'];
   const proxy = {
     // UI status is the last verified capability. Every actual Send/receipt
     // mutation delegates to the real continuity guard before acting.
@@ -43,7 +47,16 @@ function createDotDesktopRuntime(options = {}) {
   for (const method of methods) proxy[method] = (...args) => {
     if (!journal || closed) throw fail('journal-unavailable');
     try { return journal[method](...args); }
-    catch (cause) { if (!['not-found','request-id-conflict','pending-request-exists'].includes(cause?.code)) journalStatus.available = false; throw cause; }
+    catch (cause) {
+      // An unattributable native observation is an expected read refusal. It
+      // must retain the unknown request fence without latching a healthy
+      // encrypted journal unavailable for a later exact receipt check.
+      const proofRefusal = method === 'accept' &&
+        ['delivery-proof-unavailable','delivery-proof-reused'].includes(cause?.code);
+      if (!proofRefusal && !['not-found','request-id-conflict','pending-request-exists'].includes(cause?.code))
+        journalStatus.available = false;
+      throw cause;
+    }
   };
   function ownRead(operation) {
     const result = Promise.resolve().then(operation); ownedReads.add(result);
@@ -82,7 +95,7 @@ function createDotDesktopRuntime(options = {}) {
       });
     }
   };
-  const service = createDotDesktopService({ driver: guarded, textSender: sender, journal: proxy, testOnlyEnableSend: enabled });
+  const service = createDotDesktopService({ driver: guarded, textSender: sender, journal: proxy, enableSend: enabled });
   function stop() { stopping = true; service.stopAcceptingSends(); return { stopped: true }; }
   async function drain() {
     stop();

@@ -17,6 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
 
 const BASE = path.resolve(__dirname, '..');
 const pc = require('./pair-code.js');
@@ -191,9 +192,10 @@ console.log('\n[5] 接线：网关真的按这条规则来了吗\n');
   ok('配对码无法落盘时 /pair 拒绝配对，不回退旧缓存',
     /if \(!activePairCode\)[\s\S]*?writeHead\(503/.test(pairRoute));
   ok('控制台与 /pair 读取同一个当前码', /pairCode:\s*currentPairCode\(\)/.test(src));
-  const startup = src.slice(src.indexOf('server.listen(PORT, () => {'),
-    src.indexOf('startHttpsIfEnabled();'));
+  const startup = src.slice(src.lastIndexOf('\n(async () => {'));
   ok('启动日志在落盘和校验当前码后记录，不显示未生效的旧码',
+    /gatewayListeners = await require\('\.\/gateway-listener\.js'\)\.bindGateway/.test(startup) &&
+    startup.indexOf('.bindGateway(') < startup.indexOf('writePairCodeFile();') &&
     startup.indexOf('writePairCodeFile();') >= 0 &&
     startup.indexOf('writePairCodeFile();') < startup.indexOf('currentPairCode()') &&
     startup.indexOf('currentPairCode()') < startup.indexOf('中间层已启动'));
@@ -213,7 +215,85 @@ console.log('\n[5] 接线：网关真的按这条规则来了吗\n');
     /已经连上的手机不受影响，不用重新登录/.test(html));
 }
 
-try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { }
+async function checkStartupPublication() {
+  const source = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
+  const start = source.lastIndexOf('\n(async () => {');
+  assert(start > 0, 'the actual startup transaction must be present');
+  const startup = source.slice(start);
+  function fixture(name) {
+    const logDir = path.join(dir, name); fs.mkdirSync(logDir);
+    const pairFile = path.join(logDir, 'pair-code.txt'), portFile = path.join(logDir, 'gateway-port.txt');
+    const events = [];
+    let options, resolveBind, rejectBind, bindingStarted;
+    const bound = new Promise((resolve, reject) => { resolveBind = resolve; rejectBind = reject; });
+    const entered = new Promise(resolve => { bindingStarted = resolve; });
+    const context = {
+      cfg: { LOG_DIR: logDir, ensureInstanceIdentity: () => ({ instanceId: 'fixture-instance' }),
+        loadConfig: () => ({ gatewayPort: 13245, enableLanAccess: true }) },
+      fs, path, server: {}, INSTANCE_ID: null, GATEWAY_BOOT_ID: 'fixture-boot',
+      gatewayListeners: null, PORT: 13245, TARGET_PORT: 13246, INTERNAL_HOST: 'fixture.local',
+      process: { pid: 12345, env: {}, exit(code) { throw Object.assign(Error('fixture-startup-exit'), { exitCode: code }); } },
+      refreshDshRuntime: async () => {},
+      require(name) {
+        assert.equal(name, './gateway-listener.js', 'startup cannot import or run a native helper in this fixture');
+        return { bindGateway(value) { options = value; events.push('binding'); bindingStarted(); return bound; } };
+      },
+      configureAuthCookieScope: port => events.push(`scope:${port}`),
+      log: message => events.push(String(message).includes('中间层已启动') ? 'startup-log' : 'diagnostic-log'),
+      loadAuthProven: () => events.push('load-auth'),
+      writePairCodeFile() { events.push('write-pair'); pc.writeIfChanged(pairFile, '123456'); },
+      currentPairCode() { events.push('current-pair'); return pc.current(pairFile).code; },
+      startHttpsIfEnabled: () => events.push('https'), startDshWatchdog: () => events.push('dsh-watchdog'),
+      startCodexWatchdog: () => events.push('codex-watchdog'), sessions: { dedupe: () => ({ merged: 0 }) },
+      setTimeout() { events.push('warmup-scheduled'); }
+    };
+    const completion = vm.runInNewContext(startup, context, { timeout: 1000 });
+    return { events, pairFile, portFile, completion, resolveBind, rejectBind,
+      whenBinding: () => Promise.race([entered, completion.then(() => { throw Error('startup-did-not-bind'); })]),
+      options: () => options };
+  }
+  console.log('\n[6] 实际启动事务：监听待确认或失败时不能发布配对码\n');
+  const pending = fixture('pending');
+  await pending.whenBinding();
+  const options = pending.options(); assert(options);
+  assert.deepEqual({ ...options.identity }, { pid: 12345, bootId: 'fixture-boot', instanceId: 'fixture-instance' });
+  // The listener calls onPortBound before its self-health probe resolves.
+  // Calling this actual production callback alone must not publish either file.
+  options.onPortBound(13245);
+  ok('onPortBound 已执行但真实监听健康检查尚未确认时，不写端口或配对码、不记录启动成功',
+    !fs.existsSync(pending.portFile) && !fs.existsSync(pending.pairFile) &&
+      !pending.events.includes('write-pair') && !pending.events.includes('startup-log'));
+  pending.resolveBind({ port: 13245, ipv6: true });
+  await pending.completion;
+  const events = pending.events;
+  ok('确认真实监听后才落盘、校验当前配对码，然后记录成功并启动看门狗',
+    fs.readFileSync(pending.portFile, 'utf8') === '13245' && fs.readFileSync(pending.pairFile, 'utf8') === '123456' &&
+      events.indexOf('write-pair') < events.indexOf('current-pair') &&
+      events.indexOf('current-pair') < events.indexOf('startup-log') &&
+      events.indexOf('startup-log') < events.indexOf('dsh-watchdog') &&
+      events.indexOf('startup-log') < events.indexOf('codex-watchdog'));
 
-console.log(`\n${fail ? `${fail} 处问题` : '全部通过'}（${pass} 项）\n`);
-process.exitCode = fail ? 1 : 0;
+  const rejected = fixture('rejected');
+  fs.writeFileSync(rejected.pairFile, '222222'); const originalMtime = fs.statSync(rejected.pairFile).mtimeMs;
+  await rejected.whenBinding();
+  rejected.options().onPortBound(13245);
+  rejected.rejectBind(Object.assign(Error('fixture-loopback-unverified'), { code: 'gateway-loopback-unverified' }));
+  await assert.rejects(rejected.completion, error => error.exitCode === 1);
+  ok('监听健康检查失败时退出，不写新端口、不动原配对码或签发时间、不记录成功',
+    !fs.existsSync(rejected.portFile) && fs.readFileSync(rejected.pairFile, 'utf8') === '222222' &&
+      fs.statSync(rejected.pairFile).mtimeMs === originalMtime && !rejected.events.includes('write-pair') &&
+      !rejected.events.includes('startup-log') && !rejected.events.includes('dsh-watchdog'));
+}
+
+(async () => {
+  try { await checkStartupPublication(); }
+  catch (error) { fail++; console.error(`  ✗ 实际启动事务回归：${error.message}`); }
+  finally {
+    const resolved = path.resolve(dir), tempBase = path.resolve(os.tmpdir());
+    assert(resolved.startsWith(tempBase + path.sep) && path.basename(resolved).startsWith('pb-paircode-'),
+      'cleanup must stay within the explicitly created pair-code fixture');
+    fs.rmSync(resolved, { recursive: true, force: true });
+  }
+  console.log(`\n${fail ? `${fail} 处问题` : '全部通过'}（${pass} 项）\n`);
+  process.exitCode = fail ? 1 : 0;
+})().catch(error => { console.error(error.stack); process.exitCode = 1; });

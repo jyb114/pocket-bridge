@@ -177,6 +177,62 @@ check('accepted receipt reports display only without text key or execution claim
   assert.deepEqual(journal.accept(value.request.requestId, value.after), value.receipt); close(journal);
   const restarted = f.make(); assert.equal(restarted.lookup(value.request).state, 'accepted'); close(restarted);
 });
+check('long complete rendered baselines retain every row across acceptance and authenticated reload', () => {
+  assert.equal(protocol.MAX_BASELINE_ROWS, 128); assert.equal(protocol.MAX_AFTER_ROWS, 133);
+  const native = fs.readFileSync(path.join(__dirname, 'dot-desktop-send.ps1'), 'utf8');
+  assert.match(native, /\$maxBaselineRows=128;\$maxAfterRows=133/);
+  assert.match(native, /\$maximumRows=if\(\$observing -or \$ObservationSequence -ge 3\)\{\$maxAfterRows\}else\{\$maxBaselineRows\}/);
+  for (const count of [42, protocol.MAX_BASELINE_ROWS]) {
+    const f = fixture(), journal = f.start(), request = f.request(), operationId = crypto.randomUUID();
+    const rows = Array.from({ length: count }, (_, index) => row(index % 3 === 0 ? 'user' : 'assistant', 'prior row ' + index));
+    const before = baseline(request, operationId, rows), next = after(before, request);
+    journal.prepare(request, operationId, before); journal.markSending(request.requestId, protocol.baselineDigest(before));
+    const receipt = journal.accept(request.requestId, next); assert.equal(receipt.state, 'accepted');
+    const saved = f.readBody().records[0]; assert.deepEqual(saved.baseline.rows, rows);
+    assert.deepEqual(saved.afterObservation.rows.slice(0, count), rows);
+    // Closed hash-only observations stay within the existing per-frame cap.
+    for (const observation of [before, next]) assert(Buffer.byteLength(JSON.stringify({ observation })) < 64 * 1024);
+    close(journal); const restored = f.make(); assert.deepEqual(restored.lookup(request), receipt); close(restored);
+  }
+});
+check('long scopes still reject changed streaming assistants dropped prefixes and extra user actions', () => {
+  const f = fixture(), journal = f.start(), request = f.request(), operationId = crypto.randomUUID();
+  const rows = Array.from({ length: 80 }, (_, index) => row('assistant', 'stable prior row ' + index));
+  rows[70] = row('user', request.text);
+  const before = baseline(request, operationId, rows);
+  journal.prepare(request, operationId, before); journal.markSending(request.requestId, protocol.baselineDigest(before));
+  const changed = after(before, request); changed.rows[65].textSha256 = protocol.sha('existing streaming assistant changed');
+  const dropped = after(before, request); dropped.rows.shift(); dropped.materializedRowCount--;
+  const reordered = after(before, request); [reordered.rows[50], reordered.rows[51]] = [reordered.rows[51], reordered.rows[50]];
+  const extraUser = after(before, request); extraUser.rows.push(row('user', 'another user action')); extraUser.materializedRowCount++;
+  const reusedOld = after(before, request, before.rows[70].observationId);
+  const changedContext = after(before, request); changedContext.viewportRuntimeId = '1,4'; changedContext.contextGeneration = protocol.contextGeneration(changedContext);
+  const variants = [before, changed, dropped, reordered, extraUser, reusedOld, changedContext,
+    { ...after(before, request), completeMaterializedScope: false },
+    { ...after(before, request), viewportBounds: [0,1,800,600] }];
+  for (const invalid of variants) denied('delivery-proof-unavailable', () => journal.accept(request.requestId, invalid));
+  assert.equal(journal.lookup(request).state, 'sending'); close(journal);
+});
+check('full 128-row baseline accepts one own user plus four assistant rows while 134-row after stays refused', () => {
+  const f = fixture(), journal = f.start(), request = f.request(), operationId = crypto.randomUUID();
+  const before = baseline(request, operationId, Array.from({ length: 128 }, (_, index) => row('assistant', 'prior ' + index)));
+  const next = after(before, request);
+  for (let index = 0; index < 4; index++) next.rows.push(row('assistant', 'new assistant ' + index));
+  next.materializedRowCount = next.rows.length; assert.equal(next.rows.length, 133);
+  journal.prepare(request, operationId, before); journal.markSending(request.requestId, protocol.baselineDigest(before));
+  const oversized = { ...next, rows: [...next.rows, row('assistant', 'extra assistant')], materializedRowCount: 134 };
+  denied('delivery-proof-unavailable', () => journal.accept(request.requestId, oversized));
+  assert.equal(journal.accept(request.requestId, next).state, 'accepted'); close(journal);
+});
+check('oversized complete baseline is refused instead of silently taking its most recent tail', () => {
+  const f = fixture(), journal = f.start(), request = f.request(), operationId = crypto.randomUUID();
+  const seed = baseline(request, operationId);
+  const rows = Array.from({ length: 129 }, (_, index) => row('assistant', 'over limit ' + index));
+  const oversized = { ...seed, rows, materializedRowCount: rows.length };
+  denied('baseline-unavailable', () => protocol.normalizeObservation(oversized, request, operationId));
+  denied('baseline-unavailable', () => journal.prepare(request, operationId, oversized));
+  assert.equal(journal.lookup(request), null); close(journal);
+});
 check('old rows extra user actions wrong binding and changed context cannot prove delivery', () => {
   const f = fixture(), journal = f.start(), value = prepared(f, journal); journal.markSending(value.request.requestId, value.digest);
   const variants = [value.before, { ...after(value.before, value.request), requestId: crypto.randomUUID() },
@@ -349,6 +405,27 @@ check('valid stale ciphertext rollback after restart is an explicit remaining li
   const f = fixture(), first = f.start(), older = fs.readFileSync(f.file), value = prepared(f, first);
   first.markFailedBeforeSend(value.request.requestId, 'draft-present'); close(first); fs.writeFileSync(f.file, older);
   const restarted = f.make(); assert.equal(restarted.lookup(value.request), null); close(restarted);
+});
+check('private reconciliation context exists only for original invoke-authorized unknown and is cloned target-bound', () => {
+  const f = fixture(), journal = f.start(), value = prepared(f, journal), id = value.request.requestId;
+  assert.equal(journal.reconciliationContext(id, value.request.threadId), null);
+  journal.markUnknown(id, 'interrupted'); assert.equal(journal.reconciliationContext(id, value.request.threadId), null); close(journal);
+  const g = fixture(), pending = g.start(), sent = prepared(g, pending), sid = sent.request.requestId;
+  pending.markSending(sid, sent.digest); assert.equal(pending.reconciliationContext(sid, sent.request.threadId), null);
+  pending.markUnknown(sid, 'delivery-unconfirmed');
+  const context = pending.reconciliationContext(sid, sent.request.threadId);
+  assert.deepEqual(context, { request: sent.request, operationId: sent.operationId, baseline: sent.before, baselineDigest: sent.digest });
+  context.request.text = 'foreign mutation'; context.baseline.rows = [];
+  assert.equal(pending.reconciliationContext(sid, sent.request.threadId).request.text, sent.request.text);
+  denied('target-mismatch', () => pending.reconciliationContext(sid, crypto.randomUUID()));
+  denied('child-registration-required', () => pending.assertReadyForReconcile(sid, sent.digest));
+  const helper = { pid: 2001, creationTicks: '100001' }; pending.registerChild(helper);
+  assert.equal(pending.assertReadyForReconcile(sid, sent.digest), true);
+  denied('invalid-transition', () => pending.assertReadyForReconcile(sid, protocol.sha('foreign baseline')));
+  pending.accept(sid, after(sent.before, sent.request));
+  assert.equal(pending.reconciliationContext(sid, sent.request.threadId), null);
+  denied('invalid-transition', () => pending.assertReadyForReconcile(sid, sent.digest));
+  pending.unregisterChild(helper, true); close(pending);
 });
 fs.writeFileSync(path.join(base, 'RESULT.json'), JSON.stringify({ nativeActions: false, productionKeys: false,
   passed: results.length, results, limitations: ['No crash reclaim', 'Valid stale ciphertext rollback after restart remains undetected',
