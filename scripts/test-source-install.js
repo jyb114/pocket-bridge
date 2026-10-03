@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const vm = require('vm');
+const { readWindowsShortcut } = require('./windows-shortcut');
 
 const ROOT = path.resolve(__dirname, '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-source-install-'));
@@ -16,7 +17,8 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-source-install-'));
 // ASCII. The same path also contains spaces so command quoting is tested.
 const source = path.join(scratch, 'source-桥 with spaces');
 const desktop = path.join(source, 'desktop');
-const home = path.join(scratch, 'home');
+// Also exercise Unicode in the .lnk file path, not only its saved arguments.
+const home = path.join(scratch, "home-桥-\u{1f680}'s with spaces");
 let failures = 0;
 
 async function check(name, fn) {
@@ -48,11 +50,57 @@ function unicodeProbeOutput(expression, marker) {
     'pbReport.Close\r\n';
 }
 
+// Inspect the actual saved Unicode COM shortcut. Reading existence alone
+// cannot catch broken paths, and WScript.Shell readback also uses ANSI.
+function shortcutFields(link) { return readWindowsShortcut(link); }
+
+// Independently parse persisted StringData using Microsoft's shell-link
+// format, so sharing the Unicode getter cannot hide a writer/getter mistake.
+// https://learn.microsoft.com/openspecs/windows_protocols/ms-shllink/17b69472-0f34-4bcf-b290-eccdb8de224b
+function shortcutStringData(file) {
+  const bytes = fs.readFileSync(file);
+  assert(bytes.length >= 76 && bytes.readUInt32LE(0) === 76, 'invalid shell-link header');
+  const flags = bytes.readUInt32LE(20);
+  assert(flags & 0x80, 'shortcut StringData is not Unicode');
+  let offset = 76;
+  const span = (size) => { assert(offset + size <= bytes.length, 'truncated shell-link data'); };
+  if (flags & 1) { span(2); const size = bytes.readUInt16LE(offset); span(size + 2); offset += size + 2; }
+  if (flags & 2) { span(4); const size = bytes.readUInt32LE(offset); assert(size >= 28); span(size); offset += size; }
+  const result = {};
+  for (const [name, bit] of [['Description', 4], ['RelativePath', 8], ['WorkingDirectory', 16], ['Arguments', 32], ['IconPath', 64]]) {
+    if (!(flags & bit)) continue;
+    span(2); const size = bytes.readUInt16LE(offset) * 2; offset += 2; span(size);
+    result[name] = bytes.subarray(offset, offset + size).toString('utf16le'); offset += size;
+  }
+  return result;
+}
+
+function assertShortcutFields(actual, launcher, link, showCommand, description) {
+  const expectedTarget = path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'wscript.exe');
+  assert.strictEqual(actual.TargetPath.toLowerCase(), expectedTarget.toLowerCase(),
+    'shortcut does not use the exact hidden WScript launcher');
+  assert.strictEqual(actual.Arguments, `"${launcher}"`,
+    'shortcut launcher arguments do not preserve the original installation path');
+  assert.strictEqual(actual.WorkingDirectory.toLowerCase(), path.dirname(launcher).toLowerCase(),
+    'shortcut working directory does not preserve the original installation path');
+  assert.strictEqual(actual.IconLocation.toLowerCase(), path.join(path.dirname(launcher), 'icons', 'app.ico').toLowerCase() + ',0',
+    'shortcut icon does not preserve the original installation path');
+  assert.strictEqual(actual.ShowCommand, showCommand, 'shortcut window style changed');
+  assert.strictEqual(actual.Description, description, 'shortcut description changed');
+  const persisted = shortcutStringData(link);
+  assert.strictEqual(persisted.Arguments, `"${launcher}"`, 'saved shortcut arguments lost Unicode');
+  assert.strictEqual(persisted.WorkingDirectory, path.dirname(launcher), 'saved working directory lost Unicode');
+  assert.strictEqual(persisted.IconPath, path.join(path.dirname(launcher), 'icons', 'app.ico'), 'saved icon path lost Unicode');
+  assert.strictEqual(persisted.Description, actual.Description, 'saved description does not match Unicode COM readback');
+}
+
 async function main() {
 try {
   // Copy only tracked source files; ignored private keys, logs, runtime and
   // cloudflared never enter this fixture.
   const names = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT }).toString('utf8').split('\0').filter(Boolean);
+  // This explicit public dependency also permits testing before git staging.
+  if (!names.includes('scripts/windows-shortcut.js')) names.push('scripts/windows-shortcut.js');
   for (const name of names) {
     const dest = path.join(source, name);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -160,7 +208,10 @@ try {
     assert.strictEqual(path.resolve(resolvedHome).toLowerCase(), home.toLowerCase(), 'USERPROFILE isolation is ineffective');
     const result = run(process.execPath, [path.join(desktop, 'install-shortcut.js'), '--desktop'], { cwd: source, env });
     assert.strictEqual(result.status, 0, result.stdout + result.stderr);
-    assert(fs.existsSync(path.join(home, 'Desktop', 'Pocket Bridge.lnk')), 'isolated desktop shortcut missing');
+    const link = path.join(home, 'Desktop', 'Pocket Bridge.lnk');
+    assert(fs.existsSync(link), 'isolated desktop shortcut missing');
+    assertShortcutFields(shortcutFields(link), path.join(desktop, 'open-desktop.vbs'), link, 7,
+      'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex');
   });
 
   await check('autostart shortcut points to the original launcher, not a copied batch file', () => {
@@ -172,20 +223,46 @@ try {
     assert.strictEqual(installed.status, 0, installed.stdout + installed.stderr);
     const link = path.join(startup, 'Pocket Bridge.lnk');
     assert(fs.existsSync(link), 'isolated autostart shortcut missing');
-    const probeOutput = path.join(scratch, 'probe-autostart-output.txt');
-    const probe = '$ws = New-Object -ComObject WScript.Shell; ' +
-      `$link = $ws.CreateShortcut('${link.replace(/'/g, "''")}'); ` +
-      `$report = 'PB_TARGET=' + $link.TargetPath + [Environment]::NewLine + 'PB_ARGS=' + $link.Arguments; ` +
-      `[IO.File]::WriteAllText('${probeOutput.replace(/'/g, "''")}', $report, [Text.Encoding]::Unicode)`;
-    const read = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', probe], { env });
-    assert.strictEqual(read.status, 0, read.stdout + read.stderr);
-    const actual = readUtf16(probeOutput);
-    assert(/PB_TARGET=.*wscript\.exe/i.test(actual), 'autostart does not use hidden WScript launcher');
-    assert(actual.toLowerCase().includes(path.join(desktop, 'launch-tray.vbs').toLowerCase()),
-      'autostart points outside the source installation');
+    assertShortcutFields(shortcutFields(link), path.join(desktop, 'launch-tray.vbs'), link, 1,
+      'Pocket Bridge — 自动启动网关与托盘');
     const removed = run(process.execPath, [script, 'uninstall'], { cwd: source, env });
     assert.strictEqual(removed.status, 0, removed.stdout + removed.stderr);
     assert(!fs.existsSync(link), 'isolated autostart shortcut survived uninstall');
+  });
+
+  await check('desktop and autostart preserve paths outside the Windows ANSI code page', () => {
+    // Supplementary Unicode is outside legacy ANSI code pages even on a
+    // Chinese development machine, reproducing English CI's loss of "桥".
+    const unicodeSource = path.join(scratch, "shortcut-桥-\u{1f600}'s with spaces");
+    for (const name of ['scripts/install-autostart.js', 'scripts/windows-shortcut.js', 'desktop/install-shortcut.js',
+      'desktop/launch-tray.vbs', 'desktop/open-desktop.vbs', 'desktop/open-desktop-app.js',
+      'desktop/tray.ps1', 'desktop/icons/app.ico']) {
+      const dest = path.join(unicodeSource, name);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(path.join(source, name), dest);
+    }
+    const env = { ...process.env, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming') };
+    const unicodeDesktop = path.join(unicodeSource, 'desktop');
+    const desktopLink = path.join(home, 'Desktop', 'Pocket Bridge.lnk');
+    const installedDesktop = run(process.execPath, [path.join(unicodeDesktop, 'install-shortcut.js'), '--desktop'],
+      { cwd: unicodeSource, env });
+    assert.strictEqual(installedDesktop.status, 0, installedDesktop.stdout + installedDesktop.stderr);
+    assertShortcutFields(shortcutFields(desktopLink), path.join(unicodeDesktop, 'open-desktop.vbs'), desktopLink, 7,
+      'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex');
+    const script = path.join(unicodeSource, 'scripts', 'install-autostart.js');
+    const installedAuto = run(process.execPath, [script, 'install'], { cwd: unicodeSource, env });
+    assert.strictEqual(installedAuto.status, 0, installedAuto.stdout + installedAuto.stderr);
+    const autoLink = path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Windows',
+      'Start Menu', 'Programs', 'Startup', 'Pocket Bridge.lnk');
+    assertShortcutFields(shortcutFields(autoLink), path.join(unicodeDesktop, 'launch-tray.vbs'), autoLink, 1,
+      'Pocket Bridge — 自动启动网关与托盘');
+    const removedAuto = run(process.execPath, [script, 'uninstall'], { cwd: unicodeSource, env });
+    assert.strictEqual(removedAuto.status, 0, removedAuto.stdout + removedAuto.stderr);
+    assert(!fs.existsSync(autoLink), 'Unicode autostart shortcut survived uninstall');
+    const removedDesktop = run(process.execPath, [path.join(unicodeDesktop, 'install-shortcut.js'), '--desktop', '--remove'],
+      { cwd: unicodeSource, env });
+    assert.strictEqual(removedDesktop.status, 0, removedDesktop.stdout + removedDesktop.stderr);
+    assert(!fs.existsSync(desktopLink), 'Unicode desktop shortcut survived uninstall');
   });
 
   await check('desktop launcher spawns the available Node executable for its verified own gateway', async () => {

@@ -15,6 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { createWindowsShortcut } = require('./windows-shortcut');
 
 const BASE = path.resolve(__dirname, '..');
 const DAEMON = path.join(BASE, 'scripts', 'gateway-daemon.js');
@@ -49,10 +50,6 @@ function winStartupPath() {
   return path.join(winStartupDir(), `${TASK_NAME}.lnk`);
 }
 
-function psLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 function removeOwnedLegacyBat() {
   for (const name of ['DSH Gateway.bat', 'PocketBridge-Gateway.bat']) {
     const file = path.join(winStartupDir(), name);
@@ -70,18 +67,10 @@ function winInstall() {
     throw new Error('缺少桌面启动器或图标；请先构建桌面客户端');
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  const script = [
-    '$ws = New-Object -ComObject WScript.Shell',
-    `$shortcut = $ws.CreateShortcut(${psLiteral(target)})`,
-    `$shortcut.TargetPath = ${psLiteral(path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'wscript.exe'))}`,
-    `$shortcut.Arguments = ${psLiteral(`"${launcher}"`)}`,
-    `$shortcut.WorkingDirectory = ${psLiteral(path.dirname(launcher))}`,
-    `$shortcut.IconLocation = ${psLiteral(`${icon},0`)}`,
-    `$shortcut.Description = ${psLiteral('Pocket Bridge — 自动启动网关与托盘')}`,
-    '$shortcut.Save()'
-  ].join('; ');
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
-    { timeout: 30000, windowsHide: true });
+  createWindowsShortcut({ file: target,
+    target: path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'wscript.exe'),
+    arguments: `"${launcher}"`, workingDirectory: path.dirname(launcher), icon,
+    description: 'Pocket Bridge — 自动启动网关与托盘' });
   if (!fs.existsSync(target)) throw new Error('创建开机自启快捷方式失败');
   removeOwnedLegacyBat();
   return target;

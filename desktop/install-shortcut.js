@@ -13,7 +13,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { createWindowsShortcut } = require('../scripts/windows-shortcut');
 
 const DESKTOP_DIR = __dirname;
 const NAME = 'Pocket Bridge';
@@ -27,15 +27,6 @@ const REMOVE = process.argv.includes('--remove');
 const ONLY_DESKTOP = process.argv.includes('--desktop');
 
 function say(m = '') { console.log(m); }
-
-/** 用 PowerShell 的 WScript.Shell COM 建快捷方式 —— 系统自带，无需额外依赖。 */
-function ps(script) {
-  return execFileSync('powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-    { encoding: 'utf8', timeout: 30000 });
-}
-
-function q(s) { return `'${String(s).replace(/'/g, "''")}'`; }
 
 function desktopPath() {
   return path.join(os.homedir(), 'Desktop');
@@ -70,22 +61,11 @@ function createShortcut(dir) {
   const target = path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'wscript.exe');
   const args = `"${OPEN_VBS}"`;
 
-  const script = [
-    '$ws = New-Object -ComObject WScript.Shell',
-    `$sc = $ws.CreateShortcut(${q(lnk)})`,
-    `$sc.TargetPath = ${q(target)}`,
-    `$sc.Arguments = ${q(args)}`,
-    `$sc.WorkingDirectory = ${q(DESKTOP_DIR)}`,
-    `$sc.Description = 'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex'`,
-    fs.existsSync(ICON) ? `$sc.IconLocation = ${q(ICON + ',0')}` : '',
-    '$sc.WindowStyle = 7',
-    '$sc.Save()',
-    `if (Test-Path ${q(lnk)}) { Write-Output 'SAVED' } else { Write-Output 'MISSING' }`
-  ].filter(Boolean).join('; ');
-
   try {
-    const out = ps(script).trim();
-    if (!out.includes('SAVED')) return { dir, ok: false, reason: `保存后文件不存在（输出: ${out}）` };
+    const out = createWindowsShortcut({ file: lnk, target, arguments: args, workingDirectory: DESKTOP_DIR,
+      icon: fs.existsSync(ICON) ? ICON : '', showCommand: 7,
+      description: 'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex' }).trim();
+    if (!out.includes('SAVED') || !fs.existsSync(lnk)) return { dir, ok: false, reason: `保存后文件不存在（输出: ${out}）` };
     const size = fs.statSync(lnk).size;
     return { dir, ok: true, lnk, size };
   } catch (err) {

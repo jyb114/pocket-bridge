@@ -40,6 +40,7 @@ for (const relative of selected) {
 for (const required of [
   'scripts/gateway-daemon.js', 'scripts/mobile-proxy.js', 'scripts/first-run.js',
   'scripts/gateway-listener.js',
+  'scripts/windows-shortcut.js',
   'scripts/codex-history-transport.js',
   'scripts/desktop-ui-action.js', 'scripts/codex-desktop-driver.js',
   'scripts/codex-desktop-ui.ps1', 'scripts/codex-desktop-relay.js', 'scripts/codex-desktop-target.js', 'scripts/codex-desktop-text.js',
