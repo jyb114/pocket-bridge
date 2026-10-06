@@ -183,8 +183,8 @@ async function run() {
     state = await page.eval(`document.getElementById('files-status').textContent`);
     assert.match(state, /文件浏览服务未启用/);
     await page.eval(`window.__fake.failFiles=false;document.getElementById('files-close').click()`);
-    state = await page.eval(`({classic:new URL(document.getElementById('classic-view').href).searchParams.get('view'),older:document.getElementById('history-bar').hidden})`);
-    assert.equal(state.classic, 'classic');
+    state = await page.eval(`({classic:[...document.querySelectorAll('#classic-view,#settings-classic')].every(x=>x.hidden&&!x.hasAttribute('href')),older:document.getElementById('history-bar').hidden})`);
+    assert.equal(state.classic, true, 'upstream classic routes must not be advertised from the encrypted phone UI');
     assert.equal(state.older, false);
     if (process.argv.includes('--screenshot')) {
       const screenshot = await page.send('Page.captureScreenshot', { format: 'png' });
@@ -198,6 +198,9 @@ async function run() {
     assert.ok(calls.some(x => x[0] === 'sendMessage' && x[1] === 's1' && x[2] === '测试指令'));
 
     await page.eval(`window.__fake.onEvent({type:'record',sessionId:'s1',record:{id:'thought-1',role:'thought',title:'思考',text:'正在检查'}});document.getElementById('tab-activity').click();window.__fake.onEvent({type:'record',sessionId:'s1',record:{id:'thought-1',role:'thought',title:'思考',text:'检查完成'}})`);
+    // The deliberate stream coalescer commits on RAF, not synchronously in the
+    // event callback. Await its frames without weakening the exact text/count.
+    await page.eval(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     state = await page.eval(`({text:document.getElementById('record-list').textContent,count:document.querySelectorAll('#record-list .record').length})`);
     assert.match(state.text, /检查完成/);
     assert.equal(state.count, 1);
@@ -308,13 +311,13 @@ async function run() {
         'model and mode should sit below the text inside the composer at ' + width + ': ' + JSON.stringify(state));
       assert.ok(state.frameBottom <= state.statusTop + 1 && state.statusBottom <= 845,
         'connection and balance should sit below the composer at ' + width + ': ' + JSON.stringify(state));
-      assert.deepEqual(state.pickKinds, ['model', 'mode', 'goal']);
+      assert.deepEqual(state.pickKinds, ['model', 'mode', 'perm', 'goal']);
       assert.equal(state.separateBar, false, 'the old separate toolbar must be gone');
       assert.ok(state.pickHeight >= 40, 'composer selectors are too short at ' + width);
       const operations = await page.eval(`(async () => {
         const holder = document.getElementById('composer-picks');
         const result = [];
-        for (const kind of ['model', 'mode', 'goal']) {
+        for (const kind of ['model', 'mode', 'perm', 'goal']) {
           const button = holder.querySelector('[data-kind="' + kind + '"]');
           button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
           const b = button.getBoundingClientRect(), h = holder.getBoundingClientRect();
@@ -370,7 +373,7 @@ async function run() {
 
     // ── J：压缩上下文走 commands/execute，不是把 /compact 当消息发出去 ────────
     //
-    // The composer keeps only the three session-specific selectors. Compact
+    // The composer retains the four session-specific selectors. Compact
     // remains inside the goal panel, and app/address actions live in Settings.
     state = await page.eval(`([...document.querySelectorAll('.composer-pick[data-kind]')].map(b => b.textContent))`);
     assert.equal(state.some(x => x.indexOf('压缩上下文') >= 0), false,
@@ -385,17 +388,19 @@ async function run() {
         balance: !!document.getElementById('composer-balance') };
     })()`);
     assert.equal(composerInfo.pickGroups, 1, '重新挂载不该留下第二组输入动作');
-    assert.equal(composerInfo.codex && composerInfo.address && composerInfo.balance, true,
-      'Codex、地址与余额仍须容易找到');
+    assert.equal(composerInfo.codex, false, 'DSH-only releases must not advertise a Codex switch');
+    assert.equal(composerInfo.address && composerInfo.balance, true,
+      '地址与余额仍须容易找到');
     await page.eval(`document.getElementById('rail-settings').click()`);
     state = await page.eval(`(() => { const menu = document.getElementById('settings-menu');
       const codex = document.getElementById('settings-codex');
       const address = [...menu.querySelectorAll('.menu-extra')].find(x => x.textContent.includes('连接地址'));
-      return { open: !menu.hidden, codexHeight: codex.getBoundingClientRect().height,
+      return { open: !menu.hidden, codexPresent: !!codex,
         addressHeight: address.getBoundingClientRect().height }; })()`);
     assert.equal(state.open, true, '设置入口应当打开');
-    assert.ok(state.codexHeight >= 44 && state.addressHeight >= 44,
-      '设置里的 Codex 和连接地址需要易点的触控区域');
+    assert.equal(state.codexPresent, false, 'a DSH-only menu must not retain a stale Codex action');
+    assert.ok(state.addressHeight >= 44,
+      '设置里的连接地址需要易点的触控区域');
     await page.eval(`[...document.querySelectorAll('#settings-menu .menu-extra')]
       .find(x => x.textContent.includes('连接地址')).click()`);
     assert.match(await page.eval(`document.querySelector('.screen-overlay .screen-bar').textContent`), /连接地址/);
@@ -758,7 +763,7 @@ async function run() {
       window.__fake.onEvent({type:'status',state:'connected'});
       return document.getElementById('connection-status').textContent;
     })()`), 'Connected');
-    assert.deepEqual(state.picks, ['Model', 'Tools', 'Goal'], '输入区动作应当跟着切成英文');
+    assert.deepEqual(state.picks, ['Model', 'Tools', 'Access scope', 'Goal'], '输入区动作应当跟着切成英文');
     assert.equal(state.goalLabel, 'Plan/Goal', '目标按钮应说明也能打开计划模式');
     assert.equal(state.picks.some(x => x === 'Compact'), false,
       '压缩上下文只在目标面板里');
@@ -773,7 +778,7 @@ async function run() {
       picks:[...document.querySelectorAll('.composer-pick[data-kind]')].map(b=>b.textContent),
       composerStatus:document.getElementById('composer-connection').textContent})`);
     assert.equal(state.status, 'Sin conexión');
-    assert.deepEqual(state.picks, ['Modelo', 'Herramientas', 'Meta'], '输入区西语也要生效');
+    assert.deepEqual(state.picks, ['Modelo', 'Herramientas', 'Alcance de acceso', 'Meta'], '输入区西语也要生效');
     assert.equal(state.composerStatus, 'Sin conexión', '底部连接状态也要跟着切换语言');
     await page.eval(`(() => { window.DshI18n.setLang('zh'); return 'ok'; })()`);
     await new Promise(resolve => setTimeout(resolve, 80));
@@ -1402,11 +1407,14 @@ async function run() {
     state = await usability.eval(`({upload:document.getElementById('upload-button').getBoundingClientRect().height,
       send:document.getElementById('send-button').getBoundingClientRect().height,
       voice:document.querySelector('.voice-button').getBoundingClientRect().height,
-      goalRight:document.querySelector('.composer-pick[data-kind="goal"]').getBoundingClientRect().right,
-      sendLeft:document.getElementById('send-button').getBoundingClientRect().left})`);
+       goalRight:document.querySelector('.composer-pick[data-kind="goal"]').getBoundingClientRect().right,
+       goalBottom:document.querySelector('.composer-pick[data-kind="goal"]').getBoundingClientRect().bottom,
+       sendTop:document.getElementById('send-button').getBoundingClientRect().top,
+       sendLeft:document.getElementById('send-button').getBoundingClientRect().left,
+       reachable:(()=>{const node=document.querySelector('.composer-pick[data-kind="goal"]'),r=node.getBoundingClientRect();return r.width>=44&&r.height>=44&&r.right<=innerWidth&&node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()})`);
     assert.ok(state.upload >= 44 && state.send >= 44 && state.voice >= 44,
       '手机上的上传、发送、语音按钮应有足够大的触控区域');
-    assert.ok(state.goalRight <= state.sendLeft + 1,
+    assert.ok(state.reachable && (state.goalRight <= state.sendLeft + 1 || state.goalBottom <= state.sendTop + 1),
       '模型名称变长后，目标入口仍须在手机宽度内直接点到');
     usability.close();
 
@@ -1527,6 +1535,9 @@ async function run() {
     await merged.goto('http://127.0.0.1:' + server.address().port + '/dsh-lite.html',300);
     await waitForSessionList(merged);
     async function pointer(selector) {
+      if (await merged.eval(`!!document.querySelector(${JSON.stringify(selector)})?.closest('#settings-menu[hidden]')`)) {
+        await pointer('#rail-settings');
+      }
       if (/^#(?:project|session)-list/.test(selector)) await openSidebar();
       let point;
       for (let attempt=0;attempt<12;attempt++) {

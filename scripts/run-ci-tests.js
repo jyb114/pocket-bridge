@@ -1,18 +1,6 @@
-// CI 上跑的那一部分测试。
-//
-// 说清楚边界，免得把 CI 的绿灯当成「全都验过了」：
-//
-//   完整的 `npm test` 需要**一台真机器** —— 网关在跑、浏览器装着、
-//   Codex / DSH 装着、隧道通着。GitHub 的 runner 上这些都没有。
-//   所以这里只跑**不依赖本机环境**的那些：纯算法、纯解析、静态检查，
-//   以及自带 HTTP 服务的界面测试。
-//
-//   剩下那些（状态恢复、加密通道、隧道探测、余额、语音……）在 CI 上是
-//   **没被覆盖**的。这一点在 README 里也写了，不靠这份文件自我声明。
-//
-// 用法：
-//   node scripts/run-ci-tests.js            跑
-//   node scripts/run-ci-tests.js --list     只列清单
+// Current DSH/shared isolated regressions. Real phone, upstream and tunnel
+// acceptance is separate and must be reported independently of this suite.
+// Usage: node scripts/run-ci-tests.js [--list]
 'use strict';
 
 const path = require('path');
@@ -26,6 +14,13 @@ const NODE = process.execPath;
  * 回答不了的就别放进来 —— 一个在 CI 上时红时绿的清单比没有清单更糟。
  */
 const SUITE = [
+  ['test-dsh-only-retirement.js', [], 'Actual isolated HTTP/upgrade retirement gates refuse every old action without native adapters or private-data mutations'],
+  ['test-dsh-phone-surface.js', [], 'Actual HTTP/upgrade entrypoints refuse raw remote upstream content while preserving encrypted Lite and direct computer access'],
+  ['test-dsh-ws-failclosed.js', [], 'Actual isolated gateway TCP refuses malformed upstream handshake/transform bytes without plaintext fallback or application actions'],
+  ['test-gateway-lifecycle.js', [], 'Gateway-only restart admission awaits its own helper and leaves external DSH/native processes untouched'],
+  ['test-dsh-payload.js', [], 'Actual allowlisted DSH payload is closed over runtime dependencies and retains private and legacy data during isolated upgrade'],
+
+  ['test-config.js', [], 'Actual isolated DSH config saves retain legacy and unknown fields; identity changes touch only owned authentication fixtures'],
   ['test-runtime-requirements.js', [], '源码运行的 Node.js 版本门槛与 CI、安装说明一致'],
   ['test-gateway-listener.js', [], 'Actual owned HTTP/TCP listeners reserve the exact IPv4 tunnel origin, avoid occupied ports, share IPv6/upgrade handlers and roll back incomplete startup (no production service)'],
   ['check-frontend.js', [], '静态检查：脚本注入、id 引用、备选优先级表'],
@@ -39,6 +34,7 @@ const SUITE = [
   ['test-dsh-upstream-auth.js', [], 'DSH Web 首次启动及凭据轮换（假凭据和 HTTP）'],
   ['test-dsh-adapter.js', [], 'DSH 桌面及 CLI 版本、协议和严格 HTTP 指纹（隔离夹具）'],
   ['test-dsh-runtime.js', [], 'DSH Web/桌面自动发现、端口归属与缓存（假进程及 HTTP）'],
+  ['test-dsh-runtime-async.js', [], 'Asynchronous OS inventory and isolated cold installation discovery preserve runtime identity while serving unrelated HTTP promptly (isolated HTTP/process fixtures; no live DSH)'],
   ['test-dsh-explicit-target.js', [], '显式 DSH 端口缓存过期后重新核实原目标，不误判版本变化或切换端口'],
   ['test-key-cookie-replacement.js', [], '有效配对入口替换旧认证 cookie；不同网关端口互不干扰（隔离 HTTP）'],
   ['test-dsh-targets.js', [], 'DSH Web 安全启动、停止及 IPC 提示（假进程）'],
@@ -47,7 +43,7 @@ const SUITE = [
   ['test-dsh-auth-recovery.js', [], '隧道登录 cookie 丢失时原样保留 403 并显示重新配对入口（假 DOM）'],
   ['test-sw-static-cache.js', [], 'DSH 静态模块的版本边界、缓存命中与失败重试（假 Service Worker）'],
   ['test-e2ee-order.js', [], '加密消息维持授权与已解决事件的收发顺序（延迟 WebCrypto 夹具）'],
-  ['test-missing-targets.js', [], '缺少 DSH / Codex 时显示可操作提示，旧选择与独立运行服务仍可用（假目标与假连接）'],
+  ['test-missing-targets.js', [], '缺少 DSH 时显示可操作提示，旧选择与独立运行服务仍可用（假目标与假连接）'],
   ['test-first-run.js', [], '隔离目录验证首次安装生成密钥、DSH 可选与升级保留'],
   ['test-windows-installer.js', [], 'English installer, remembered per-user destination, /D smoke override and shared-state isolation (source contracts; no build or install)'],
   ['test-desktop-gateway-scope.js', [], 'Desktop shortcut opens only its own advertised gateway identity and matching fresh boot/PID (synthetic HTTP and child events; no live gateway or native action)'],
@@ -66,40 +62,12 @@ const SUITE = [
   ['test-bootstrap-gate.js', [], '白名单门槛：新用户进得来、冒名者一条内容都拿不到'],
   ['test-proof-enforcement.js', ['--static-only'], '第三道门的源码检查；真网关实测在 CI 中显式跳过'],
   ['test-upload-handler.js', [], '上传处理器：路径穿越、来源、大小（自带服务）'],
-  ['test-codex-queue.js', [], '队列状态机（自带 mock rpc，不碰真会话）'],
-  ['test-codex-desktop-target.js', [], '桌面代发目标、路径和重复请求验证（纯函数；不启动桌面）'],
-  ['test-desktop-ui-action.js', [], 'Codex and Dot share a fail-fast desktop action lease until their native child exits (isolated scheduler)'],
-  ['test-desktop-lifecycle.js', [], 'Controlled gateway restart/signals stop desktop admission and await actual child CLOSE, durable Dot close and the full Codex receipt tail (isolated services; no native actions)', { platform: 'win32' }],
   ['test-console-restart-wait.js', [], 'Console waits for a distinct gateway boot, reports blocked drains and keeps transport failures separate from completed restart (isolated DOM/GET; no gateway restart)'],
   ['test-reload-gateway.js', [], 'Scoped reload verifies own installation, exact health PID/boot and local Origin before scheduled restart (isolated mock/owned HTTP; no native actions)', { platform: 'win32' }],
   ['test-daemon-operation-stop.js', [], 'Daemon admission leases fence delayed gateway/tunnel starts after stop and preserve uncertain child ownership (actual orchestration with synthetic HTTP/children; no native actions)'],
   ['test-tray-gateway-stop.js', [], 'Tray verifies scoped gateway identity, waits graceful shutdown and owns only pinned tunnel processes (PowerShell synthetic HTTP/CIM/process fixtures; no tray UI or real signals)', { platform: 'win32' }],
-  ['test-dot-desktop.js', [], 'Native Dot durable identity, scoped history, encrypted service boundaries and driver lifecycle (isolated fixtures; no native actions)'],
-  ['test-dot-desktop-text.js', [], 'Observed Dot fragment serialization preserves exact self-message whitespace in both native readers and receipt hashes (PowerShell pure functions and exact synthetic proof; no native actions)', { platform: 'win32' }],
-  ['test-dot-desktop-journal.js', [], 'Encrypted Dot receipts, continuity, parent ownership and immutable delivery proof (isolated files; no native actions)'],
-  ['test-dot-desktop-send.js', [], 'Framed Dot helper acknowledgements, child lifetime and shutdown fences (isolated fake children; no native actions)'],
-  ['test-dot-desktop-private-store.js', [], 'Private Dot provisioning, snapshot continuity and orderly shutdown (injected protection/ACL/identity; no OS acceptance)'],
-  ['test-dot-desktop-runtime.js', [], 'Lazy Dot connect provisioning, unavailable targets and owned shutdown (injected native/store; no real desktop actions)'],
-  ['test-dot-desktop-gateway.js', [], 'Dot uses the real gateway login, device proof and encryption gates (isolated HTTP; synthetic native history)'],
-  ['test-dot-desktop-ui.js', [], 'Dot phone connect, refresh, draft preservation and authenticated encryption in a real browser (synthetic native data)', { platform: 'win32' }],
-  ['test-dot-desktop-source-guard.js', [], 'Exact Dot composer proof and guarded current-view metadata recovery with stale Codex mode (synthetic UIA; no desktop actions)', { platform: 'win32' }],
-  ['test-codex-desktop-mode.js', [], '桌面代发英文和中文模式控件身份（PowerShell 纯函数；不操作桌面）', { platform: 'win32' }],
-    ['test-codex-desktop-source-guard.js', [], 'Codex empty-draft source attestation accepts only the observed idle or active composer tree and refuses altered drafts, attachments and identities (PowerShell synthetic UIA; no desktop actions)', { platform: 'win32' }],
-    ['test-codex-desktop-process-identity.js', [], 'Continuously held read-only process identity refuses process exit, replacement and changed birth/path at every native boundary (actual owned harmless process and isolated production functions; no desktop actions)', { platform: 'win32' }],
-    ['test-codex-desktop-focus-readiness.js', [], 'One native SetFocus waits for the exact unchanged composer with strict process/window checks and no input during readiness (isolated PowerShell functions; no desktop actions)', { platform: 'win32' }],
-  ['test-codex-desktop-relay-e2ee.js', [], '桌面代发的真实网关认证路由及客户端加密互通（隔离 HTTP；假设备和交付）'],
   ['test-e2ee-missing-key.js', [], 'Public protected HTTP and WebSocket routes fail closed when encryption keys become unavailable (isolated HTTP and upgrade)'],
   ['test-relay-local-exemption.js', [], 'Relay and forwarded requests cannot claim the direct-loopback proof exemption with a local Host (isolated loopback HTTP)'],
-  ['test-codex-desktop-relay.js', [], '桌面代发回执、实际 Windows 路径及防重复日志（隔离 HTTP/RPC/driver；不控制真桌面）', { platform: 'win32' }],
-  ['test-codex-desktop-relay-ui.js', [], '桌面代发手机按钮、草稿和收据（真实浏览器事件；隔离 RPC/driver；Windows 与浏览器）', { platform: 'win32' }],
-  ['test-codex-phone-keyboard.js', [], 'Phone keyboard viewport, Safari-style offsets, history position and composer controls (actual browser interactions with simulated visualViewport; no physical-device acceptance)', { platform: 'win32' }],
-  ['test-dot-inbox.js', [], 'Dot MCP 收件箱协议与存储安全（隔离 HTTP；不代表真实 Dot 已接通）'],
-  ['test-codex-lock-ux.js', [], '手机查看、回前台、交还写锁与桌面占用时队列不误送（隔离夹具）'],
-  ['test-codex-first-turn.js', [], '首条消息前尚未落盘的真实协议回归：空会话可发送且不被空闲计时删除（隔离夹具）'],
-  ['test-codex-mobile-control.js', [], '手机内嵌交还确认、控制状态、当前轮预览、标题与正规协作模式（隔离夹具）'],
-  ['test-release-lock.js', [], '释放写锁：什么情况下**不许**动手（自带服务与假目标）'],
-  ['test-codex-handback-race.js', [], '手机在自动交还期间重连时，旧清理不得取消新会话订阅'],
-  ['test-codex-proxy-scope.js', [], '代理配置只作用于托管执行端；启动时不修改用户级 Windows 环境'],
   ['test-first-load.js', [], '首次加载横幅：该显示的显示、该消失的消失（假 DOM）'],
   ['test-notify-onboarding.js', [], '手机端「开启提醒」引导：一张卡片、点一下就好、不装 App'],
   ['test-lang-follows.js', [], '语言选择要真的生效：cookie + navigator 改写 + 该重载才重载'],
@@ -107,29 +75,18 @@ const SUITE = [
   ['test-dict-trim.js', ['--static-only'], '语言包裁剪的静态与纯函数测试；真网关段显式跳过'],
   ['test-prove-injection.js', ['--static-only'], '进门证明的假环境测试；真网关段显式跳过'],
   ['test-device-renewal.js', ['--isolated'], '设备令牌续期：临时目录中的真实模块测试；真网关段显式跳过'],
-  ['test-codex-deliverables.js', [], 'Codex 交付文件：:codex-file-citation 变成可点的下载按钮'],
-  ['test-codex-image.js', [], '手机上看对话里的图片：不留明文 src、走加密取回、失败给重试'],
-  ['test-codex-render.js', [], '消息渲染健壮性：[object Object] 不再出现、本地文件链接变成可点按钮'],
-  ['test-codex-send-mode.js', [], '任务进行中插队还是排队：由使用者选；状态没确认时先确认再决定'],
-  ['test-codex-send-mode-behavior.js', [], '发送按钮真实行为：不误投会话、不重复发送、队列成功才提示'],
-  ['test-pagehide-lock-safety.js', [], '关闭手机页不得把明文会话编号伪标成端到端加密'],
-  ['test-hidden-windows.js', [], '运行期子进程隐藏黑窗口，包含 Codex app-server'],
-  ['test-console-help.js', [], '控制台「复制地址能干什么」：真跑 renderEntries（假 DOM）'],
+  ['test-hidden-windows.js', ['--static-only'], '运行期子进程隐藏黑窗口，DSH 与共享网关'],
+  ['test-console-help.js', ['--isolated-only'], 'Actual console entry recommendation/copy/open callbacks reject insecure or malformed phone links and provide localized recovery (isolated DOM; live acceptance separate)'],
   ['test-pair-code-persist.js', [], '配对码什么时候换：重启沿用、90 天过期、手动换（隔离目录）'],
   ['test-proof-persistence.js', [], '切出去再切回来不用刷新：证明落盘 + 回前台强制补证；真网关段显式跳过'],
   ['test-pair-key-carry.js', ['--static-only'], '配对之后钥匙要跟着走：静态接线检查；真网关段显式跳过'],
-  ['test-codex-projects.js', [], '手机端会话列表按项目折叠（假 DOM 跑真函数）'],
-  ['test-codex-echo-dup.js', [], '发一句显示两句：本地占位与服务端回推必须对上'],
   ['test-dsh-api-e2ee.js', [], 'DSH 那套 API 的正文加密：客户端加、网关解、上游一字不差'],
-  ['test-codex-private-file.js', [], 'Codex 文件路径经加密 POST 传送，明文及查询参数不能到文件读取器'],
-  ['test-codex-file-content.js', [], 'Active workspace documents stay inert after decryption; raster MIME and encrypted file bytes are preserved (isolated HTTP/files)'],
-  ['test-codex-file-access.js', [], '真实文件系统验证 Codex 项目/上传/生成文件边界，拒绝凭据、junction和硬链接逃逸'],
-  ['test-codex-ws-lifecycle.js', [], '真实 TCP 验证手机关闭只清理配对的 Codex 上游连接，不停止执行端'],
-  ['test-codex-file-path.js', [], 'Relative Codex files resolve inside registered projects without exposing their parents'],
   ['test-dsh-lazy-images.js', [], '已验证 DSH 模块的内嵌图片改为按需取，版本不匹配则原样放行'],
   ['test-dsh-lazy-image-store.js', [], '图片内容哈希、磁盘边界与官方入口改写'],
   ['test-dsh-lite-rpc.js', [], '轻量 DSH RPC 只接受已知方法、加密请求与正确协议参数'],
   ['test-dsh-lite-addresses.js', [], '手机地址面板经过设备证明和加密包装，明文请求不能读出访问地址'],
+  ['test-dsh-lite-attachment.js', [], 'Actual authenticated encrypted attachment entry validates official session references, image bytes and metadata without path or plaintext fallback'],
+  ['test-dsh-lite-attachment-gateway.js', [], 'Owned HTTP collector and actual encrypted image handler preserve complete large rasters, exact per-route caps and fail-closed disconnect/overflow/abort behavior'],
   ['test-dsh-lite-upload.js', [], '轻量 DSH 上传回执：固定路径、会话绑定、加密、大小与上游响应校验'],
   ['test-dsh-lite-download.js', [], '轻量 DSH 下载仅限已知对话的真实工作区文件，阻止越界与链接逃逸'],
   ['test-dsh-lite-files.js', [], '手机 DSH 工作区文件单层分页浏览：仅已知会话、加密与路径边界'],
@@ -142,6 +99,7 @@ const SUITE = [
   ['test-dsh-lite-code-pin.js', [], '轻量 DSH 脚本指纹、直接打开的初次钉住与旧指纹的手动更新（假 Service Worker）'],
   ['test-dsh-lite-update.js', [], '手机切回前台只提示新版本，点击后才更新指纹且失败可重试'],
   ['test-dsh-lite-ui.js', [], '轻量 DSH 手机界面和多题交互（隔离浏览器）'],
+  ['test-dsh-lite-actions.js', [], 'Actual isolated Chromium project creation, busy admission, encrypted adapter file/image actions and preserved drafts'],
   ['test-dsh-lite-switch.js', [], '官方 DSH 页面上的轻量模式按钮保留完整认证和加密地址'],
   ['test-review-boundaries.js', [], '历史状态与加密失败边界（隔离，不碰真会话）'],
   ['test-narrow-kill.js', ['--static-only'], '窄杀进程：源码检查；本机 cloudflared 查询显式跳过'],
@@ -149,16 +107,7 @@ const SUITE = [
   ['test-tunnel-probe.js', ['--isolated-only'], 'Owned HTTP/TCP probes require the exact gateway 204, reject foreign services and enforce absolute deadlines (no production tunnel)'],
   ['similarity-audit.js', [], '重复代码审计（只看文件）'],
   // 这条需要浏览器 —— runner 上有就用，没有就跳过（见下面的处理）。
-  ['test-codex-interactions.js', [], '授权、问题、自填与 MCP 确认（隔离执行端；需要浏览器）'],
-  ['test-codex-queue-mobile-save.js', [], '只读手机按钮保存待办：真实浏览器事件、隔离 HTTP 与队列文件持久化（需要浏览器）'],
-  ['test-codex-menus-interactions.js', [], '手机菜单、项目路径、附件、改名归档操作（隔离浏览器）'],
-  ['test-codex-thread-list-interactions.js', [], '旧会话分页和搜索的实际浏览器交互（隔离执行端）'],
-  ['test-codex-history-pagination.js', [], 'Actual browser history ordering, indexed rows, explicit retry and delayed conversation-switch isolation (synthetic read RPCs; no live gateway)', { platform: 'win32' }],
-  ['test-codex-history-polling.js', [], 'Completed-history cooldown preserves small status polling, full burst pages, manual refresh, unknown-state fallback and content deadlines (isolated observer)'],
-  ['test-codex-history-transport.js', [], 'Authenticated bounded history compression, exact unchanged-page revisions, fragmented TCP and legacy browser/server fallback (isolated read-only transport)'],
-  ['test-codex-observer.js', ['--expanded', '--attachments', '--queue'],
-    '界面行为（自带假执行端与本地 HTTP 服务；需要浏览器）']
-];
+  ];
 
 const onlyList = process.argv.includes('--list');
 if (onlyList) {
@@ -190,7 +139,7 @@ for (const [file, args, why, environment] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-codex-observer.js','test-codex-interactions.js','test-codex-queue-mobile-save.js','test-codex-desktop-relay-ui.js','test-codex-phone-keyboard.js','test-codex-history-pagination.js','test-dot-desktop-ui.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;
@@ -216,6 +165,6 @@ for (const [file, args, why, environment] of SUITE) {
 console.log(`\n通过 ${SUITE.length - failed - skipped}　跳过 ${skipped}　失败 ${failed}\n`);
 if (skippedLiveSegments) console.log(`另有 ${skippedLiveSegments} 段真机或真网关实测显式跳过，不计入通过数；发布前需单独运行。\n`);
 if (skipped) console.log('（跳过的是环境里没有对应东西的，不是失败）\n');
-console.log('提醒：CI 绿 ≠ 全都验过。完整验证要在真机上跑 npm test。\n');
+console.log('Reminder: isolated CI does not establish real-device acceptance; test the phone, installed DSH and tunnel separately.\n');
 
 process.exitCode = failed ? 1 : 0;

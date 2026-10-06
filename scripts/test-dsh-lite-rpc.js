@@ -213,7 +213,7 @@ async function check(name, test) { await test(); checks++; console.log('PASS ' +
     assert.equal(calls.length, before);
   });
 
-  await check('slash-command RPCs are flat and limited to a bare command', async () => {
+  await check('slash-command RPCs preserve exact flat scope and inspected bounded arguments', async () => {
     // J：压缩上下文走 DSH 自己的命令 RPC，而不是把 `/compact` 当消息发出去。
     const list = await invoke(handler, { method: 'commands/list', request: { agentId: 's-1' } });
     assert.equal(list.status, 200);
@@ -227,6 +227,16 @@ async function check(name, test) { await test(); checks++; console.log('PASS ' +
       { args: { agentId: 's-1', line: '/compact', submittedAttachments: [] } });
     assert.equal(calls.at(-1).path, '/api/commands/execute');
 
+    for (const line of ['/permission read-only', '/permission workspace-write',
+      '/permission danger-full-access', '/plan on', '/plan off']) {
+      const before = calls.length;
+      const request = { agentId: 's-1', line, submittedAttachments: [] };
+      const result = await invoke(handler, { method: 'commands/execute', request });
+      assert.equal(result.status, 200);
+      assert.equal(calls.length, before + 1, 'one explicit command makes one upstream call');
+      assert.deepEqual(JSON.parse(calls.at(-1).body).payload, { args: request });
+    }
+
     const before = calls.length;
     for (const input of [
       { method: 'commands/list', request: {} },
@@ -235,6 +245,11 @@ async function check(name, test) { await test(); checks++; console.log('PASS ' +
       { method: 'commands/execute', request: { agentId: 's-1', line: '/compact --force' } },
       { method: 'commands/execute', request: { agentId: 's-1', line: '/rm -rf /' } },
       { method: 'commands/execute', request: { agentId: 's-1', line: '/compact\n/x' } },
+      ...['/permission unknown', '/permission workspace-write extra', '/plan off extra',
+        '/plan unknown', '/permission  read-only', '/permission read-only\t',
+        '/permission workspace-write\u007f', '/permission workspace-write\u2028',
+        '/plan off\r/permission danger-full-access', '/' + 'a'.repeat(63),
+        '/permission ' + 'a'.repeat(201)].map(line => ({ method: 'commands/execute', request: { agentId: 's-1', line } })),
       { method: 'commands/execute', request: { agentId: 's-1', line: '/compact',
         submittedAttachments: [{ type: 'file', receiptId: 'r-1' }] } },
       { method: 'commands/execute', request: { agentId: 's-1', line: '/compact', extra: 1 } }

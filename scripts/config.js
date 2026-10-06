@@ -70,13 +70,7 @@ const DEFAULTS = {
     port: 0                // 0 = 自动（中间层端口 +1，被占用就往后找）
   },
 
-  // ── Codex（可选的第二个目标）────────────────────────────────────────────────
-  // Codex 的 CLI 能开一个带 WebSocket 的 app-server，手机上就能用它自己的界面。
-  // 留空则自动发现（LocalAppData 下那个带版本哈希的目录）。
-  codex: {
-    executable: '',        // 留空 = 自动发现
-    port: 18790            // app-server 监听的端口
-  }
+
 };
 
 function ensureLogDir() {

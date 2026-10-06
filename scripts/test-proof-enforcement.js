@@ -73,15 +73,14 @@ console.log('\n① 网关侧：开关与放行名单');
 
   // 内容一条都不能在放行名单里 —— 这是这扇门的全部意义
   const listBody = (SRC.match(/const BOOTSTRAP_PATHS = new Set\(\[([\s\S]*?)\]\);/) || [])[1] || '';
-  // ★ `/codex` 与 `/go` 是**应用页**（和 `/` 同类：这台设备自己的程序），
-  //   2026-09-26 加进放行名单 —— 不加的话未证明的设备连 Codex 页都打不开
-  //   （日志实锤：`403 未通过挑战应答: GET /codex`）。它们的**内容接口**照旧要证明：
-  //   /codex/threads、/codex/file、/codex/queue 一条都不在名单里。
-  const allowedAppShell = ['/codex', '/codex/', '/go', '/go/'];
-  const leaked = ['/api', '/codex/threads', '/codex/file', '/__targets', '/__console', '/codex/lock']
+  // DSH's static shell and shared connection selector must load before proof.
+  // Conversation, filesystem and attachment content must remain protected.
+  const allowedAppShell = ['/dsh-lite', '/go', '/go/'];
+  const leaked = ['/api', '/__dsh/lite-rpc', '/__dsh/lite-files', '/__dsh/lite-download',
+    '/__dsh/lite-upload', '/__dsh/legacy-rpc', '/__targets', '/__console']
     .filter((p) => listBody.includes(`'${p}`));
-  ok('放行名单里没有任何内容路径（/api、/codex/threads、余额…）', leaked.length === 0, leaked.join(', '));
-  ok('放行的是应用页本身（/codex、/go），不是它们的接口',
+  ok('放行名单里没有 DSH 会话、文件、附件或设备内容路径', leaked.length === 0, leaked.join(', '));
+  ok('放行的是 DSH 应用页和连接选择页，不是它们的接口',
     allowedAppShell.every((p) => listBody.includes(`'${p}`)));
 }
 

@@ -1,8 +1,7 @@
 // 压缩是不是真的生效、而且**内容没被压坏**。
 //
-// 为什么值得单独守一条：手机端「加载半天」最大的一块就是这里 ——
-// 服务端原来一个字节都不压，`/codex` 一页 171,883 字节原样发给手机
-// （经隧道实测延迟 3 秒）。压完 45,219 字节。这是八成的差距。
+// Verify the served DSH shell and static modules, using their supported routes.
+// Asset sizes are measured here; they are not a full phone startup benchmark.
 //
 // 但压缩这件事有两个容易踩的坑，都必须机器盯着：
 //   1. **content-length 必须在压缩之后算**。先算再压会告诉浏览器一个
@@ -22,6 +21,7 @@ const zlib = require('zlib');
 const BASE = path.resolve(__dirname, '..');
 const PORT = Number(fs.readFileSync(path.join(BASE, 'logs', 'gateway-port.txt'), 'utf8').trim()) || 8080;
 const KEY = fs.readFileSync(path.join(BASE, 'logs', 'access-key.txt'), 'utf8').trim();
+const INSTANCE = JSON.parse(fs.readFileSync(path.join(BASE, 'logs', 'instance.json'), 'utf8')).instanceId;
 
 let pass = 0, fail = 0;
 const ok = (n, c, e) => {
@@ -60,12 +60,20 @@ function raw(pathname, opts = {}) {
       });
     });
     q.on('error', (e) => resolve({ status: 0, error: e.message }));
+    q.setTimeout(8000, () => q.destroy(new Error('Scoped gateway timeout')));
     q.end();
   });
 }
 
 (async () => {
   console.log('\n=== 静态文件压缩 ===\n');
+
+  const health = await raw('/__health');
+  let identity;
+  try { identity = JSON.parse(health.plain.toString('utf8')); } catch (_) {}
+  if (health.status !== 200 || !INSTANCE || identity?.service !== 'pocket-bridge-gateway' || identity.instanceId !== INSTANCE || identity.port !== PORT || !Number.isInteger(identity.pid)) {
+    console.error('Scoped gateway identity is unconfirmed; no credential was sent.'); process.exitCode = 1; return;
+  }
 
   const login = await raw(`/k/${KEY}`);
   const cookie = await new Promise((r) => {
@@ -80,7 +88,8 @@ function raw(pathname, opts = {}) {
     ['/boot.js', 'boot.js'], ['/route.js', 'route.js'], ['/e2ee.js', 'e2ee.js'],
     ['/i18n.js', 'i18n.js'], ['/voice.js', 'voice.js'],
     ['/polyfill.js', 'polyfill.js'], ['/compat.js', 'compat.js'],
-    ['/codex', 'codex.html']
+    ['/dsh-lite', 'dsh-lite.html'], ['/dsh-lite.css', 'dsh-lite.css'],
+    ['/dsh-lite-ui.js', 'dsh-lite-ui.js'], ['/dsh-lite-adapter.js', 'dsh-lite-adapter.js']
   ];
 
   console.log('[1] 支持压缩的客户端：必须压、而且必须省得多');

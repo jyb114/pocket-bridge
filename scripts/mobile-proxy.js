@@ -29,14 +29,14 @@ const { spawn, execFile } = require('child_process');
 
 const { sendWebPush } = require('./webpush.js');
 const cfg = require('./config.js');
+const retiredTargets = require('./retired-targets.js');
+const dshPhoneSurface = require('./dsh-phone-surface.js');
 const requestOrigin = require('./request-origin.js');
 const routes = require('./routes.js');
 const sessions = require('./sessions.js');
 const e2eeBridge = require('./ws-e2ee-bridge.js');
-const codexHistoryTransport = require('./codex-history-transport.js');
 const e2ee = require('./e2ee.js');
 const dshRuntime = require('./dsh-runtime.js');
-const codexFileAccess = require('./codex-file-access.js');
 const dshLazyImages = require('./dsh-lazy-images.js');
 const dshLazyImageStore = require('./dsh-lazy-image-store.js');
 const dictTrim = require('./dict-trim.js');   // 按语言裁剪页面（省语言包体积）
@@ -65,79 +65,22 @@ const EXPLICIT_TARGET_PORT = process.env.DSH_GW_TARGET_PORT
   ? Number(process.env.DSH_GW_TARGET_PORT)
   : null;
 let TARGET_PORT = EXPLICIT_TARGET_PORT || 58347;
-// The runtime resolver's five-second cache can expire just before the
-// watchdog refreshes it. Keep the last confirmed profile for route selection
-// so a phone request in that narrow interval never falls back to DSH's large
-// official HTML and plugin preloads.
-let DSH_LAST_CONFIRMED_PROFILE = null;
 const LOG_DIR = path.join(BASE, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'proxy.log');
 const PWA_DIR = path.join(BASE, 'pwa');
 const DSH_LAZY_IMAGE_DIR = path.join(LOG_DIR, 'dsh-onboarding-images');
-const handleCodexUpload = require('./codex-uploads.js').createUploadHandler(path.join(BASE, 'uploads', 'codex'));
-const codexQueue = require('./codex-queue.js').createQueueService(BASE, () => require('./targets.js').codex.port());
-const codexDesktopRelay = require('./codex-desktop-relay.js').createDesktopRelayService(BASE, {
-  rpc: require('./codex-queue.js').createRpc(() => require('./targets.js').codex.port()),
-  driver: require('./codex-desktop-driver.js').createDesktopDriver()
-});
-// Native text Send is available only after an explicit verified Connect on
-// the accepted desktop package. Construction/status do not provision keys or
-// start a native helper. A journal receipt is display proof, not a server ACK.
-const dotDesktopRuntime = require('./dot-desktop-runtime.js').createDotDesktopRuntime({ base: BASE, enableSend: true });
-const dotDesktop = dotDesktopRuntime.service;
-// 「释放电脑端的锁」—— 手机被独占写锁挡住时的唯一出路。为什么只有那两条路、
-// 以及为什么**不**许删锁文件，都写在 codex-lock.js 头部。
-const codexLock = require('./codex-lock.js').createLockService(BASE, {
-  port: () => require('./targets.js').codex.port(),
-  logger: (m) => log(m)
-});
-
-// Legacy target-control clients must use the same per-thread confirmation and
-// verified-owner boundary as /codex/lock. No target action may bypass it with a
-// global desktop process-name shutdown.
-function requestCodexDesktopTakeover(body, lang) {
-  return codexLock.release(body.threadId, { confirm: body.confirm, lang, log });
-}
-
-// ── 三条携带正文的 HTTP 通道，统一套上端到端加密 ─────────────────────────────
-//
-// 处理器本身一行都不用改：加解密在它们外面（见 e2eeWrap 的说明）。
-// 客户端没要求加密时（没带 x-dsh-e2ee），这里原样透传，行为和以前完全一样；
-// 经中继又没要求加密的请求，在前面那张 E2EE_CONTENT_PATHS 表上就已经被拒了。
-function serveCodexThreads(req, res) {
-  const c = require('./codex-threads.js').get();
-  res.writeHead(200, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
-  });
-  res.end(JSON.stringify({
-    ok: !!(c && c.list),
-    at: (c && c.at) || 0,
-    ageMs: c && c.at ? Date.now() - c.at : null,
-    list: (c && c.list) || [],
-    error: (c && c.error) || null
-  }));
-}
-const serveCodexThreadsE2ee = e2eeWrap(serveCodexThreads);
-const handleCodexUploadE2ee = e2eeWrap(handleCodexUpload);
-const codexQueueHandleE2ee = e2eeWrap(codexQueue.handle.bind(codexQueue));
-const codexDesktopRelayHandleE2ee = e2eeWrap(codexDesktopRelay.handle.bind(codexDesktopRelay));
-const dotDesktopHandleE2ee = e2eeWrap(dotDesktop.handle.bind(dotDesktop));
-const codexLockHandleE2ee = e2eeWrap(codexLock.handle.bind(codexLock));
-// The POST file handler uses sendFile's bounded file encryption. Only its
-// request needs e2eeWrap; wrapping the streamed response as well would risk
-// plaintext writes before the generic response wrapper sees res.end().
-const serveCodexPrivateFileE2ee = e2eeWrap(serveCodexPrivateFile, { responseEncryptedByHandler: true });
 const dshDirectories = require('./dsh-directories.js').createDirectoryService({ defaultPath: BASE });
 const serveDshDirectoriesE2ee = e2eeWrap(dshDirectories.handle);
 const serveDshLiteAddressesE2ee = e2eeWrap(serveDshLiteAddresses);
+const dshLiteAttachment = require('./dsh-lite-attachment.js');
+const dshRuntimeIdentity = require('./dsh-runtime-identity.js').runtimeIdentity;
 // Tiny mobile DSH UI uses only four fixed unary RPCs. The browser never
 // supplies an upstream URL; this transport always targets the verified local
 // DSH listener and leaves the full desktop application untouched.
 function callDshLiteUpstream(call) {
   return refreshDshRuntimeState().then(state => {
     if (!state.ready || DSH_UPSTREAM_AUTH_OK === false) throw new Error('dsh-unavailable');
-    if (call.verifiedRuntime && legacyRuntimeIdentity(call.verifiedRuntime) !== legacyRuntimeIdentity(state.runtime))
+    if (call.verifiedRuntime && dshRuntimeIdentity(call.verifiedRuntime) !== dshRuntimeIdentity(state.runtime))
       throw new Error('legacy-runtime-changed');
     const upstreamPort = call.verifiedRuntime ? call.verifiedRuntime.port : TARGET_PORT;
     markActivity();
@@ -146,28 +89,47 @@ function callDshLiteUpstream(call) {
         host: INTERNAL_HOST, origin: `http://${INTERNAL_HOST}`
       });
       if (UPSTREAM_COOKIE) headers.cookie = `${UPSTREAM_COOKIE.name}=${UPSTREAM_COOKIE.value}`;
-      const upstream = http.request({ host: TARGET_HOST, port: upstreamPort,
+      let upstream, currentResponse, settled = false;
+      function fail(error) {
+        if (settled) return;
+        settled = true;
+        reject(error);
+        // Reject once before closing the owned pair. Re-emitting an Error via
+        // a completed request's socket can become an unhandled Socket error.
+        if (currentResponse) currentResponse.destroy();
+        if (upstream) upstream.destroy();
+      }
+      upstream = http.request({ host: TARGET_HOST, port: upstreamPort,
         method: 'POST', path: call.path, headers, signal: call.signal,
         timeout: 15000 }, response => {
+        currentResponse = response;
         const chunks = [];
         let bytes = 0;
+        // Only this fixed, read-only official image operation can carry the
+        // bounded base64 raster envelope. Other RPCs retain their existing cap.
+        const responseCap = call.path === '/api/session/attachment' && call.method === 'POST' ?
+          dshLiteAttachment.MAX_RESPONSE_BYTES : 1024 * 1024;
         const responseLimit = Number.isSafeInteger(call.maxResponseBytes) &&
-          call.maxResponseBytes > 0 && call.maxResponseBytes <= 1024 * 1024 ?
+          call.maxResponseBytes > 0 && call.maxResponseBytes <= responseCap ?
           call.maxResponseBytes : 512 * 1024;
         response.on('data', chunk => {
-          bytes += chunk.length;
-          if (bytes > responseLimit) {
-            upstream.destroy(new Error('dsh-response-too-large'));
+          if (settled) return;
+          if (bytes + chunk.length > responseLimit) {
+            fail(new Error('dsh-response-too-large'));
             return;
           }
+          bytes += chunk.length;
           chunks.push(chunk);
         });
-        response.on('end', () => resolve({ statusCode: response.statusCode,
-          body: Buffer.concat(chunks, bytes) }));
-        response.on('error', reject);
+        response.on('end', () => {
+          if (settled) return;
+          settled = true;
+          resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks, bytes) });
+        });
+        response.on('error', fail);
       });
-      upstream.on('timeout', () => upstream.destroy(new Error('dsh-timeout')));
-      upstream.on('error', reject);
+      upstream.on('timeout', () => fail(new Error('dsh-timeout')));
+      upstream.on('error', fail);
       upstream.end(call.body);
     });
   });
@@ -180,6 +142,13 @@ const serveDshLiteDownloadE2ee = e2eeWrap(require('./dsh-lite-download.js')
   .createDshLiteDownload());
 const serveDshLiteFilesE2ee = e2eeWrap(require('./dsh-lite-files.js')
   .createDshLiteFiles());
+const serveDshLiteAttachmentE2ee = e2eeWrap(dshLiteAttachment.createDshLiteAttachment({
+  callUpstream: callDshLiteUpstream,
+  resolveRuntime: async () => {
+    const state = await refreshDshRuntimeState();
+    return state.ready ? state.runtime : null;
+  }
+}));
 // ── 抓屏：把电脑屏幕送到手机上 ─────────────────────────────────────────────────
 //
 // 使用者人不在电脑前时，最缺的不是"再点一个按钮"，而是**看见电脑现在什么样**：
@@ -329,12 +298,12 @@ try {
     COOKIE_NAME = cj.cookieName;
     COOKIE_VALUE = cj.cookieValue;
   } else {
-    // DSH is optional. Codex-only installs still need a gateway login cookie,
+    // DSH is optional. The console still needs a gateway when DSH is not installed login cookie,
     // but must never pretend to hold a valid DSH session.
     COOKIE_NAME = 'pocket-bridge-auth';
     COOKIE_VALUE = crypto.createHmac('sha256', ACCESS_KEY)
       .update('gateway-cookie-v1').digest('base64url');
-    log('未找到可用的 DSH 会话凭据：Codex 可单独使用；DSH 需配置真实凭据后重启网关');
+    log('未找到可用的 DSH 会话凭据：控制台仍可使用；请配置 DSH 的真实凭据后重试');
   }
 } catch (err) {
   log(`FATAL 无法初始化本机密钥: ${err.message}`);
@@ -685,7 +654,7 @@ const PAGE_TEXT = {
       sub: '选择这台电脑上可用的应用，之后会记住你的选择。',
       checking: '正在检查…',
       none: '没有找到可连的东西',
-      noneHint: '请先在电脑上安装 DSH 或 Codex，再点「重新检查」。',
+      noneHint: '请先在电脑上安装 DSH，再点「重新检查」。',
       missing: '这台电脑上没有找到 {name}。请先安装它，或选择下面可用的应用。',
       retry: '重新检查',
       // 「拿不到列表」和「没装东西」是两回事，必须分开说 —— 不然使用者会去
@@ -709,7 +678,6 @@ const PAGE_TEXT = {
     },
     enter: {
       dsh: '正在进入 DSH…',
-      codex: '正在进入 Codex…'
     },
     starting: {
       title: '正在启动 DSH',
@@ -780,7 +748,7 @@ const PAGE_TEXT = {
       sub: 'Choose an available app on this computer. Your choice will be remembered.',
       checking: 'Checking…',
       none: 'Nothing to connect to',
-      noneHint: 'Install DSH or Codex on the computer, then tap Check again.',
+      noneHint: 'Install DSH on the computer, then tap Check again.',
       missing: '{name} was not found on this computer. Install it, or choose an available app below.',
       retry: 'Check again',
       needKey: 'This address cannot load the target list. Open the complete address '
@@ -804,7 +772,6 @@ const PAGE_TEXT = {
     },
     enter: {
       dsh: 'Entering DSH…',
-      codex: 'Entering Codex…'
     },
     starting: {
       title: 'Starting DSH',
@@ -891,7 +858,7 @@ const PAGE_TEXT = {
       sub: 'Elige una aplicación disponible en esta computadora. Se recordará tu elección.',
       checking: 'Comprobando…',
       none: 'No se encontró nada a lo que conectarse',
-      noneHint: 'Instala DSH o Codex en la computadora y pulsa Comprobar de nuevo.',
+      noneHint: 'Instala DSH en la computadora y pulsa Comprobar de nuevo.',
       missing: 'No se encontró {name} en esta computadora. Instálalo o elige una aplicación disponible abajo.',
       retry: 'Comprobar de nuevo',
       needKey: 'Esta dirección no puede cargar la lista. Vuelve a abrir la dirección '
@@ -915,7 +882,6 @@ const PAGE_TEXT = {
     },
     enter: {
       dsh: 'Entrando en DSH…',
-      codex: 'Entrando en Codex…'
     },
     starting: {
       title: 'Iniciando DSH',
@@ -1217,14 +1183,14 @@ function pairPage(req, lang) {
  *   使用者还有办法换语言；真正管用的是配对页那一次选择种下的 cookie。
  */
 function enterPage(req, lang, target) {
-  const codex = target === 'codex';
+
   const code = normLang(lang);
   const T = PAGE_TEXT[code];
-  const dest = codex ? '/codex' : '/';
+  const dest = '/';
   return "<!doctype html><meta charset='utf-8'>" +
     `<meta http-equiv='refresh' content='0;url=${dest}'>` +
-    `<title>${codex ? 'Codex' : 'DSH'}</title>` +
-    `<p style='font-family:sans-serif;padding:2rem'>${codex ? T.enter.codex : T.enter.dsh}</p>` +
+    `<title>DSH</title>` +
+    `<p style='font-family:sans-serif;padding:2rem'>${T.enter.dsh}</p>` +
     langSwitcher(req, code, true) +
     `<script>
     // 配对成功 → 把配对页存下的那把钥匙接回地址栏，再去目标页。
@@ -1480,7 +1446,8 @@ async function pushNotification(title, body) {
 
 // ── 认证之前就要能取到的资源 ──────────────────────────────────────────────────
 const PWA_ROUTES = {
-  '/dot-guide': { file: 'dot-guide.html', type: 'text/html; charset=utf-8', noCache: true },
+  '/pocket-bridge.svg': { file: 'pocket-bridge.svg', type: 'image/svg+xml' },
+  '/icon-maskable.png': { file: 'icon-maskable.png', type: 'image/png' },
   '/manifest.webmanifest': { file: 'manifest.webmanifest', type: 'application/manifest+json', noCache: true },
   '/sw.js': { file: 'sw.js', type: 'application/javascript; charset=utf-8', noCache: true, swAllowed: true },
   '/polyfill.js': { file: 'polyfill.js', type: 'application/javascript; charset=utf-8', noCache: true },
@@ -2032,7 +1999,7 @@ function mintTicket(authority, deviceId, target, ttlMs) {
     s: deviceId || null,
     // 把「在哪个应用里」也带过去。切换路径会换 authority，cookie 不跟着走，
     // 不带的话使用者切一次网络就被重新问一遍「你要用哪个」—— 很烦，而且没必要。
-    t: target === 'codex' ? 'codex' : (target === 'dsh' ? 'dsh' : null)
+    t: target === 'dsh' ? 'dsh' : null
   };
   const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const sig = crypto.createHmac('sha256', ticketSecret()).update(body).digest('base64url');
@@ -2335,8 +2302,6 @@ async function refreshDshRuntimeState(force = false) {
     UPSTREAM_COOKIE = null;
     return { ready: false, runtime: null };
   }
-  if (runtime.running && (runtime.profile === 'remote-mux' || runtime.profile === 'legacy-events'))
-    DSH_LAST_CONFIRMED_PROFILE = runtime.profile;
   if (!EXPLICIT_TARGET_PORT && runtime.port && runtime.port !== TARGET_PORT) {
     log(`DSH 端口变化: ${TARGET_PORT} -> ${runtime.port} (${runtime.kind}, ${runtime.version || 'unknown'})`);
     TARGET_PORT = runtime.port;
@@ -2372,49 +2337,7 @@ function startDshWatchdog() {
   if (timer.unref) timer.unref();
 }
 
-/**
- * Codex 看门狗：它中途挂了就自动拉回来。
- *
- * 跟 DSH 那个的区别（故意的）：
- *   - **不主动启动**。DSH 是主体，随时该在；Codex 只有当手机在用的时候才需要，
- *     没人用时占着一个常驻进程是浪费。
- *   - **只在「本来在跑、后来死了」时才重启**。这样：
- *       · 从没用过 Codex → 什么都不做
- *       · 正在用着它挂了 → 几秒内自动回来，使用者的重连就能接上
- *
- * 光靠「WS 连不上时再启动」是不够的：那条路径要等使用者下一次操作，
- * 中间那段时间手机上看到的是「连不上」。
- */
-function startCodexWatchdog() {
-  let wasUp = false;
 
-  const timer = setInterval(async () => {
-    let t;
-    try { t = require('./targets.js'); } catch (err) { return; }
-    if (!t || !t.codex) return;
-
-    const port = t.codex.port();
-    const up = await portAlive(port, 800);
-
-    if (up) { wasUp = true; return; }
-
-    // 之前没起来过 —— 那是「还没用」，不是「挂了」，别擅自启动
-    if (!wasUp) return;
-
-    // 之前是好的，现在没了 = 挂了
-    log(`看门狗: Codex 服务不在了（端口 ${port}），正在重新拉起…`);
-    wasUp = false;
-    try {
-      const r = await t.codex.start();
-      log(`看门狗: ${r.message}`);
-      if (r.ok) wasUp = true;
-    } catch (err) {
-      log(`看门狗: 重新拉起 Codex 失败 ${err.message}`);
-    }
-  }, 5000);
-
-  if (timer.unref) timer.unref();
-}
 
 /**
  * 确保 DSH 正在运行。返回 true 表示已就绪。
@@ -2810,7 +2733,7 @@ const BOOTSTRAP_PATHS = new Set([
   // ★ 这一份必须能在**证明之前**取到：它就是用来证明的（漏了 = codex/go 两页永远 403）。
   '/prove.js',
   '/custom.js', '/custom.css', '/sw.js',
-  '/manifest.json', '/manifest.webmanifest',
+  '/manifest.json', '/manifest.webmanifest', '/pocket-bridge.svg', '/icon-maskable.png',
   // ★ 配对页 / 恢复票据 / 选择页。挑战应答开成真拦之后（2026-09-27）这三条必须放行 ——
   //   它们的使用者**正是还没有钥匙的那台设备**：让他证明「我知道 # 里那串」，
   //   等于要求他用他还没有的东西进门。放行的代价很小：配对页要配对码、
@@ -2819,7 +2742,6 @@ const BOOTSTRAP_PATHS = new Set([
   // ★ codex 是我们的**应用页**（它自己带 /prove.js，加载时会证明）。不放行的话，
   //   没证明过的设备连这一页都打不开 —— 只会看到「正在验证」页，而使用者会理解成
   //   「要我重新配对」。它和 `/` 是同一类东西：这台设备自己的程序。
-  '/codex', '/codex/', '/dot', '/dot/',
   '/__auth/challenge', '/__auth/verify',
   '/__health', '/__probe',
   // 「你是不是缺密钥」——**故意不加密**，因为它要回答的正是"没有密钥怎么办"。
@@ -2922,49 +2844,7 @@ function serveBalance(req, res) {
     .catch((err) => send({ ok: false, error: err.message }));
 }
 
-/**
- * 查 Codex 的额度并回给前端。
- *
- * **这里没有「余额」** —— Codex 走 ChatGPT 订阅，没有金额概念，
- * 能拿到的是「本周期额度用了几成 + 什么时候重置 + 今天用了多少 token」。
- * 所以字段叫 quota，界面上也说「额度」。拿一个不相干的数字冒充余额，
- * 比什么都显示不出来更糟。
- *
- * 和其它几个「拿不准」的接口一样永远返回 200：连不上 app-server 是常态
- * （用户没启动 Codex 时它本来就不在跑），那是业务结果，不是 HTTP 错误。
- * 前端据此说「Codex 没在跑」，而不是去猜状态码。
- */
-function serveCodexQuota(req, res) {
-  let force = false;
-  try { force = new URL(req.url, 'http://x').searchParams.get('force') === '1'; }
-  catch (err) { /* URL 解析不了就按不强制 */ }
 
-  const send = (obj) => {
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify(obj));
-  };
-
-  Promise.resolve()
-    .then(() => require('./codex-usage.js').read(require('./targets.js').codex.port(), force))
-    .then((v) => {
-      const u = require('./codex-usage.js');
-      send({
-        ok: true,
-        account: v.account || null,
-        quota: v.quota || null,
-        // 文案口径只写一份，前端不自己算。
-        // 语言在**响应时**才决定 —— read() 缓存的是原始数据，
-        // 所以换语言不会拿到上一个语言的缓存。
-        desc: u.describe(v.quota || null, pickLang(req)),
-        usage: v.usage || null,
-        today: v.today || null,
-        // 错误也是服务端拼的，而且 read() 那边是带缓存的 ——
-        // 所以它存的是 key，这里按请求的语言拼成人话。
-        errors: u.localizeErrors(v.errors || [], pickLang(req))
-      });
-    })
-    .catch((err) => send({ ok: false, error: err.message }));
-}
 
 /**
  * 换地址这类操作**不可撤销**，加一道冷却。
@@ -3010,8 +2890,7 @@ function rotateCoolingDown() {
  * @returns {boolean} Whether controlled restart was accepted/scheduled. This
  * does not claim that drain, helper startup, or restart has completed.
  */
-const desktopLifecycle = require('./desktop-ui-action.js').createDesktopLifecycle({
-  scheduler: require('./desktop-ui-action.js'), dotRuntime: dotDesktopRuntime, codexRelay: codexDesktopRelay,
+const desktopLifecycle = require('./gateway-lifecycle.js').createGatewayLifecycle({
   async spawnRestart(detail) {
     const args = [path.join(BASE, 'scripts', 'restart-gateway.js')];
   // 把自己**实际在用的端口**告诉助手。
@@ -3238,7 +3117,6 @@ async function buildConsoleStatus(lang) {
     // Codex 桌面版登不上时最常见的原因：Rust 程序不读系统代理，而用户环境里
     // 没有代理变量 —— 于是登录时的「令牌交换」直连被墙，报 token_exchange_failed。
     // 这里把状态给控制台，控制台据此显示警告 + 一键修好的按钮。
-    codexProxy: codexProxyInfo(),
     recentLog: [
       '# 中间层',
       tailFile(LOG_FILE, 12),
@@ -3310,10 +3188,7 @@ function handleConsole(req, res, u) {
   }
 
   // Codex 的额度，同一个道理：控制台要用，而控制台是回环页面。
-  if (u.pathname === '/__codex/quota' && isLoopback(req)) {
-    serveCodexQuota(req, res);
-    return true;
-  }
+
 
   if (u.pathname === '/__console/status') {
     if (!isLoopback(req)) {
@@ -3368,6 +3243,9 @@ function handleConsole(req, res, u) {
         return;
       }
       if (!body || typeof body !== 'object' || Array.isArray(body)) body = {};
+      if (body.action === 'fix-codex-proxy' || /^(?:codex|dot)(?:-|$)/i.test(String(body.action || ''))) {
+        retiredTargets.replyHttp(req, res); return;
+      }
 
       let result = { ok: false, message: '未知操作' };
       if (body.action === 'export-diagnostic') {
@@ -3561,34 +3439,6 @@ function handleConsole(req, res, u) {
           };
         } catch (err) {
           result = { ok: false, message: `更改地址失败: ${err.message}` };
-        }
-      } else if (body.action === 'fix-codex-proxy') {
-        // 这是显式选择的用户级 Windows 设置，不是 Pocket Bridge 自己的进程设置。
-        // 会覆盖四个用户环境变量并影响其他新启动的程序；关闭系统代理也不会自动还原。
-        if (body.confirm !== true) {
-          result = { ok: false, message: '需要先确认：此操作会覆盖当前用户的代理环境变量，并影响其他新启动的程序。' };
-        } else {
-          try {
-            const proxyUrl = systemProxyUrl();
-            if (!proxyUrl) { result = { ok: false, message: '这台电脑现在没开系统代理，先开代理再点这里。' }; }
-            else {
-              const noProxy = 'localhost,127.0.0.1,::1,.trycloudflare.com,argotunnel.com,cloudflare.com,192.168.0.0/16,10.0.0.0/8';
-              // setx 修改用户级变量；它们不会随着系统代理关闭而自动恢复。
-              for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
-                require('child_process').execFileSync('setx', [name, proxyUrl], { timeout: 8000, windowsHide: true });
-              }
-              require('child_process').execFileSync('setx', ['NO_PROXY', noProxy], { timeout: 8000, windowsHide: true });
-              log(`使用者确认后把代理写进 Windows 用户环境变量（${proxyUrl}）；其他新启动的程序也会受影响`);
-              result = {
-                ok: true,
-                restartNeeded: 'codex',
-                message: `已更新 Windows 用户级代理变量（${proxyUrl}）。它会影响其他新启动的程序，` +
-                  '关闭系统代理后不会自动恢复。若要让 Codex 桌面版继承新值，请完整退出再打开；登录是否成功仍取决于网络与账号。'
-              };
-            }
-          } catch (err) {
-            result = { ok: false, message: `设置失败：${err.message}` };
-          }
         }
       } else if (body.action === 'rotate-pair-code') {
         // 手动换一张。**只影响「下一台还没登记的新设备」** —— 已经连上的手机
@@ -3915,6 +3765,9 @@ function proxyLazyDshModule(req, res, up, originalUrl) {
 }
 
 function proxyRequest(req, res, runtimeChecked = false) {
+  // Only requests proved to originate on this computer may use the raw
+  // upstream proxy. Phone/LAN/relay clients use the owned encrypted handlers.
+  if (!isLocalRequest(req)) return dshPhoneSurface.replyHttp(req, res);
   if (!EXPLICIT_TARGET_PORT && !runtimeChecked) {
     refreshDshRuntime().then(running => {
       if (res.writableEnded || res.destroyed) return;
@@ -4374,6 +4227,7 @@ const E2EE_CONTENT_PATHS = new Set([
   '/__dsh/lite-upload', // 轻量 DSH：绑定会话的附件字节与回执
   '/__dsh/lite-download', // 轻量 DSH：限定会话工作区内的文件下载
   '/__dsh/lite-files', // 轻量 DSH：限定会话工作区内的单层文件列表
+  '/__dsh/lite-attachment', // Verified session attachment IDs; encrypted image bytes, never raw paths
   '/__dsh/screen-shot', // 抓电脑屏幕给手机看 —— 画面本身就是敏感内容，必须加密
   '/__dsh/legacy-rpc', // 旧版 DSH：仅已验证的点号 RPC，密文包裹
   '/__dsh/legacy-interactions', // Official legacy pending requests, never raw SSE to the phone
@@ -4383,12 +4237,6 @@ const E2EE_CONTENT_PATHS = new Set([
   // 可能重新发明文；经中继时必须在网关拒绝这种回退。
   '/api/session/prompt',
   '/api/session/uploadFileBinary',
-  '/codex/file',      // 图片与附件字节（下载）
-  '/codex/upload',    // 上传的附件字节
-  '/codex/queue',     // 排队消息的正文
-  '/codex/desktop-relay', // Desktop relay text and delivery receipts.
-  '/dot/desktop', // Native Dot identity and currently loaded conversation text.
-  '/codex/threads',    // 会话列表 —— 标题本身就是内容
   // C17 地址面板。回的是**访问密钥所在的地址**，所以和上面那些一样必须加密：
   // 控制台能明文拿到它是因为它只认回环，手机这条走中继。
   '/__dsh/lite-addresses'
@@ -4570,73 +4418,10 @@ function handleMissingDsh(req, res) {
   return true;
 }
 
-function serveCodexPage(req, res, availabilityChecked = false) {
-  const codex = require('./targets.js').codex;
-  if (!availabilityChecked && !codex.detect().installed) {
-    // An independently started app-server remains usable even if its executable
-    // is outside the locations we search. Only a missing, stopped target is blocked.
-    codex.status(pickLang(req)).then((status) => {
-      if (status.running) serveCodexPage(req, res, true);
-      else serveLauncherPage(req, res, 503, 'codex');
-    }).catch(() => serveLauncherPage(req, res, 503, 'codex'));
-    return;
-  }
-  let html;
-  try {
-    const raw = trimHtmlToLanguage(req, res, path.join(PWA_DIR, 'codex.html'));
-    if (!raw) throw new Error('codex.html 读不到');   // 抛出去让下面的 catch 照旧回 500
-    html = Buffer.from(injectProofAssets(raw.toString('utf8')), 'utf8');
-  }
-  catch (err) {
-    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('codex.html 缺失');
-    return;
-  }
-  // ★ 这一页 **171,883 字节**，是手机端最重的一份（词典、样式、脚本全在里面），
-  //   而它原来既没压缩也没设 content-length —— 一行 res.end(html) 直接吐出去。
-  //   经隧道（实测延迟 3 秒）传 168KB，这就是「加载半天」最直观的那一块。
-  //   压缩后 45,219 字节（brotli）/ 56,559（gzip），省七成。
-  //   （走的是和 servePwa 一样的判断：客户端支持哪种就压哪种，太小就不压。）
-  const ae = String((req.headers && req.headers['accept-encoding']) || '');
-  let body = html, enc = null;
-  if (/\bbr\b/.test(ae)) enc = 'br';
-  else if (/\bgzip\b/.test(ae)) enc = 'gzip';
-  if (enc) {
-    try {
-      body = enc === 'br' ? zlib.brotliCompressSync(html) : zlib.gzipSync(html, { level: 6 });
-    } catch (err) { body = html; enc = null; }   // 压不了就原样发
-  }
-  const h = {
-    'content-type': 'text/html; charset=utf-8',
-    'cache-control': 'no-store',
-    'content-length': Buffer.byteLength(body)
-  };
-  if (enc) { h['content-encoding'] = enc; h['vary'] = 'Accept-Encoding'; }
-  res.writeHead(200, h);
-  res.end(body);
-  return;
-}
+
 
 // This page has no user content until an authenticated, encrypted Connect POST.
-function serveDotPage(req, res) {
-  let body;
-  try { body = Buffer.from(injectProofAssets(fs.readFileSync(path.join(PWA_DIR, 'dot.html'), 'utf8')), 'utf8'); }
-  catch (_) {
-    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-    res.end('The Dot phone page is unavailable.');
-    return;
-  }
-  const accepted = String(req.headers['accept-encoding'] || '');
-  let encoding = /\bbr\b/.test(accepted) ? 'br' : /\bgzip\b/.test(accepted) ? 'gzip' : null;
-  if (encoding) {
-    try { body = encoding === 'br' ? zlib.brotliCompressSync(body) : zlib.gzipSync(body, { level: 6 }); }
-    catch (_) { encoding = null; }
-  }
-  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length };
-  if (encoding) { headers['content-encoding'] = encoding; headers.vary = 'Accept-Encoding'; }
-  res.writeHead(200, headers);
-  res.end(req.method === 'HEAD' ? undefined : body);
-}
+
 
 /**
  * 每一次 HTTP 请求的入口。
@@ -4650,6 +4435,7 @@ function serveDotPage(req, res) {
  *   —— 设备已经登记过，再走一遍只是又确认一次；cookie 合并器也不怕重复安装。
  */
 function handleRequest(req, res) {
+  if (retiredTargets.isRetiredRequest(req.url)) return retiredTargets.replyHttp(req, res);
   return handleRequestInner(req, res, 0);
 }
 
@@ -4713,7 +4499,7 @@ function handleRequestInner(req, res, proofDeadline) {
   //
   // 放在这么靠前是有意的：这些端点分散在下面几百行里，挨个加判断迟早会漏一个，
   // 而漏掉的那条就是缺口。集中成一张表，加通道只改这张表。
-  if (E2EE_CONTENT_PATHS.has(u.pathname) && viaRelay(req)) {
+  if (E2EE_CONTENT_PATHS.has(u.pathname) && !isLocalRequest(req)) {
     req.__dshRequireE2ee = true;
     if (!e2eeSecretOrNull()) {
       refuseEncryptionUnavailable(res);
@@ -5036,9 +4822,7 @@ function handleRequestInner(req, res, proofDeadline) {
         : authCookies(ticketToken),
       'cache-control': 'no-store'
     });
-    res.end(r.target === 'codex'
-      ? enterPage(req, lang, 'codex')
-      : enterPage(req, lang));
+    res.end(enterPage(req, lang));
     return;
   }
 
@@ -5274,7 +5058,7 @@ function handleRequestInner(req, res, proofDeadline) {
     //   日志里 `403 未通过挑战应答: GET /codex（…不在开页面的窗口里，直接拒）`——
     //   使用者的 Codex 页整页打不开，还以为是「要我重新配对」）。
     if (u.pathname === '/' || u.pathname === '/index.html' || u.pathname === '/dsh-lite' ||
-      u.pathname === '/codex' || u.pathname === '/codex/' || u.pathname === '/dot' || u.pathname === '/dot/' ||
+
       u.pathname === '/go' || u.pathname === '/go/' ||
       req.__dshViaKeyPath) {
       const wasAway = !proofBootWindowOpen(dev.device.id);
@@ -5460,10 +5244,7 @@ function handleRequestInner(req, res, proofDeadline) {
   // 第二次访问管用，冷启动照样等满。
   //
   // 现在改成：网关在电脑上每隔一分钟自己去问一次，结果存住；手机直接拿缓存。
-  if (u.pathname === '/codex/threads') {
-    serveCodexThreadsE2ee(req, res);
-    return;
-  }
+
 
   // ── DeepSeek 余额（够不够钱、该不该充值）────────────────────────────────────
   // 回环请求在上面（认证门之前）已经处理掉了；走到这里的是远程设备，
@@ -5475,10 +5256,7 @@ function handleRequestInner(req, res, proofDeadline) {
 
   // Codex 额度：回环请求在上面（认证门之前）已经处理掉了；走到这里的是
   // 远程设备，已经过了两道门。两边共用 serveCodexQuota。
-  if (u.pathname === '/__codex/quota') {
-    serveCodexQuota(req, res);
-    return;
-  }
+
 
   // ── 看 Codex 产出的文件（图片 / pdf / 文本…）────────────────────────────────
   //
@@ -5492,22 +5270,7 @@ function handleRequestInner(req, res, proofDeadline) {
   // 越界的请求一律拒绝并记日志 —— 宁可少看一个文件，也不能让这条路径变成任意读。
   // 内容通道的闸门已经统一提到前面的 E2EE_CONTENT_PATHS 那张表里了
   // （这里原来是一条只认 /codex/file 的判断，现在不再单独立一份）。
-  if (u.pathname === '/codex/file') {
-    if (req.method === 'POST') serveCodexPrivateFileE2ee(req, res);
-    else if (req.method === 'GET' && viaRelay(req)) {
-      // Even an encrypted GET exposes ?path= to the TLS-terminating relay.
-      // Keep the old URL only for direct private-LAN clients; tunnel clients
-      // must update to the encrypted-body POST above.
-      res.writeHead(426, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-      res.end('Update Pocket Bridge on your phone to view files through this tunnel.');
-    }
-    else if (req.method === 'GET') serveCodexFile(req, res, u);
-    else {
-      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-      res.end('method not allowed');
-    }
-    return;
-  }
+
 
   // ── 目标管理（认证之后：列表里有本机路径这类信息）──────────────────────────
   if (u.pathname === '/__targets') {
@@ -5561,6 +5324,11 @@ function handleRequestInner(req, res, proofDeadline) {
     return;
   }
 
+  if (u.pathname === '/__dsh/lite-attachment') {
+    serveDshLiteAttachmentE2ee(req, res);
+    return;
+  }
+
   if (u.pathname === '/__dsh/legacy-rpc') {
     serveDshLiteLegacyRpcE2ee(req, res);
     return;
@@ -5582,6 +5350,11 @@ function handleRequestInner(req, res, proofDeadline) {
       let body = {};
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (err) { }
 
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ok: false, code: 'invalid-target-action' })); return;
+      }
+      if (retiredTargets.isRetiredTarget(body.target)) { retiredTargets.replyHttp(req, res); return; }
       const t = require('./targets.js').get(String(body.target || ''));
       if (!t) {
         res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
@@ -5593,9 +5366,9 @@ function handleRequestInner(req, res, proofDeadline) {
       try {
         // 语言要带下去：起停之后的提示语是服务端拼的
         const tLang = pickLang(req);
+
         if (body.action === 'start') result = await t.start(tLang);
         else if (body.action === 'stop') result = await t.stop(tLang);
-        else if (body.action === 'stop-desktop' && t.id === 'codex') result = await requestCodexDesktopTakeover(body, tLang);
         else result = { ok: false, message: `不认识的操作: ${body.action}` };
       } catch (err) {
         result = { ok: false, message: `操作出错: ${err.message}` };
@@ -5609,40 +5382,15 @@ function handleRequestInner(req, res, proofDeadline) {
   }
 
   // ── Codex 的界面（我们自己写的，所以路径完全可控，不需要改写任何资源引用）──
-  if (u.pathname === '/codex/upload') {
-    handleCodexUploadE2ee(req, res);
-    return;
-  }
-  if (u.pathname === '/codex/queue') {
-    codexQueueHandleE2ee(req, res);
-    return;
-  }
-  if (u.pathname === '/codex/desktop-relay') {
-    codexDesktopRelayHandleE2ee(req, res);
-    return;
-  }
-  if (u.pathname === '/dot/desktop') {
-    dotDesktopHandleE2ee(req, res);
-    return;
-  }
-  if (u.pathname === '/dot' || u.pathname === '/dot/') {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store' });
-      res.end();
-    } else serveDotPage(req, res);
-    return;
-  }
-  // 「释放电脑端的锁」。**故意不放进 E2EE_CONTENT_PATHS 那张闸门表**：
-  // 那张表管的是「携带使用者正文的通道」，而这条只带一个会话 id、回一句成败，
-  // 没有正文可泄。手机那边仍然会带 x-dsh-e2ee 发（响应加密），只是不强制。
-  if (u.pathname === '/codex/lock') {
-    codexLockHandleE2ee(req, res);
-    return;
-  }
-  if (u.pathname === '/codex' || u.pathname === '/codex/') {
-    serveCodexPage(req, res);
-    return;
-  }
+
+
+
+
+
+  // Legacy lock URLs always fail closed, including confirmed stale requests.
+  // The existing encrypted wrapper preserves the caller's response channel.
+
+
 
   if (u.pathname === '/dsh-lite') {
     servePwa(req, res, { file: 'dsh-lite.html', type: 'text/html; charset=utf-8', noCache: true });
@@ -5656,31 +5404,18 @@ function handleRequestInner(req, res, proofDeadline) {
   // 而 Codex 的界面是我们自己写的，路径怎么写都行 —— 于是两边都能待在舒服的位置上。
   if (u.pathname === '/' || u.pathname === '/index.html') {
     const want = u.searchParams.get('target');
-    if (want === 'dot') {
-      const previousCookies = res.getHeader('set-cookie');
-      res.setHeader('set-cookie', [].concat(previousCookies || [], [targetCookie('codex')]));
-      serveDotPage(req, res);
-      return;
-    }
-    const phoneAgent = /iPhone|iPad|iPod|Android|Mobile/i.test(String(req.headers['user-agent'] || ''));
-    // Both inspected HTTP profiles have small, encrypted phone adapters. The
-    // classic upstream UI can expose history through plain /api responses, so
-    // send relay phones to Lite for either verified profile by default.
-    const canUseSmallPhoneShell = viaRelay(req) && phoneAgent &&
-      (DSH_LAST_CONFIRMED_PROFILE === 'remote-mux' ||
-        DSH_LAST_CONFIRMED_PROFILE === 'legacy-events') &&
-      u.searchParams.get('view') !== 'classic';
-    if (want === 'lite') {
-      // A full /k/<key>?target=lite#k=<secret> link stays on this URL.
-      // Redirecting here would lose Safari's fragment and break E2EE.
+    // Serve the owned shell in place: redirects can lose Safari's # key. This
+    // policy does not depend on a user-agent, stale runtime profile or cookie.
+    if (!isLocalRequest(req)) {
+      if (u.searchParams.get('view') === 'classic') return dshPhoneSurface.replyHttp(req, res);
       const previousCookies = res.getHeader('set-cookie');
       res.setHeader('set-cookie', [].concat(previousCookies || [], [targetCookie('dsh')]));
       servePwa(req, res, { file: 'dsh-lite.html', type: 'text/html; charset=utf-8', noCache: true });
       return;
     }
-    if (want === 'dsh' && canUseSmallPhoneShell) {
-      // Both the canonical /k link and the launcher's normal ?target=dsh
-      // selection must avoid sending official HTML/plugin preloads first.
+    if (want === 'lite') {
+      // A full /k/<key>?target=lite#k=<secret> link stays on this URL.
+      // Redirecting here would lose Safari's fragment and break E2EE.
       const previousCookies = res.getHeader('set-cookie');
       res.setHeader('set-cookie', [].concat(previousCookies || [], [targetCookie('dsh')]));
       servePwa(req, res, { file: 'dsh-lite.html', type: 'text/html; charset=utf-8', noCache: true });
@@ -5700,7 +5435,7 @@ function handleRequestInner(req, res, proofDeadline) {
       return;
     }
 
-    if (want === 'dsh' || want === 'codex') {
+    if (want === 'dsh') {
       // ★ 从 /k/<密钥> 进来的「打开 DSH」**必须就地服务，不能跳**。
       //
       //   原来这里一律 302 → '/'。两个后果，第二个是使用者反复反映的那个：
@@ -5729,7 +5464,7 @@ function handleRequestInner(req, res, proofDeadline) {
         // **不 return** —— 继续往下走：认证门已经过了，接着反代给 DSH。
       } else {
         res.writeHead(302, {
-          location: want === 'codex' ? '/codex' : '/',
+          location: '/',
           'set-cookie': targetCookie(want)
         });
         res.end();
@@ -5748,18 +5483,7 @@ function handleRequestInner(req, res, proofDeadline) {
       res.end(injectProofAssets(launcherPage(req, lang)));
       return;
     }
-    if (!servedInPlace && readTargetCookie(req) === 'dsh' && canUseSmallPhoneShell) {
-      // A bookmarked root URL may already have the DSH target cookie. It
-      // should use the same small shell as the canonical /k entry.
-      servePwa(req, res, { file: 'dsh-lite.html', type: 'text/html; charset=utf-8', noCache: true });
-      return;
-    }
-    if (!servedInPlace && readTargetCookie(req) === 'codex') {
-      // 以前选过 Codex 的老书签，照旧送它去 /codex
-      res.writeHead(302, { location: '/codex' });
-      res.end();
-      return;
-    }
+
   }
 
   // ── Web Push 订阅端点（放在认证之后：只有已经进到 DSH 的浏览器才需要订阅）──
@@ -5813,6 +5537,7 @@ function handleRequestInner(req, res, proofDeadline) {
 // ── WebSocket 升级转发 ────────────────────────────────────────────────────────
 function handleUpgrade(req, socket, head, runtimeChecked = false) {
   if (socket.destroyed) return;                 // 等证明的时候对端可能已经走了
+  if (retiredTargets.isRetiredRequest(req.url)) return retiredTargets.replyUpgrade(socket);
   const url = String(req.url || '');
   // 等证明会重入这个函数 —— 日志只在第一遍记，否则刷屏
   if (!req.__dshProofStart) log(`WS 升级请求: ${url.slice(0, 120)}`);
@@ -5908,7 +5633,8 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
   // Remote upgrades require a usable key and e2ee=1. Missing key material
   // returns 503; a plaintext request with an available key returns 403.
   const wsGateSecret = e2eeSecretOrNull();
-  if (viaRelay(req)) {
+  const remotePhone = !isLocalRequest(req);
+  if (remotePhone) {
     if (!wsGateSecret) {
       refuseEncryptionUnavailableUpgrade(socket);
       return;
@@ -5917,7 +5643,7 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
     // A later unreadable key file must not change the connection to plaintext.
     req.__dshWsE2eeSecret = wsGateSecret;
   }
-  if (wsGateSecret && viaRelay(req) && !e2eeBridge.wanted(req.url, wsGateSecret)) {
+  if (wsGateSecret && remotePhone && !e2eeBridge.wanted(req.url, wsGateSecret)) {
     log('WS 被拒：经中继但没要求加密（拒绝明文，不降级）');
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n' +
       'Content-Type: text/plain; charset=utf-8\r\n\r\n' +
@@ -5927,12 +5653,9 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
     return;
   }
 
-  // Codex 走的是另一条上游，协议也不同（它是标准 JSON-RPC，没有 DSH 那套流式信封）
-  if (url === '/codex/ws' || url.startsWith('/codex/ws?')) {
-    proxyCodexWs(req, socket, head);
-    return;
-  }
-
+  // Old phone clients and unknown plugin/event paths must not bypass Lite's
+  // encrypted transport by opening an arbitrary upstream WebSocket.
+  if (remotePhone && !dshPhoneSurface.isRemoteMux(req.url)) return dshPhoneSurface.replyUpgrade(socket);
   if (!EXPLICIT_TARGET_PORT && !runtimeChecked) {
     refreshDshRuntime().then(running => {
       if (socket.destroyed) return;
@@ -5963,11 +5686,37 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
     // mandatory gate above; retain its checked key during upstream setup.
     const secret = req.__dshWsE2eeSecret || e2eeBridge.readSecret();
     const useE2ee = e2eeBridge.wanted(req.url, secret);
-    const bridge = useE2ee ? e2eeBridge.attach(secret) : null;
+    let bridge = null;
+    let encryptedStreamClosed = false;
+    const refuseEncryptedStream = () => {
+      if (encryptedStreamClosed) return;
+      encryptedStreamClosed = true;
+      // Neither raw upstream bytes nor an exception's possibly sensitive
+      // message may become a response or a diagnostic fallback.
+      log('WS encrypted channel refused an invalid stream; owned sockets closed');
+      try { if (bridge && typeof bridge.close === 'function') bridge.close(); } catch (_) { }
+      upstream.destroy();
+      socket.destroy();
+    };
+    const transform = (chunk, direction) => {
+      if (encryptedStreamClosed) return null;
+      try {
+        const output = bridge ? bridge[direction](chunk) : chunk;
+        if (!Buffer.isBuffer(output)) throw new Error('invalid-encrypted-transform');
+        return output;
+      } catch (_) { refuseEncryptedStream(); return null; }
+    };
+    try { if (useE2ee) bridge = e2eeBridge.attach(secret); }
+    catch (_) { refuseEncryptedStream(); return; }
+    upstream.once('close', () => {
+      try { if (bridge && typeof bridge.close === 'function') bridge.close(); } catch (_) { }
+    });
     if (useE2ee) log('WS 通道已启用端到端加密（隧道只能看到密文）');
 
     if (head && head.length) {
-      upstream.write(bridge ? bridge.fromClient(head) : head);
+      const output = transform(head, 'fromClient');
+      if (output === null) return;
+      upstream.write(output);
     }
 
     // 双向逐帧记录。
@@ -6006,7 +5755,8 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
       // 这个日志的用途是「手机连不上时，看看隧道那头到底收到了什么」——
       // 那当然要记**线路上的字节**。上行那边本来就是这么做的（记的是手机发来的
       // 原始密文），只有下行记反了，于是两边看起来不对称，更容易误导。
-      const wire = bridge ? bridge.fromUpstream(chunk) : chunk;
+      const wire = transform(chunk, 'fromUpstream');
+      if (wire === null) return;
       if (frames < MAX_FRAMES) {
         log(`WS DSH→手机  ${describe(wire)}`);
         frames++;
@@ -6026,7 +5776,8 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
       // 只把文本帧算作活动 —— DSH 每 2 秒一个 ping，那不能算「在干活」。
       // 注意要看**解密之后**的内容：加密过的上行是 binary 帧，
       // 直接看原始字节的话这里永远是 false，活动检测就废了。
-      const out = bridge ? bridge.fromClient(chunk) : chunk;
+      const out = transform(chunk, 'fromClient');
+      if (out === null) return;
       if (out.length && (out[0] & 0x0f) === 0x1) markActivity();
       upstream.write(out);
     });
@@ -6064,278 +5815,9 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
   });
 }
 
-/**
- * 把手机的 WebSocket 接到 Codex 的 app-server 上。
- *
- * 和 DSH 那条不一样的地方：Codex 的 app-server 是个标准的 JSON-RPC 服务，
- * 握手就是普通的 WebSocket 升级，没有鉴权头、没有自定义子协议。
- * 所以这里只做一件事：把升级请求原样转过去，然后双向对接。
- *
- * 路径要改写成 '/'：app-server 只在根路径上接受连接（试过直接带 /codex/ws 过去，
- * 它不认）。改写在这里是安全的 —— 上游是我们自己进程里算出来的地址，
- * 不是从请求里读来的，没有被利用的余地。
- */
 
-// ── 手机断开后**自动把 Codex 交还**给电脑 ────────────────────────────────────
-//
-// 手机打开一条会话时 `thread/resume` 会占住写锁；页面关闭后，app-server
-// 仍可能保留已加载会话，阻止其他客户端取得写权限。
-//
-// 所有手机 Codex 长连接断开 60 秒后，如仍无人连回，就取消订阅托管
-// app-server 中已加载的会话。服务本身保持运行，方便手机下次快速接回；
-// 独立的桌面版进程不会被关闭。
-//
-// 这只是释放手机端占用，不停止尚在运行的服务或声称中断任务。
-let codexPhoneClients = 0;
-let codexReleaseTimer = null;
-let codexPhoneGeneration = 0;
-let codexHandbackUnsubscribe = null;
-const CODEX_RELEASE_GRACE_MS = 60 * 1000;
-
-/** 有手机连上来 → 取消「交还」倒计时 */
-function codexPhoneAttached() {
-  codexPhoneClients += 1;
-  codexPhoneGeneration += 1;
-  if (codexReleaseTimer) {
-    clearTimeout(codexReleaseTimer);
-    codexReleaseTimer = null;
-    log('手机重新连上 Codex —— 取消自动交还');
-  }
-}
-
-/** Count the accepted phone immediately, but do not let it resume a thread
- * until an already-started unsubscribe has finished. */
-async function codexPhoneEntering(socket) {
-  if (socket.destroyed) return false;
-  codexPhoneAttached();
-  socket.once('close', codexPhoneDetached);
-  const pending = codexHandbackUnsubscribe;
-  if (pending) {
-    try { await pending; } catch (err) { /* The old cleanup may have failed. */ }
-  }
-  return !socket.destroyed;
-}
-
-/** 手机那条连接断了；**全**断了才开始倒计时 */
-function codexPhoneDetached() {
-  codexPhoneClients = Math.max(0, codexPhoneClients - 1);
-  if (codexPhoneClients > 0 || codexReleaseTimer) return;
-  const generation = codexPhoneGeneration;
-  codexReleaseTimer = setTimeout(async () => {
-    codexReleaseTimer = null;
-    if (codexPhoneClients > 0 || generation !== codexPhoneGeneration) return;
-    try {
-      const r = await codexLock.releasePhone(null, {
-        log,
-        shouldCancel: () => codexPhoneClients > 0 || generation !== codexPhoneGeneration,
-        onUnsubscribe: (operation) => {
-          codexHandbackUnsubscribe = operation;
-          const clear = () => { if (codexHandbackUnsubscribe === operation) codexHandbackUnsubscribe = null; };
-          operation.then(clear, clear);
-        }
-      });
-      if (r.cancelled) { log('手机已重新连上 Codex —— 取消旧的自动交还'); return; }
-      log(`手机已断开 ${Math.round(CODEX_RELEASE_GRACE_MS / 1000)} 秒，把 Codex 交还给电脑：` +
-        (r.serverNotRunning ? '托管服务本来就没在运行'
-          : r.released && r.released.length ? `已取消订阅 ${r.released.length} 条会话（服务保持运行）`
-            : r.ok ? '没有需要释放的已加载会话' : '未确认释放成功'));
-    } catch (err) {
-      log(`自动交还 Codex 失败：${err.message}`);
-    }
-  }, CODEX_RELEASE_GRACE_MS);
-  if (codexReleaseTimer.unref) codexReleaseTimer.unref();
-}
-
-// ── Codex 桌面版的代理体检 ───────────────────────────────────────────────────
-//
-// 使用者实际撞到的：桌面版报
-//   「令牌交换失败：发送 URL 请求错误（https://auth.openai.com/oauth/token）」
-// Pocket Bridge 自己启动的 app-server 在 targets.js 中拿进程级代理；独立启动的
-// Codex 桌面版不归本软件管理，不能为了它在网关启动时改写全局用户变量。
-//
-// 这里只读状态。用户主动确认后，才可选择修改用户级环境变量（见 __console/action）。
-function regQuery(key, name) {
-  try {
-    const out = require('child_process').execFileSync('reg', ['query', key, '/v', name],
-      { encoding: 'utf8', timeout: 5000, windowsHide: true });
-    const m = out.match(new RegExp(name + '\\s+REG_\\w+\\s+(.+)'));
-    return m ? m[1].trim() : null;
-  } catch (err) { return null; }
-}
-
-/** 系统代理（v2rayN 那种），形如 http://127.0.0.1:10808 */
-function systemProxyUrl() {
-  if (process.platform !== 'win32') return null;
-  const KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
-  if (regQuery(KEY, 'ProxyEnable') !== '0x1') return null;
-  const server = regQuery(KEY, 'ProxyServer');
-  if (!server) return null;
-  const https = /https=([^;]+)/i.exec(server);
-  const http = /http=([^;]+)/i.exec(server);
-  const one = server.includes('=') ? (https || http) : null;
-  const raw = (one ? one[1] : server).trim();
-  if (!raw) return null;
-  return /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
-}
-
-/**
- * 当前用户环境变量是否与系统代理一致？这不等于能证明已经运行的桌面版继承了它。
- */
-function codexProxyInfo() {
-  const system = systemProxyUrl();
-  const userEnv = process.platform === 'win32' ? regQuery('HKCU\\Environment', 'HTTPS_PROXY') : null;
-  const norm = (v) => String(v || '').replace(/\/+$/, '');
-  const same = !!(system && userEnv && norm(userEnv) === norm(system));
-  return {
-    system,
-    userEnv,
-    ok: system ? same : true,   // 没开系统代理时不判它有问题
-    fixable: !!system && !same,
-    staleUserProxy: !system && !!userEnv
-  };
-}
-
-/** Close only the two sockets belonging to this phone connection. A TCP close
- * need not emit end (for example during refresh or a handshake failure). */
-function wireCodexWsLifecycle(socket, upstream) {
-  socket.once('close', () => { if (!upstream.destroyed) upstream.destroy(); });
-  upstream.once('close', () => { if (!socket.destroyed) socket.destroy(); });
-}
-
-async function proxyCodexWs(req, socket, head) {
-  if (!await codexPhoneEntering(socket)) return;
-  const t = require('./targets.js');
-  const port = t.codex.port();
-
-  // 第一次从手机打开 Codex 时，app-server 可能尚未启动。以前要先让
-  // connect() 失败一次才启动它，导致这次 WebSocket 已经断了，用户只能
-  // 手动刷新才看得到任务。先确保它就绪，再建立这一条真正的连接。
-  if (!await portAlive(port, 800)) {
-    log('Codex 尚未运行，先启动后再接入手机连接…');
-    let started;
-    try { started = await t.codex.start(); } catch (err) { started = { ok: false, message: err.message }; }
-    if (!started || !started.ok || !await portAlive(port, 3000)) {
-      log(`Codex 启动后仍未就绪：${(started && started.message) || '原因不明'}`);
-      socket.destroy();
-      return;
-    }
-    log(`Codex 已就绪：${started.message || '本机服务已启动'}`);
-  }
-
-  if (socket.destroyed) return;
-  const upstream = net.connect(port, '127.0.0.1', () => {
-    if (socket.destroyed) { upstream.destroy(); return; }
-    const key = req.headers['sec-websocket-key'] || '';
-    const version = req.headers['sec-websocket-version'] || '13';
-    const proto = req.headers['sec-websocket-protocol'];
-
-    let raw = 'GET / HTTP/1.1\r\n' +
-      `Host: 127.0.0.1:${port}\r\n` +
-      'Upgrade: websocket\r\n' +
-      'Connection: Upgrade\r\n' +
-      `Sec-WebSocket-Key: ${key}\r\n` +
-      `Sec-WebSocket-Version: ${version}\r\n`;
-    if (proto) raw += `Sec-WebSocket-Protocol: ${proto}\r\n`;
-    raw += '\r\n';
-
-    upstream.write(raw);
-
-    // Keep the checked remote key; direct local clients retain optional encryption.
-    const cxSecret = req.__dshWsE2eeSecret || e2eeBridge.readSecret();
-    const cxUseE2ee = e2eeBridge.wanted(req.url, cxSecret);
-    const cxBridge = cxUseE2ee ? e2eeBridge.attach(cxSecret) : null;
-    // Only an authenticated encrypted phone connection can use the lossless
-    // history envelope. Other RPCs retain their exact frames and semantics.
-    const cxHistory = cxUseE2ee ? codexHistoryTransport.createTransport({
-      encrypted: true,
-      onClientOutput: (frame) => {
-        if (!socket.destroyed) socket.write(cxBridge.fromUpstream(frame));
-      },
-      onError: () => {
-        log('WS Codex history transport refused an invalid or over-limit stream');
-        socket.destroy(); upstream.destroy();
-      }
-    }) : null;
-    if (cxHistory) {
-      socket.once('close', () => cxHistory.close());
-      upstream.once('close', () => cxHistory.close());
-    }
-    if (cxUseE2ee) log('WS Codex 通道已启用端到端加密');
-
-    if (head && head.length) {
-      const out = cxHistory ? cxHistory.fromEncryptedClient(head, chunk => cxBridge.fromClient(chunk)) : head;
-      if (out.length) upstream.write(out);
-    }
-
-    // 手动转发，而不是 socket.pipe(upstream)。
-    //
-    // pipe 是裸管道，网关看不见里面在发生什么 —— 后果是
-    // **Codex 干完活不会发通知**：它压根不知道 Codex 在干活。
-    // DSH 那条路有逐帧检查，这条当初漏了，所以「任务完成通知」只对 DSH 有效。
-    let frames = 0;
-    const MAX_FRAMES = 20;
-    const isText = (c) => c.length && (c[0] & 0x0f) === 0x1;
-
-    upstream.on('data', (chunk) => {
-      // 这里拿到的是 app-server 发来的**明文**（加密只作用于发出去的那一份），
-      // 所以活动判定和 turn/completed 都还看得见。
-      if (isText(chunk)) {
-        markActivity();
-        // 单独认一下 turn/completed —— 那是明确的「这一轮干完了」，
-        // 比等空闲超时更准（长任务里输出不断，空闲判定要等它彻底停下来）
-        if (chunk.toString('utf8').indexOf('turn/completed') >= 0) markActivity();
-      }
-      if (frames < MAX_FRAMES) {
-        const op = chunk.length ? '0x' + (chunk[0] & 0x0f).toString(16) : '?';
-        log(`WS Codex→手机 ${chunk.length}B op=${op}`);
-        frames++;
-      }
-      const transformed = cxHistory ? cxHistory.fromUpstream(chunk) : chunk;
-      const out = cxBridge ? cxBridge.fromUpstream(transformed) : transformed;
-      if (out.length && !socket.destroyed) socket.write(out);
-    });
-
-    socket.on('data', (chunk) => {
-      // 活动判定要看**解密之后**的内容。
-      // 加密过的上行是 binary 帧，直接看原始字节的话 isText 永远是 false，
-      // 结果是「手机上发消息了，但网关认为没人在用」——
-      // 任务完成通知就不会发，而且完全看不出原因。
-      const out = cxHistory ? cxHistory.fromEncryptedClient(chunk, wire => cxBridge.fromClient(wire)) : chunk;
-      if (isText(out)) markActivity();
-      if (frames < MAX_FRAMES) {
-        const op = chunk.length ? '0x' + (chunk[0] & 0x0f).toString(16) : '?';
-        log(`WS 手机→Codex ${chunk.length}B op=${op}`);
-        frames++;
-      }
-      if (out.length && !upstream.destroyed) upstream.write(out);
-    });
-
-    // 同 DSH 那条：加密通道的丢帧必须留下痕迹，否则「连上了但没反应」
-    // 会完全查不出原因（Codex 这条尤其要紧，它承载审批）。
-    const logCxStats = (why) => {
-      if (!cxBridge || !cxBridge.stats) return;
-      const s = cxBridge.stats();
-      if (!s.replayed && !s.rejected && !s.undecryptable) return;
-      log(`WS Codex 加密通道体检（${why}）：拦下重放 ${s.replayed} 帧，拒收解不开的文本帧 ${s.rejected} 帧，` +
-        `放行解不开的二进制帧 ${s.undecryptable} 帧`);
-    };
-    upstream.on('end', () => { log('WS Codex 上游结束'); logCxStats('上游结束'); socket.end(); });
-    socket.on('end', () => { log('WS Codex 客户端结束'); upstream.end(); });
-    socket.on('close', () => { logCxStats('客户端关闭'); });
-
-    log('WS → Codex app-server 已接通');
-  });
-
-  wireCodexWsLifecycle(socket, upstream);
-
-  upstream.on('error', async (err) => {
-    log(`WS Codex 上游错误: ${err.message}`);
-    socket.destroy();
-  });
-
-  socket.on('error', () => upstream.destroy());
-}
-
+// A phone is a read connection. Closing or reconnecting it must never resume,
+// unsubscribe, hand back, interrupt, or stop a desktop-owned conversation.
 const server = http.createServer(handleRequest);
 server.on('upgrade', handleUpgrade);
 let gatewayListeners = null;
@@ -6434,451 +5916,6 @@ process.on('SIGINT', () => { desktopLifecycle.scheduleShutdown(); });
 process.on('SIGTERM', () => { desktopLifecycle.scheduleShutdown(); });
 
 /** 按扩展名给个 content-type。认不出来的当二进制流出去。 */
-const FILE_MIME = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-  // SVG is an active XML document when opened as a top-level blob. Keep it
-  // inert even after encryptedFetch rebuilds the browser response.
-  '.svg': 'text/plain; charset=utf-8', '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf',
-  '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
-  '.log': 'text/plain; charset=utf-8', '.csv': 'text/plain; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.yml': 'text/plain; charset=utf-8',
-  '.yaml': 'text/plain; charset=utf-8', '.xml': 'text/plain; charset=utf-8',
-  '.js': 'text/plain; charset=utf-8', '.ts': 'text/plain; charset=utf-8',
-  '.cs': 'text/plain; charset=utf-8', '.py': 'text/plain; charset=utf-8',
-  '.html': 'text/plain; charset=utf-8', '.css': 'text/plain; charset=utf-8'
-};
-
-/**
- * 这台机器上**已知的** Codex 会话工作目录。
- *
- * 为什么必须由服务端自己算：这个端点能读磁盘，而「能读哪些目录」原来是由
- * 请求里的 `?root=` 决定的 —— 也就是说**请求方说能读哪儿就能读哪儿**。
- * 实测（安全审计发现的，已复现）：带上 `?root=<logs 目录>` 就能读到
- * `access-key.txt`、`e2ee-secret.txt`；带上 `?root=C:\` 连 `C:\Windows\win.ini`
- * 都能读。任何过了两道门的设备等于拿到整块磁盘的读权限。
- *
- * 现在改成从**服务端自己的会话缓存**里取工作目录 —— 那些 cwd 是 Codex
- * 报给我们的，不是请求方编的。客户端只能传 path，说不了「允许读哪儿」。
- *
- * 缓存每分钟预热一次（见 codex-threads.js）。刚建的会话可能还没进缓存，
- * 代价是「这个文件暂时读不到」—— 那是安全的一侧，可以接受。
- */
-function sessionWorkDirs() {
-  const out = new Set();
-  try {
-    const cache = require('./codex-threads.js').get();
-    for (const t of (cache && cache.list) || []) {
-      if (t && typeof t.cwd === 'string' && path.isAbsolute(t.cwd)) out.add(t.cwd);
-    }
-  } catch (err) { /* 缓存没准备好就当没有 —— 宁可读不到，也不能放开 */ }
-  return Array.from(out);
-}
-
-/** File roots come from server-observed projects and explicit local configuration. */
-function codexFileAccessOptions() {
-  const homes = [process.env.CODEX_HOME, path.join(os.homedir(), '.codex')]
-    .filter(value => typeof value === 'string' && path.isAbsolute(value));
-  let extraRoots = [];
-  try {
-    const conf = cfg.loadConfig();
-    if (Array.isArray(conf.fileRoots)) extraRoots = conf.fileRoots;
-  } catch (_) { }
-  return {
-    projectRoots: sessionWorkDirs(), uploadRoot: path.join(BASE, 'uploads', 'codex'),
-    codexHomes: homes, extraRoots, forbiddenRoots: [LOG_DIR],
-    forbiddenFiles: [cfg.CONFIG_FILE || path.join(BASE, 'config.json')]
-  };
-}
-
-function allowedRoots() {
-  return codexFileAccess.allowedRoots(codexFileAccessOptions());
-}
-
-function resolveCodexFileAccess(abs) {
-  return codexFileAccess.checkPath(abs, codexFileAccessOptions());
-}
-
-function fileAllowed(abs) {
-  return !!resolveCodexFileAccess(abs);
-}
-
-/**
- * 把请求里的 `path` 解析成绝对路径。
- *
- * ★ 相对路径必须相对**会话自己的工作目录**解析，不能相对桥的 cwd。
- *
- *   2026-09-29 查实（使用者报「Codex 手机端无法查看图片」，截图上那条提示写的是
- *   `Reports/reality_overview_02.png` —— 一个**相对路径**）：
- *
- *   `path.resolve('Reports/reality_overview_02.png')` 是从**桥进程的 cwd**
- *   （D:\Pocket Bridge）起算的，算出来是 `D:\Pocket Bridge\Reports\…`
- *   —— 那个位置当然不在允许的根里，于是**稳定地 403**。
- *   手机上的表现就是「这张图没取回来」，而且每次都是同一张。
- *
- *   现在按"允许的根"逐个试（这些根是服务端从 Codex 会话里自己算出来的，
- *   仍然不是请求方说了算），第一个落在允许范围内的就用它。
- *   一个都对不上就退回原来的解析结果 —— 交给 fileAllowed 去拒绝，
- *   那条路上会记日志（只记扩展名，不记完整路径，见 serveCodexFile）。
- *
- * @param {string} raw 请求里给的 path（可能是绝对路径，也可能是相对的）
- * @returns {string} 绝对路径
- */
-/** 在给定的一组根下找一个"文件真实存在"的候选；找不到就返回第一个前缀合法的。 */
-function pickExisting(raw, roots) {
-  let fallback = null;
-  for (const root of roots) {
-    const candidate = path.resolve(root, raw);
-    // 只在前缀确实落在允许范围内时才考虑（`..` 逃逸会在这里被挡掉）
-    if (!fileAllowed(candidate)) continue;
-    if (fallback === null) fallback = candidate;
-    try { if (fs.statSync(candidate).isFile()) return candidate; } catch (err) { /* 这个根下没有 */ }
-  }
-  return fallback;
-}
-
-/** 允许的根下面的**直接子目录**（只探一层，且有上限）。 */
-function allowedSubdirectories(limit) {
-  const out = [];
-  for (const root of allowedRoots()) {
-    if (out.length >= limit) break;
-    let items = [];
-    try { items = fs.readdirSync(root, { withFileTypes: true }); } catch (err) { continue; }
-    for (const it of items) {
-      if (out.length >= limit) break;
-      if (!it.isDirectory()) continue;
-      const full = path.join(root, it.name);
-      if (fileAllowed(full)) out.push(full);
-    }
-  }
-  return out;
-}
-
-function resolveRequestedPath(raw) {
-  if (path.isAbsolute(raw)) return path.resolve(raw);
-
-  // ① 先在各允许的根下直接找 —— 这是最常见的情况。
-  const direct = pickExisting(raw, allowedRoots());
-  if (direct && fileExists(direct)) return direct;
-
-  // ② 再往**下探一层**。
-  //
-  //   为什么必须探：Codex 报回来的路径常常是**相对它自己那个项目目录**的
-  //   （实测：`Reports/reality_overview_02.png`），而那个项目目录本身
-  //   未必被登记成工作目录 —— 但它的**父目录**（开发根目录，例如 `D:\my_games`）
-  //   在允许范围内。只按根解析的话，`Reports/…` 会落到 `D:\my_games\Reports\…`，
-  //   那里当然没有这个文件 → 403 → 手机上永远是「这张图没取回来」。
-  //   探一层就能命中 `D:\my_games\AshenCovenant3D\Reports\…`。
-  //
-  //   边界：只在**允许的根的直接子目录**里找，而且仍然逐个过 fileAllowed；
-  //   上限 400 个目录，避免某个根下面文件特别多时拖慢一次读图请求。
-  const nested = pickExisting(raw, allowedSubdirectories(400));
-  if (nested && fileExists(nested)) return nested;
-
-  // ③ 都不存在：退回第一个"前缀允许"的候选，让调用方按 404 处理；
-  //    连一个候选都没有才退回原来的解析结果（那时 fileAllowed 会给 403 并记日志）。
-  return direct || nested || path.resolve(raw);
-}
-
-function fileExists(p) {
-  try { return fs.statSync(p).isFile(); } catch (err) { return false; }
-}
-
-/**
- * 生成缩略图。
- *
- * 为什么必须做：使用者手机上「太卡太慢」，量下来 DOM 只有 203 个节点、
- * 滚动 0.3ms —— 渲染根本不是瓶颈。真正的问题是**图片原图太大**：
- * 实测他的一张 FIG1.jpg 有 6.7MB，一条会话里 4 张，走隧道下几十兆。
- *
- * 这台机器不加依赖（项目一直这样），所以用 Windows 自带的 .NET 来缩。
- * 生成一次就缓存住，之后直接发缓存文件。
- *
- * @returns {Promise<string|null>} 缩略图路径；做不了就返回 null（调用方发原图）
- */
-const THUMB_DIR = path.join(BASE, 'logs', 'thumbs');
-
-function thumbPathFor(abs, width) {
-  const crypto = require('crypto');
-  let st;
-  try { st = fs.statSync(abs); } catch (err) { return null; }
-  // 路径 + 修改时间 + 宽度 一起做键：原图改了或换宽度都会重新生成
-  const h = crypto.createHash('sha1')
-    .update(`${abs}|${st.mtimeMs}|${width}`).digest('hex').slice(0, 20);
-  return path.join(THUMB_DIR, `${h}.jpg`);
-}
-
-function makeThumb(abs, width) {
-  return new Promise((resolve) => {
-    const out = thumbPathFor(abs, width);
-    if (!out) { resolve(null); return; }
-    if (fs.existsSync(out)) { resolve(out); return; }
-
-    try { fs.mkdirSync(THUMB_DIR, { recursive: true }); } catch (err) { }
-
-    if (process.platform !== 'win32') { resolve(null); return; }
-
-    // 交给 PowerShell 里的 System.Drawing。路径用单引号包住并转义单引号，
-    // 免得中文目录名或空格出问题（使用者的路径里两样都有）。
-    //
-    // 注意这里**一处双引号都不能用**：脚本是作为一个参数传过去的，
-    // 双引号会在传递过程中被吃掉，`-eq "image/jpeg"` 会变成
-    // `-eq image/jpeg` 然后报语法错。所以用 ImageFormat::Jpeg 这个重载，
-    // 连编码器查找都省了。
-    const q = (s) => "'" + String(s).replace(/'/g, "''") + "'";
-    const ps = [
-      'Add-Type -AssemblyName System.Drawing',
-      `$src=[System.Drawing.Image]::FromFile(${q(abs)})`,
-      `$w=${width}`,
-      'if($src.Width -le $w){$src.Dispose(); exit 3}',
-      '$h=[int]($src.Height * $w / $src.Width)',
-      '$bmp=New-Object System.Drawing.Bitmap $w,$h',
-      '$g=[System.Drawing.Graphics]::FromImage($bmp)',
-      '$g.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic',
-      '$g.DrawImage($src,0,0,$w,$h)',
-      `$bmp.Save(${q(out)},[System.Drawing.Imaging.ImageFormat]::Jpeg)`,
-      '$g.Dispose();$bmp.Dispose();$src.Dispose()'
-    ].join(';');
-
-    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
-      { timeout: 30000, windowsHide: true }, (err) => {
-        if (err || !fs.existsSync(out)) { resolve(null); return; }
-        resolve(out);
-      });
-  });
-}
-
-// File paths are request metadata too. In the legacy GET URL they are visible
-// to a TLS-terminating tunnel even when the file bytes are encrypted. The
-// current phone UI uses this encrypted-body POST instead. Only an in-process
-// request shim created after authenticated decryption can reach the file
-// reader; no client-supplied header alone is accepted.
-async function serveCodexPrivateFile(req, res) {
-  const reject = (status, message) => {
-    if (res.destroyed || res.writableEnded) return;
-    res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8',
-      'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
-    res.end(message);
-  };
-  if (req.method !== 'POST') return reject(405, 'method not allowed');
-  if (!req.__dshE2eeDecrypted || !req.headers || req.headers['x-dsh-e2ee'] !== '1')
-    return reject(403, 'encrypted request required');
-  if (!/^application\/json(?:\s*;|\s*$)/i.test(String(req.headers['content-type'] || '')))
-    return reject(415, 'JSON required');
-  let url;
-  try { url = new URL(req.url, 'http://localhost'); }
-  catch (_) { return reject(400, 'invalid file request'); }
-  if ([...url.searchParams.keys()].length) return reject(400, 'query parameters are not allowed');
-  let size = 0;
-  const chunks = [];
-  try {
-    for await (const chunk of req) {
-      size += chunk.length;
-      if (size > 8192) return reject(413, 'file request too large');
-      chunks.push(chunk);
-    }
-  } catch (_) { return reject(400, 'invalid file request'); }
-  let input;
-  try { input = JSON.parse(Buffer.concat(chunks, size).toString('utf8')); }
-  catch (_) { return reject(400, 'invalid file request'); }
-  if (!input || typeof input !== 'object' || Array.isArray(input) ||
-      typeof input.path !== 'string' || input.path.length < 1 || input.path.length > 4096 ||
-      /[\u0000-\u001f\u007f]/.test(input.path) ||
-      Object.keys(input).some(key => key !== 'path' && key !== 'w') ||
-      (Object.hasOwn(input, 'w') &&
-        (!Number.isSafeInteger(input.w) || input.w < 0 || input.w > 2000)))
-    return reject(400, 'invalid file request');
-  // This URL exists only inside the gateway. The browser and relay receive
-  // neither the path nor the width as URL/query metadata.
-  const local = new URL('http://localhost/codex/file');
-  local.searchParams.set('path', input.path);
-  if (input.w) local.searchParams.set('w', String(input.w));
-  serveCodexFile(req, res, local);
-}
-
-function serveCodexFile(req, res, u) {
-  const raw = u.searchParams.get('path') || '';
-
-  // `?root=` 仍然收下但**一律忽略**。
-  //
-  // 它原来是「允许读哪个目录」的依据 —— 等于让请求方自己定边界。
-  // 现在允许的目录全部由服务端算（见 fileAllowed / sessionWorkDirs）。
-  // 保留这个参数只是为了不让已经缓存了旧页面的手机报错；它不再有任何作用。
-  if (u.searchParams.get('root')) {
-    log('收到已废弃的 root 参数，按设计忽略（允许范围由服务端决定）');
-  }
-
-  if (!raw) {
-    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('缺少 path');
-    return;
-  }
-
-  let abs;
-  try { abs = resolveRequestedPath(raw); }
-  catch (err) {
-    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('路径不合法');
-    return;
-  }
-
-  const access = resolveCodexFileAccess(abs);
-  if (!access) {
-    // 日志里**不能写完整路径**。
-    //
-    // 原来这里写的是 `拒绝越界读文件: ${abs}` —— 而那个路径长这样：
-    //   C:\Users\<你的名字>\Documents\ChatGPT\<你正在做的项目>\…
-    // 也就是说：用户名、你在做什么、文件叫什么，全都落进了日志文件。
-    // 而日志是会被打包、被发出去看的东西（诊断包就取日志尾部）。
-    //
-    // 排查需要的只是「有请求越界了」＋「想读哪种文件」，这两样留下就够：
-    // 目录层级用 … 代替，只留扩展名。
-    const ext = (abs.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0];
-    log(`拒绝越界读文件（路径已隐去${ext ? '，类型 ' + ext : ''}）`);
-    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('这个路径不在允许范围内');
-    return;
-  }
-
-  // Serve the authorized canonical target, never follow the original junction.
-  abs = access.realPath;
-
-  fs.stat(abs, (err, st) => {
-    if (err || !st.isFile()) {
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('读不到这个文件');
-      return;
-    }
-
-    const ext = path.extname(abs).toLowerCase();
-    const isImg = /^\.(png|jpe?g|webp|gif|bmp)$/.test(ext);
-
-    // 这个请求要不要加密返回？客户端要求了、且电脑上有密钥。
-    //
-    // ★ 判据必须和**闸门共用同一个函数**（`clientWantsE2ee`）。
-    //
-    //   原来这里只认 URL 里的 `?e2ee=1`，而闸门（E2EE_CONTENT_PATHS 那张表）
-    //   认「`?e2ee=1` **或** 请求头 `x-dsh-e2ee: 1`」两种写法。
-    //   于是出现一条没人报错的缝：客户端只发请求头（`privateFetch` 正是这么做的）
-    //   → 过了闸门 → 但这里判 false → **图片以明文发回**。
-    //   也就是说：对话正文加密了，图却明晃晃地过隧道 —— 等于没做。
-    //
-    //   这和 e2eeWrap 那段注释里记的是**同一个坑**（"闸门认两种、这里只认一种"），
-    //   当时只修了 /codex/threads 那条，文件这条漏了。
-    // Keep the remote requirement even if the key disappeared during stat.
-    const wantE2ee = req.__dshRequireE2ee === true ||
-      (clientWantsE2ee(req, u) && !!e2eeBridge.readSecret());
-
-    const wantW = Number(u.searchParams.get('w') || 0);
-    if (isImg && wantW > 0 && wantW <= 2000) {
-      makeThumb(abs, wantW).then((thumb) => {
-        if (thumb) return sendFile(res, thumb, 'image/jpeg', wantE2ee);
-        sendFile(res, abs, FILE_MIME[ext] || 'application/octet-stream', wantE2ee);
-      }).catch(() => sendFile(res, abs, FILE_MIME[ext] || 'application/octet-stream', wantE2ee));
-      return;
-    }
-
-    sendFile(res, abs, FILE_MIME[ext] || 'application/octet-stream', wantE2ee);
-  });
-}
-
-/** 把一个文件发出去（内联显示，别触发下载） */
-/**
- * 把一个文件发出去（内联显示，别触发下载）。
- *
- * @param {boolean} encrypt 要不要加密。图片和文件走隧道时同样是明文，
- *        云flare 一样看得到 —— 对话内容加密了、图还是明晃晃地过去，
- *        那等于没做。所以这里也要加。
- */
-function sendFile(res, file, type, encrypt) {
-  let st;
-  try { st = fs.statSync(file); } catch (err) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('读不到这个文件');
-    return;
-  }
-
-  // A downloaded workspace document is untrusted content, even when Codex
-  // created it. noopener does not prevent an active blob document from using
-  // its creator's origin. The MIME retained after decryption must be inert:
-  // Content-Disposition/CSP alone are not inherited by a newly created blob.
-  const activeDocument = /\.(?:svgz?|html?|xhtml|xht|xml|xsl|xslt|mhtml|mht|[cm]?js|jsx|tsx?)$/i.test(file) ||
-    /^(?:image\/svg\+xml|text\/html|application\/xhtml\+xml|(?:application|text)\/(?:xml|javascript|ecmascript))(?:\s*;|\s*$)/i.test(type);
-  if (activeDocument) type = 'text/plain; charset=utf-8';
-  const disposition = activeDocument ? 'attachment' :
-    /^(image\/|application\/pdf|text\/)/.test(type) ? 'inline' : 'attachment';
-  const contentSafetyHeaders = { 'x-content-type-options': 'nosniff' };
-  if (activeDocument) contentSafetyHeaders['content-security-policy'] = "default-src 'none'; sandbox";
-
-  // 加密时整个文件要读进内存再加密（AES-GCM 需要一次性拿到全部明文）。
-  // 所以设个上限。**超上限不发明文** —— 计划 D 要求「大文件明确拒绝或分块加密」，
-  // 原来说的是「超过就直接明文发」，那等于绕开闸门：只要你发个大文件，
-  // 隧道照样能拿到内容。现在改成明确拒绝，并说清怎么办。
-  if (encrypt && st.size > 40 * 1024 * 1024) {
-    log(`拒绝：文件 ${Math.round(st.size / 1048576)}MB 超过可加密上限，不发明文`);
-    res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-    res.end('这个文件太大（' + Math.round(st.size / 1048576) + 'MB），超过了可加密传输的上限，' +
-      '所以没有发送 —— 明文不会走中继。请在电脑上直接打开，或把文件切小一点再传。');
-    return;
-  }
-
-  if (encrypt) {
-    fs.readFile(file, (err, data) => {
-      if (err) {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-        res.end('读不到这个文件');
-        return;
-      }
-      let ct = null;
-      try {
-        const secret = e2eeSecretOrNull();
-        if (!secret) return refuseEncryptionUnavailable(res);
-        const keys = e2ee.deriveKeys(secret, e2ee.slotAt());
-        ct = e2ee.encrypt(keys.b, data);
-      } catch (err) {
-        // 加密出错**绝不能把网关带走**：这是文件下载路径上的回调，
-        // 抛出去就是 FATAL（上一版就是这么崩的）。但也**绝不退回明文** ——
-        // 客户端要的是密文，给不了就明确报错，让他知道这次没拿到东西。
-        log(`文件加密失败，已拒绝（不降级明文）: ${err.message}`);
-        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-        res.end('这次没能加密这个文件，所以没有发送（明文不会走中继）。请稍后重试。');
-        return;
-      }
-      res.writeHead(200, {
-        ...contentSafetyHeaders,
-        'content-type': 'application/octet-stream',
-        'content-length': ct.length,
-        // 浏览器要靠这个头知道「这段是密文，得解开才能用」
-        'x-dsh-e2ee': '1',
-        // 原来的类型也带上 —— 解开之后浏览器才知道该怎么显示
-        'x-dsh-e2ee-type': type,
-        // No filename in encrypted headers: names stay inside the protected
-        // request, rather than becoming visible to a TLS-terminating relay.
-        'content-disposition': disposition,
-        'cache-control': 'private, no-store'
-      });
-      res.end(ct);
-    });
-    return;
-  }
-
-  // 走到这里的只有「客户端没要求加密」这一种情况 —— 要求了加密的话
-  // 上面那个分支一定会 return（成功发密文 / 太大拒绝 / 加密失败拒绝），
-  // 不会掉下来发明文。
-  res.writeHead(200, {
-    ...contentSafetyHeaders,
-    'content-type': type,
-    'content-length': st.size,
-    'content-disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`,
-    // 缩略图按内容寻址，可以放心长缓存 —— 这样翻回去看同一张图不再重复下载
-    'cache-control': 'private, max-age=86400'
-  });
-  const stream = fs.createReadStream(file);
-  stream.on('error', () => { try { res.destroy(); } catch (e) { } });
-  stream.pipe(res);
-}
-
 // ── 目标选择 ──────────────────────────────────────────────────────────────────
 //
 // 「这台电脑上有几个能用？要不要问使用者用哪个？」这件事每 10 秒算一次，
@@ -6921,21 +5958,21 @@ function readTargetCookie(req) {
     const s = seg.trim();
     if (s.startsWith(`${TARGET_COOKIE}=`)) {
       const v = s.slice(TARGET_COOKIE.length + 1);
-      return v === 'dsh' || v === 'codex' ? v : null;
+      return v === 'dsh' ? v : null;
     }
   }
   return null;
 }
 
 function targetCookie(id) {
-  return `${TARGET_COOKIE}=${id}; Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`;
+  return `${TARGET_COOKIE}=dsh; Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`;
 }
 
 /** Keep normal DSH entry direct; missing targets and Codex-only PCs use the selector. */
 function shouldShowLauncher(req) {
   if (isSelfCheck(req)) return false;
   if (Date.now() - targetCache.at > 30000) refreshTargets();
-  const available = targetCache.list.filter((t) => t.installed || t.running);
+  const available = targetCache.list.filter((t) => t.id === 'dsh' && (t.installed || t.running));
   const chosen = readTargetCookie(req);
   if (chosen) {
     if (chosen === 'dsh' && EXPLICIT_TARGET_PORT) return false;
@@ -6959,7 +5996,7 @@ function shouldShowLauncher(req) {
 function launcherPage(req, lang, missingTarget = null) {
   const code = normLang(lang);
   const T = PAGE_TEXT[code].launcher;
-  const sub = missingTarget ? T.missing.replace('{name}', missingTarget === 'dsh' ? 'DSH' : 'Codex') : T.sub;
+  const sub = missingTarget ? T.missing.replace('{name}', 'DSH') : T.sub;
   return `<!doctype html>
 <html lang="${code}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -7025,7 +6062,7 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function render(d){
   var box=document.getElementById('list');
   box.innerHTML='';
-  var shown=(d.targets||[]).filter(function(t){return t.installed||t.running});
+  var shown=(d.targets||[]).filter(function(t){return t.id==='dsh'&&(t.installed||t.running)});
   if(!shown.length){
     box.innerHTML='<div class="card"><div class="name">'+L.none+'</div>'+
       '<div class="blurb">'+L.noneHint+'</div></div>';
@@ -7189,7 +6226,7 @@ refresh();
     // DSH 重启会换端口，看门狗负责悄悄跟上，使用者不该感觉到
     startDshWatchdog();
     // Codex 挂了自动拉回来（但不主动启动没在用的它）
-    startCodexWatchdog();
+
 
     // 把历史遗留的「同一台设备多条记录」并掉。
     // 同一设备经不同网址访问时应合并记录——
@@ -7199,13 +6236,6 @@ refresh();
       if (r.merged) log(`设备表去重：并掉 ${r.merged} 条重复记录（同一台设备只留一条）`);
     } catch (err) { log(`设备表去重失败: ${err.message}`); }
 
-    // 后台预热 Codex 会话列表 —— 手机上打开界面不用再等 10 秒。
-    // 延后 8 秒再开始：给它一点时间自己起来，不然第一轮必然扑空。
-    setTimeout(() => {
-      try {
-        const t = require('./targets.js');
-        require('./codex-threads.js').start(t.codex.port(), log);
-      } catch (err) { log(`会话列表预热未能启动: ${err.message}`); }
-    }, 8000);
+
   }
 })();

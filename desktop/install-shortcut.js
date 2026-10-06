@@ -64,7 +64,7 @@ function createShortcut(dir) {
   try {
     const out = createWindowsShortcut({ file: lnk, target, arguments: args, workingDirectory: DESKTOP_DIR,
       icon: fs.existsSync(ICON) ? ICON : '', showCommand: 7,
-      description: 'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex' }).trim();
+      description: 'Pocket Bridge — Use DeepSeek Harness on your Windows PC from a phone browser' }).trim();
     if (!out.includes('SAVED') || !fs.existsSync(lnk)) return { dir, ok: false, reason: `保存后文件不存在（输出: ${out}）` };
     const size = fs.statSync(lnk).size;
     return { dir, ok: true, lnk, size };

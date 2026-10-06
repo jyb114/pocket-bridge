@@ -21,7 +21,7 @@ const path = require('path');
 const vm = require('vm');
 
 const BASE = path.resolve(__dirname, '..');
-const PAGES = ['console.html', 'codex.html', 'go.html'];
+const PAGES = ['console.html', 'go.html'];
 const LANGS = ['en', 'es'];
 
 let bad = 0;

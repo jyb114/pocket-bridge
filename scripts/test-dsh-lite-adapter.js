@@ -13,6 +13,10 @@ let instance;
 const instances = [];
 let failPromptOnce = false;
 let delayCloseOnce = false;
+let permissionProjection = { asOfSeq: 15, values: { permissions: { currentValue: 'workspace-write' } } };
+let attachmentMode = 'ok';
+const attachmentReads = [];
+const rasterBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0WQAAAAASUVORK5CYII=', 'base64');
 class FakeSocket {
   constructor(url) {
     assert.match(url, /^wss:\/\/fixture\.test\/api\/remote\.mux$/);
@@ -109,6 +113,21 @@ const runtime = {
         assert.deepEqual(JSON.parse(init.body), { sessionId: 'session-1', path: 'D:\\project\\report.txt' });
         return { status: 200, ok: true, blob: async () => new Blob(['file bytes']) };
       }
+      if (url === '/__dsh/lite-attachment') {
+        attachmentReads.push({ body: JSON.parse(init.body), signal: init.signal });
+        assert.equal(init.method, 'POST');
+        assert.equal(init.credentials, 'same-origin');
+        assert.equal(init.cache, 'no-store');
+        assert.equal(init.headers['content-type'], 'application/json; charset=utf-8');
+        const status = ({ unsupported: 501, unavailable: 404, large: 413 })[attachmentMode] || 200;
+        const type = attachmentMode === 'svg' ? 'image/svg+xml' : 'image/png';
+        return { status, ok: status === 200, headers: { get: key => ({
+          'content-type': type, 'x-dsh-e2ee-decrypted': attachmentMode === 'plaintext' ? null : '1',
+          'x-dsh-e2ee': attachmentMode === 'ciphertext' ? '1' : null
+        })[key] || null }, blob: async () => new Blob([
+          attachmentMode === 'empty' ? new Uint8Array() : attachmentMode === 'oversize' ? new Uint8Array(8 * 1024 * 1024 + 1) : rasterBytes
+        ], { type }) };
+      }
       if (url === '/__dsh/lite-files') {
         assert.deepEqual(JSON.parse(init.body), { sessionId: 'session-1', path: '', offset: 0 });
         return { status: 200, ok: true, json: async () => ({ path: '', entries: [
@@ -140,6 +159,10 @@ const runtime = {
             next: { provider: 'deepseek', model: 'V4', reasoningEffort: 'high' } },
           plan: { active: true, pending: true },
           sessionListMetadata: { blank: false } } };
+      if (request.method === 'session/projections') {
+        value = { ...value, asOfSeq: permissionProjection.asOfSeq,
+          values: { ...value.values, permissions: permissionProjection.values && permissionProjection.values.permissions } };
+      }
       if (request.method === 'agentPresets/list') value = { presets: [
         { id: 'standard', name: 'Standard', description: 'General coding', isDefault: true },
         { id: 'ptc', name: 'Code tool', description: 'run_code', isDefault: false,
@@ -182,6 +205,24 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-a
     plan: { active: true, pending: true }, blank: false
   });
   assert.deepEqual(rpcCalls.at(-1), { method: 'session/projections', request: { sessionId: 'session-1' } });
+  for (const presetId of ['read-only', 'workspace-write', 'danger-full-access']) {
+    permissionProjection = { asOfSeq: 15, values: { permissions: { currentValue: presetId } } };
+    assert.deepEqual(JSON.parse(JSON.stringify(await api.readPermission('session-1'))), { presetId, asOfSeq: 15 });
+    assert.deepEqual(rpcCalls.at(-1), { method: 'session/projections', request: { sessionId: 'session-1' } });
+  }
+  for (const value of [
+    { asOfSeq: 15, values: {} },
+    { asOfSeq: 15, values: { permissions: { currentValue: 'invented-scope' } } },
+    { asOfSeq: '15', values: { permissions: { currentValue: 'workspace-write' } } },
+    { asOfSeq: -2, values: { permissions: { currentValue: 'workspace-write' } } }
+  ]) {
+    permissionProjection = value;
+    await assert.rejects(api.readPermission('session-1'), /当前授权范围/);
+  }
+  permissionProjection = { asOfSeq: 15, values: { permissions: { currentValue: 'workspace-write' } } };
+  const readsBeforeEmpty = rpcCalls.length;
+  await assert.rejects(api.readPermission(''), /请先打开/);
+  assert.equal(rpcCalls.length, readsBeforeEmpty, 'an empty target never becomes a projection request');
   const presets = await api.listModes();
   assert.deepEqual(JSON.parse(JSON.stringify(presets)), [
     { id: 'standard', name: 'Standard', description: 'General coding', isDefault: true, broken: '' },
@@ -199,6 +240,8 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-a
   ]);
   assert.equal(sent.find(w => w.endpoint === 'session/follow').payload.args.request.maxMessages, 30);
   assert.equal(events.find(e => e.type === 'records').hasMore, true);
+  assert.equal(events.filter(e => e.type === 'records').at(-1).running, false,
+    'a snapshot with a latest turn/end must not infer running from historical rows');
   const older = await api.loadOlder('session-1');
   assert.equal(older.hasMore, false);
   assert.equal(older.records[0].text, 'Earlier');
@@ -241,6 +284,32 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-a
   const download = await api.downloadFile({ sessionId: 'session-1', path: 'D:\\project\\report.txt' });
   assert.equal(download.name, 'report.txt');
   assert.equal(await download.blob.text(), 'file bytes');
+  // Official ID retrieval never accepts an arbitrary file path, non-digest ID,
+  // unmarked plaintext, retained ciphertext, active format, or oversized bytes.
+  const imageId = 'sha256:' + 'a'.repeat(64);
+  const signal = new AbortController().signal;
+  const image = await api.downloadImageAttachment({ sessionId: 'session-1', attachmentId: imageId, signal });
+  assert.deepEqual(attachmentReads.at(-1).body, { sessionId: 'session-1', attachmentId: imageId });
+  assert.equal(attachmentReads.at(-1).signal, signal);
+  assert.equal(image.sessionId, 'session-1');
+  assert.equal(image.attachmentId, imageId);
+  assert.equal(image.blob.type, 'image/png');
+  assert.deepEqual(Buffer.from(await image.blob.arrayBuffer()), rasterBytes);
+  const readsBeforeInvalid = attachmentReads.length;
+  for (const attachmentId of ['', 'D:\\private\\image.png', 'sha256:' + 'a'.repeat(63), 'sha256:' + 'A'.repeat(64)]) {
+    await assert.rejects(api.downloadImageAttachment({ sessionId: 'session-1', attachmentId }), /标识无效/);
+  }
+  await assert.rejects(api.downloadImageAttachment({ sessionId: 'session\n1', attachmentId: imageId }), /标识无效/);
+  assert.equal(attachmentReads.length, readsBeforeInvalid, 'invalid scope/ID never reaches encrypted HTTP');
+  for (const [mode, message] of [
+    ['unsupported', /尚不支持/], ['unavailable', /不属于当前对话/], ['large', /安全预览/],
+    ['plaintext', /加密验证/], ['ciphertext', /加密验证/], ['svg', /格式不受支持/],
+    ['empty', /安全预览/], ['oversize', /安全预览/]
+  ]) {
+    attachmentMode = mode;
+    await assert.rejects(api.downloadImageAttachment({ sessionId: 'session-1', attachmentId: imageId }), message);
+  }
+  attachmentMode = 'ok';
   const project = await api.createProject({ path: 'D:\\new-project' });
   assert.equal(project.id, 'workspace-2');
   const session = await api.createSession({ projectId: project.id });

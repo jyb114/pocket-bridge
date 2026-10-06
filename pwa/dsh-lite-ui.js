@@ -204,6 +204,10 @@
       filesFilter: $('files-filter'), filesList: $('files-list'), filesMore: $('files-more'), filesStatus: $('files-status')
     };
     var app = $('app');
+    // Stored preferences already drive t(), but loading a fresh Chinese HTML
+    // shell does not fire a language-change event. Translate static labels on
+    // every mount without calling a previous controller's onLangChange hook.
+    if (window.DshI18n && typeof window.DshI18n.apply === 'function') window.DshI18n.apply(document);
     if (adapter.capabilities && adapter.capabilities.imageAttachments === true && adapter.capabilities.fileAttachments === false) {
       refs.uploadInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
       refs.upload.title = t('上传图片');
@@ -275,7 +279,7 @@
       sessionId: '', tab: 'conversation', sending: false, uploading: false,
       drafts: new Map(), interactionDrafts: new Map(), interactionExpanded: new Set(),
       uploads: [], downloadUrls: new Map(), recordElements: new Map(),
-      creating: false, creatingKind: '', connecting: 0, running: false, stopping: false,
+      creating: false, creatingKind: '', connecting: 0, running: false, runningKnown: null, stopping: false,
       hasMore: false, loadingOlder: false,
       loadingProjects: false, loadingSessions: false,
       // C11 的另一半：项目/对话列表**读失败**的原因。
@@ -289,7 +293,7 @@
       // C26 目标：`goal` 是最近一次读到的目标快照（null = 没有），
       // `goalEditing` 非空时目标条上是**内联输入框**（{text}）。
       // 放在 state 里而不是闭包里，是为了让"操作完重新读一遍"能重画同一条。
-      goal: null, goalEditing: null, goalRequest: 0, contextVersion: 0,
+      goal: null, goalEditing: null, goalRequest: 0, goalError: '', contextVersion: 0,
       selection: { agentPreset: null, modelSelection: null, lastUsedModel: null, blank: null, plan: null },
       selectionRequest: 0,
       // 正在编辑的那条排队消息（{id, text, caret}）。放在 state 里而不是闭包里，
@@ -301,6 +305,10 @@
     };
     var listeners = [];
     function listen(node, type, fn) { node.addEventListener(type, fn); listeners.push([node, type, fn]); }
+    function closeSettingsMenu() {
+      refs.settingsMenu.hidden = true;
+      refs.railSettings.setAttribute('aria-expanded', 'false');
+    }
     // 离开页面之前把当前选中的项目和对话存下来。
     //
     // 为什么放在这里而不是每个赋值点各插一句：赋值点有好几处（新建项目、
@@ -349,7 +357,10 @@
      */
     function turnTextFor(record) {
       var list = state.records || [];
-      var at = list.indexOf(record);
+      // A keyed row can retain its copy button while a fresh snapshot supplies
+      // equivalent new record objects. Resolve its stable ID against live data.
+      var recordId = safeId(record && record.id);
+      var at = recordId ? list.findIndex(function (row) { return safeId(row && row.id) === recordId; }) : list.indexOf(record);
       if (at < 0) return label(record && record.text, '');
       var start = 0;
       for (var i = at; i >= 0; i--) {
@@ -434,12 +445,14 @@
       renderUploads();
     }
     function resetSessionExtras() {
+      clearLocalUploadPreviews(false);
       state.contextVersion++;
       state.goalRequest++;
       state.queueRequest++;
       state.selectionRequest++;
       state.selection = { agentPreset: null, modelSelection: null, lastUsedModel: null, blank: null, plan: null };
       state.goal = null;
+      state.goalError = '';
       state.goalEditing = null;
       state.queued = [];
       state.queueLoading = false;
@@ -477,6 +490,7 @@
         refs.composerConnection.textContent = t(state.statusText);
       }
       renderControls();
+      updateCryptoChip();
     }
     /** 换语言时把"连接状态"这行字重画一遍 —— 它是 setStatus 当时写死的，不会自己变。 */
     function relabelStatus() {
@@ -725,14 +739,20 @@
             if (!attachment || typeof attachment !== 'object') return;
             var name = label(attachment.name, t('文件'));
             var path = typeof attachment.path === 'string' ? attachment.path : '';
-            if (!path || typeof adapter.downloadFile !== 'function') {
+            var officialImage = !path && officialImageAttachment(attachment);
+            if ((!path || typeof adapter.downloadFile !== 'function') && !officialImage) {
+              if (!path && localImageAttachment(attachment)) {
+                attachments.append(buildLocalUploadImage(attachment, name));
+                return;
+              }
               var size = Number.isSafeInteger(attachment.size) && attachment.size >= 0 ?
                 ' · ' + attachment.size + ' B' : '';
               attachments.append(el('span', 'record-file record-file-label', name + size));
               return;
             }
-            var isImage = /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(path);
-            var cached = path && state.downloadUrls.get(path);
+            var isImage = officialImage || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(path);
+            var imageKey = officialImage ? officialImageKey(attachment) : path;
+            var cached = imageKey && state.downloadUrls.get(imageKey);
             if (isImage) {
               // ── 图片直接显示出来（2026-09-29 补）────────────────────────────
               //
@@ -746,37 +766,51 @@
               // 明文那条路网关会拒（内容通道拒绝明文、不降级），这也是 Codex 那边
               // 栽过的同一个坑，这里一次做对。
               var figure = el('figure', 'record-image');
-              var holder = el('div', 'record-image-holder', t('点一下加载图片'));
+              var holder = el('button', 'record-image-holder', t('点一下加载图片'));
+              holder.type = 'button';
+              holder.setAttribute('aria-label', t('加载图片') + ' ' + name);
               var image = el('img', 'record-image-img');
               image.alt = name;
               image.hidden = true;
               image.loading = 'lazy';
+              if (cached && cached.url) { image.src = cached.url; image.hidden = false; holder.hidden = true; }
               figure.append(holder, image);
               // 顺手保留原来那个下载入口 —— 想存到手机上时还是要它。
               var keep = cached ? el('a', 'record-file', t('↓ 保存 ') + name) : el('button', 'record-file', t('↓ 下载 ') + name);
               if (cached) { keep.href = cached.url; keep.download = cached.name; }
               else {
                 keep.type = 'button';
-                keep.addEventListener('click', function () { downloadAttachment(attachment, keep); });
+                keep.addEventListener('click', function () {
+                  if (officialImage) downloadOfficialImage(attachment, keep);
+                  else downloadAttachment(attachment, keep);
+                });
               }
               var load = function () {
-                if (image.src) return;
+                if (image.getAttribute('src') || holder.disabled) return;
+                var sessionId = state.sessionId, contextVersion = state.contextVersion;
+                holder.disabled = true;
                 holder.textContent = t('正在取图…');
-                cacheDownload(path, name, state.sessionId).then(function (entry) {
+                var read = officialImage ? cacheOfficialImage(attachment) : cacheDownload(path, name, sessionId);
+                read.then(function (entry) {
+                  if (!holder.isConnected || state.sessionId !== sessionId || state.contextVersion !== contextVersion || state.disposed) return;
                   if (!entry || !entry.url) { holder.textContent = t('取不到这张图，点这里再试'); return; }
                   image.src = entry.url;
                   image.hidden = false;
                   holder.hidden = true;
-                  // 点图看大图（就是同一个 blob，不额外下载）
-                  figure.addEventListener('click', function () {
-                    if (image.src) window.open(image.src, '_blank', 'noopener');
-                  });
-                }).catch(function () { holder.textContent = t('取不到这张图，点这里再试'); });
+                }).catch(function (error) {
+                  if (holder.isConnected) holder.textContent = t(safeError(error, '取不到这张图，点这里再试'));
+                }).finally(function () { if (holder.isConnected) holder.disabled = false; });
               };
               holder.addEventListener('click', load);
+              image.addEventListener('click', function () { if (image.getAttribute('src')) window.open(image.src, '_blank', 'noopener'); });
               image.addEventListener('error', function () {
+                var failedUrl = image.getAttribute('src');
+                image.removeAttribute('src');
+                var entry = state.downloadUrls.get(imageKey);
+                if (entry && entry.url === failedUrl) { URL.revokeObjectURL(entry.url); state.downloadUrls.delete(imageKey); }
                 image.hidden = true;
                 holder.hidden = false;
+                holder.disabled = false;
                 holder.textContent = t('取不到这张图，点这里再试');
               });
               attachments.append(figure, keep);
@@ -795,24 +829,66 @@
           item.append(attachments);
         }
         var statusText = record.status === 'running' ? t('进行中') : record.status === 'settled' ? t('已完成') :
-          record.status === 'interrupted' ? '已中断' : record.status === 'preparing' ? '准备中' :
-            record.status === 'error' ? '失败' : '';
+          record.status === 'interrupted' ? t('已中断') : record.status === 'preparing' ? t('准备中') :
+            record.status === 'error' ? t('失败') : '';
         if (statusText) item.append(el('small', 'record-status', statusText));
         return item;
     }
-    function renderRecords(prepend) {
+    var recordSnapshots = new Map();
+    var recordFrame = null;
+    var pendingRecordIds = new Set();
+    function cancelRecordFrame() {
+      if (recordFrame !== null) window.cancelAnimationFrame(recordFrame);
+      recordFrame = null;
+      pendingRecordIds.clear();
+    }
+    mountCleanups.push(cancelRecordFrame);
+    function snapshotForRecord(record) {
+      var attachments = Array.isArray(record.attachments) ? record.attachments : [];
+      return { role: record.role, title: record.title, text: record.text, status: record.status,
+        files: JSON.stringify(attachments.map(function (item) {
+          if (!item || typeof item !== 'object') return null;
+          var cached = state.downloadUrls.get(item.path || (officialImageAttachment(item) ? officialImageKey(item) : ''));
+          var local = !item.path && localUploadPreview(item);
+          return [item.id, item.kind, item.name, item.path, item.size, item.mimeType,
+            cached && cached.url, cached && cached.name, !!local, local && local.url];
+        })) };
+    }
+    function sameRecordSnapshot(a, b) {
+      return a && b && a.role === b.role && a.title === b.title && a.text === b.text &&
+        a.status === b.status && a.files === b.files;
+    }
+    function reconcileRecord(record, force) {
+      var id = safeId(record.id);
+      var previous = id && state.recordElements.get(id);
+      var snapshot = snapshotForRecord(record);
+      if (!force && previous && sameRecordSnapshot(recordSnapshots.get(id), snapshot)) return previous;
+      var item = buildRecord(record);
+      var oldFold = previous && previous.querySelector('.record-fold');
+      var newFold = item.querySelector('.record-fold');
+      if (oldFold && newFold) newFold.open = oldFold.open;
+      if (id) { state.recordElements.set(id, item); recordSnapshots.set(id, snapshot); }
+      return item;
+    }
+    function renderRecords(prepend, force) {
+      cancelRecordFrame();
       var oldHeight = refs.records.scrollHeight;
       var oldTop = refs.records.scrollTop;
       var nearBottom = oldHeight - oldTop - refs.records.clientHeight < 100;
-      refs.records.replaceChildren();
-      state.recordElements.clear();
-      var fragment = document.createDocumentFragment();
+      var cursor = refs.records.firstChild;
+      var currentIds = new Set();
+      var changed = false;
       visibleRecords().forEach(function (record) {
-        var item = buildRecord(record);
-        if (safeId(record.id)) state.recordElements.set(safeId(record.id), item);
-        fragment.append(item);
+        var item = reconcileRecord(record, force);
+        var id = safeId(record.id);
+        if (id) currentIds.add(id);
+        if (item !== cursor) { refs.records.insertBefore(item, cursor); changed = true; }
+        cursor = item.nextSibling;
       });
-      refs.records.append(fragment);
+      while (cursor) { var next = cursor.nextSibling; cursor.remove(); cursor = next; changed = true; }
+      Array.from(state.recordElements.keys()).forEach(function (id) {
+        if (!currentIds.has(id)) { state.recordElements.delete(id); recordSnapshots.delete(id); }
+      });
       renderEmpty();
       // ── 刷新后补回"正在运行"状态 ────────────────────────────────────────────
       //
@@ -825,15 +901,17 @@
       // （助手/思考）或 'preparing'（工具调用）。
       // ★ **只补 true，不清 false** —— 清零的时机仍然只由实时事件和会话切换决定，
       //   这样不会误伤「停止」按钮的判断。
-      if (!state.running && state.records.some(function (r) {
+      if (state.runningKnown === null && !state.running && state.records.some(function (r) {
         return r && (r.status === 'running' || r.status === 'preparing');
       })) {
         state.running = true;
         if (refs.stop) refs.stop.hidden = typeof adapter.cancelSession !== 'function';
       }
-      if (prepend) refs.records.scrollTop = oldTop + refs.records.scrollHeight - oldHeight;
-      else if (nearBottom) refs.records.scrollTop = refs.records.scrollHeight;
-      else refs.records.scrollTop = oldTop;
+      if (changed) {
+        if (prepend) refs.records.scrollTop = oldTop + refs.records.scrollHeight - oldHeight;
+        else if (nearBottom) refs.records.scrollTop = refs.records.scrollHeight;
+        else refs.records.scrollTop = oldTop;
+      }
     }
     function upsertRecord(record) {
       if (!record) return;
@@ -842,19 +920,33 @@
       if (index >= 0) state.records[index] = record;
       else state.records.push(record);
       if (!id) { renderRecords(); return; }
-      var previous = state.recordElements.get(id);
-      var nearBottom = refs.records.scrollHeight - refs.records.scrollTop - refs.records.clientHeight < 100;
-      if (recordIsVisible(record)) {
-        var item = buildRecord(record);
-        if (previous) previous.replaceWith(item);
-        else refs.records.append(item);
-        state.recordElements.set(id, item);
-      } else if (previous) {
-        previous.remove();
-        state.recordElements.delete(id);
-      }
-      renderEmpty();
-      if (nearBottom) refs.records.scrollTop = refs.records.scrollHeight;
+      pendingRecordIds.add(id);
+      if (recordFrame !== null) return;
+      var sessionId = state.sessionId, contextVersion = state.contextVersion;
+      recordFrame = window.requestAnimationFrame(function () {
+        recordFrame = null;
+        var ids = Array.from(pendingRecordIds);
+        pendingRecordIds.clear();
+        if (state.disposed || state.sessionId !== sessionId || state.contextVersion !== contextVersion || !refs.records.isConnected) return;
+        var nearBottom = refs.records.scrollHeight - refs.records.scrollTop - refs.records.clientHeight < 100;
+        var changed = false;
+        ids.forEach(function (rowId) {
+          var record = state.records.find(function (item) { return safeId(item && item.id) === rowId; });
+          if (!record) return;
+          var previous = state.recordElements.get(rowId);
+          if (recordIsVisible(record)) {
+            var item = reconcileRecord(record);
+            if (item !== previous) {
+              if (previous) previous.replaceWith(item); else refs.records.append(item);
+              changed = true;
+            }
+          } else if (previous) {
+            previous.remove(); state.recordElements.delete(rowId); recordSnapshots.delete(rowId); changed = true;
+          }
+        });
+        renderEmpty();
+        if (changed && nearBottom) refs.records.scrollTop = refs.records.scrollHeight;
+      });
     }
     function mergeRecords(base, pending, prepend) {
       state.records = Array.isArray(base) ? base.slice() : [];
@@ -868,10 +960,234 @@
       renderRecords(prepend);
     }
     function clearDownloadUrls() {
+      clearLocalUploadPreviews(false);
+      officialImageEpoch++;
+      officialImagePending.forEach(function (entry) { entry.controller.abort(); });
+      officialImagePending.clear();
       state.downloadUrls.forEach(function (entry) { URL.revokeObjectURL(entry.url); });
       state.downloadUrls.clear();
       state.filePreview = null;
       renderFilePreview();
+    }
+    // Native DSH can confirm an attachment ID without exposing a downloadable
+    // workspace path. Retain only this phone's verified original File, in memory,
+    // until this context ends or the small LRU evicts it. Never infer a file path
+    // from tool output, store bytes in drafts/storage, or fetch on history render.
+    var localUploadPreviews = new Map();
+    var localUploadPreviewBytes = 0;
+    var localUploadPreviewEpoch = 0;
+    var localUploadKeyCheck = 0;
+    var MAX_LOCAL_UPLOAD_PREVIEWS = 4;
+    var MAX_LOCAL_UPLOAD_PREVIEW_BYTES = 20 * 1024 * 1024;
+    var officialImagePending = new Map();
+    var officialImageEpoch = 0;
+    function officialImageAttachment(attachment) {
+      return attachment && attachment.kind === 'image' &&
+        typeof attachment.id === 'string' && /^sha256:[a-f0-9]{64}$/.test(attachment.id) &&
+        typeof adapter.downloadImageAttachment === 'function';
+    }
+    function officialImageKey(attachment) {
+      return '\nimage-attachment\n' + JSON.stringify([state.sessionId, 'image', attachment.id]);
+    }
+    async function cacheOfficialImage(attachment) {
+      if (!state.sessionId || !officialImageAttachment(attachment)) return false;
+      var sessionId = state.sessionId, contextVersion = state.contextVersion, epoch = officialImageEpoch;
+      var key = officialImageKey(attachment);
+      var cached = state.downloadUrls.get(key);
+      if (cached) return cached;
+      var pending = officialImagePending.get(key);
+      if (pending) return pending.promise;
+      if (officialImagePending.size >= 3) throw { userMessage: t('已有三张图片正在读取，请稍后重试。') };
+      var controller = new AbortController();
+      var request = { controller: controller, promise: null };
+      request.promise = (async function () {
+        var keyIdentity = await localPreviewKeyIdentity();
+        if (keyIdentity === null || epoch !== officialImageEpoch || state.disposed ||
+            state.sessionId !== sessionId || state.contextVersion !== contextVersion) return false;
+        var result = await adapter.downloadImageAttachment({ sessionId: sessionId,
+          attachmentId: attachment.id, signal: controller.signal });
+        if (!result || !result.blob || result.sessionId !== sessionId || result.attachmentId !== attachment.id ||
+            !Number.isSafeInteger(result.blob.size) || !result.blob.size || result.blob.size > 8 * 1024 * 1024 ||
+            !/^image\/(png|jpeg|webp|gif)$/.test(String(result.blob.type || ''))) throw { userMessage: t('图片格式不受支持。') };
+        var currentKey = await localPreviewKeyIdentity();
+        if (epoch !== officialImageEpoch || state.disposed || state.sessionId !== sessionId ||
+            state.contextVersion !== contextVersion || currentKey !== keyIdentity) return false;
+        if (state.downloadUrls.size >= 3) {
+          var first = state.downloadUrls.keys().next().value;
+          URL.revokeObjectURL(state.downloadUrls.get(first).url); state.downloadUrls.delete(first);
+        }
+        var entry = { url: URL.createObjectURL(result.blob), name: label(attachment.name, t('图片')),
+          keyIdentity: keyIdentity, kind: 'official-image' };
+        state.downloadUrls.set(key, entry);
+        return entry;
+      })().finally(function () { if (officialImagePending.get(key) === request) officialImagePending.delete(key); });
+      officialImagePending.set(key, request);
+      return request.promise;
+    }
+    async function downloadOfficialImage(attachment, button) {
+      var sessionId = state.sessionId, contextVersion = state.contextVersion;
+      button.disabled = true; button.textContent = t('正在读取…');
+      try {
+        if (!await cacheOfficialImage(attachment)) return;
+        if (button.isConnected && state.sessionId === sessionId && state.contextVersion === contextVersion) {
+          renderRecords(); clearError();
+        }
+      } catch (error) {
+        if (button.isConnected && state.sessionId === sessionId && state.contextVersion === contextVersion) {
+          button.disabled = false; button.textContent = t('↓ 重试下载');
+          showError({ userMessage: t(safeError(error, '读取文件失败，请重试。')) }, '读取文件失败，请重试。');
+        }
+      }
+    }
+    function validPreviewId(value) {
+      return typeof value === 'string' && value.length > 0 && value.length <= 256 &&
+        !/[\u0000-\u0020\u007f]/.test(value);
+    }
+    function localImageAttachment(attachment) {
+      var type = String(attachment.mimeType || '').toLowerCase();
+      return /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(String(attachment.name || '')) &&
+        (!type || type === 'application/octet-stream' || /^(image\/(?:png|jpeg|webp|gif|bmp|avif))$/.test(type));
+    }
+    function localUploadPreview(attachment) {
+      var id = attachment && attachment.id;
+      var entry = validPreviewId(id) && localUploadPreviews.get(id);
+      if (!entry || entry.sessionId !== state.sessionId || entry.projectId !== state.projectId ||
+          entry.contextVersion !== state.contextVersion || entry.name !== attachment.name ||
+          (attachment.size != null && attachment.size !== entry.file.size) || !localImageAttachment(attachment)) return null;
+      return entry;
+    }
+    function removeLocalUploadPreview(id) {
+      var entry = localUploadPreviews.get(id);
+      if (!entry) return;
+      if (entry.url) URL.revokeObjectURL(entry.url);
+      localUploadPreviewBytes -= entry.file.size;
+      // Removed DOM handlers can briefly retain the entry object. Drop its File
+      // too, so cache eviction/teardown cannot retain original bytes indirectly.
+      entry.file = null; entry.url = '';
+      localUploadPreviews.delete(id);
+    }
+    function clearLocalUploadPreviews(repaint) {
+      localUploadPreviewEpoch++;
+      localUploadKeyCheck++;
+      localUploadPreviews.forEach(function (entry) {
+        if (entry.url) URL.revokeObjectURL(entry.url);
+        entry.file = null; entry.url = '';
+      });
+      var hadEntries = localUploadPreviews.size > 0;
+      localUploadPreviews.clear();
+      localUploadPreviewBytes = 0;
+      if (repaint && hadEntries && !state.disposed) renderRecords();
+    }
+    async function localPreviewKeyIdentity() {
+      var secret = window.__dshE2eeSecret;
+      if (typeof secret !== 'string' || !secret) return '';
+      if (secret.length > 1024) return null;
+      if (!window.crypto || !crypto.subtle || typeof TextEncoder !== 'function') return null;
+      // Only an opaque digest is retained. No key, File, or blob URL enters
+      // localStorage, sessionStorage, saved drafts, or diagnostic state.
+      var hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+      return Array.from(new Uint8Array(hash), function (n) { return n.toString(16).padStart(2, '0'); }).join('');
+    }
+    function checkLocalUploadPreviewKey() {
+      if (!localUploadPreviews || (!localUploadPreviews.size && !Array.from(state.downloadUrls.values()).some(function (entry) {
+        return entry.kind === 'official-image';
+      }))) return;
+      var check = ++localUploadKeyCheck;
+      localPreviewKeyIdentity().then(function (identity) {
+        if (check !== localUploadKeyCheck || state.disposed) return;
+        if (identity === null || Array.from(localUploadPreviews.values()).some(function (entry) {
+          return entry.keyIdentity !== identity;
+        }) || Array.from(state.downloadUrls.values()).some(function (entry) {
+          return entry.kind === 'official-image' && entry.keyIdentity !== identity;
+        })) { clearDownloadUrls(); renderRecords(); }
+      }).catch(function () { if (check === localUploadKeyCheck) { clearDownloadUrls(); renderRecords(); } });
+    }
+    async function retainLocalUploadPreview(file, result, scope, keyIdentity) {
+      var metadata = result && result.file;
+      if (!(file instanceof File) || !metadata || !validPreviewId(result.receiptId) ||
+          !validPreviewId(metadata.attachmentId) || metadata.name !== file.name || metadata.bytes !== file.size ||
+          !file.size || file.size > MAX_LOCAL_UPLOAD_PREVIEW_BYTES ||
+          !localImageAttachment({ name: file.name, mimeType: file.type }) || keyIdentity === null) return;
+      var head;
+      try { head = new Uint8Array(await file.slice(0, 16).arrayBuffer()); } catch (_) { return; }
+      var ascii = function (start, text) { return Array.from(text).every(function (c, i) { return head[start + i] === c.charCodeAt(0); }); };
+      if (!(head[0] === 137 && ascii(1, 'PNG\r\n\u001a\n') ||
+          head[0] === 255 && head[1] === 216 && head[2] === 255 ||
+          ascii(0, 'GIF87a') || ascii(0, 'GIF89a') ||
+          ascii(0, 'RIFF') && ascii(8, 'WEBP') || ascii(0, 'BM') ||
+          ascii(4, 'ftyp') && (ascii(8, 'avif') || ascii(8, 'avis')))) return;
+      var currentKey = await localPreviewKeyIdentity().catch(function () { return null; });
+      if (state.disposed || state.sessionId !== scope.sessionId || state.projectId !== scope.projectId ||
+          state.contextVersion !== scope.contextVersion || localUploadPreviewEpoch !== scope.epoch ||
+          currentKey !== keyIdentity) return;
+      var id = metadata.attachmentId;
+      // A repeated ID cannot replace an original File with an unproven new one.
+      if (localUploadPreviews.has(id)) { removeLocalUploadPreview(id); renderRecords(); return; }
+      while (localUploadPreviews.size >= MAX_LOCAL_UPLOAD_PREVIEWS ||
+          localUploadPreviewBytes + file.size > MAX_LOCAL_UPLOAD_PREVIEW_BYTES) {
+        removeLocalUploadPreview(localUploadPreviews.keys().next().value);
+      }
+      localUploadPreviews.set(id, { file: file, name: file.name, sessionId: scope.sessionId,
+        projectId: scope.projectId, contextVersion: scope.contextVersion, keyIdentity: keyIdentity, url: '' });
+      localUploadPreviewBytes += file.size;
+      renderRecords();
+    }
+    function buildLocalUploadImage(attachment, name) {
+      var entry = localUploadPreview(attachment);
+      var figure = el('figure', 'record-image record-local-image');
+      figure.dataset.localPreview = entry ? 'available' : 'unavailable';
+      if (!entry) {
+        figure.append(el('span', 'record-file record-file-label', name +
+          (Number.isSafeInteger(attachment.size) && attachment.size >= 0 ? ' · ' + attachment.size + ' B' : '')),
+          el('small', 'record-status', t('这张图片没有可读取的电脑路径，当前手机也没有临时副本。')));
+        return figure;
+      }
+      var holder = el('button', 'record-image-holder', t('点一下加载手机临时预览'));
+      holder.type = 'button';
+      holder.setAttribute('aria-label', t('加载图片') + ' ' + name);
+      var image = el('img', 'record-image-img');
+      image.alt = name; image.hidden = true; image.loading = 'lazy';
+      var save = el('a', 'record-file', t('↓ 保存 ') + name);
+      save.hidden = true; save.download = name;
+      function display(url) {
+        image.src = url; image.hidden = false; holder.hidden = true;
+        save.href = url; save.hidden = false;
+      }
+      if (entry.url) display(entry.url);
+      holder.addEventListener('click', async function () {
+        if (holder.disabled || image.getAttribute('src')) return;
+        holder.disabled = true;
+        var epoch = localUploadPreviewEpoch;
+        try {
+          var identity = await localPreviewKeyIdentity();
+          if (!holder.isConnected || state.disposed || epoch !== localUploadPreviewEpoch ||
+              localUploadPreview(attachment) !== entry) return;
+          if (identity === null || entry.keyIdentity !== identity) { clearDownloadUrls(); renderRecords(); return; }
+          if (!entry.url) entry.url = URL.createObjectURL(entry.file);
+          localUploadPreviews.delete(attachment.id);
+          localUploadPreviews.set(attachment.id, entry);
+          display(entry.url);
+        } catch (_) { if (holder.isConnected) holder.textContent = t('临时图片无法显示，点这里重试'); }
+        finally { if (holder.isConnected) holder.disabled = false; }
+      });
+      image.addEventListener('click', function () {
+        if (localUploadPreview(attachment) === entry && image.getAttribute('src') === entry.url) {
+          window.open(entry.url, '_blank', 'noopener');
+        }
+      });
+      image.addEventListener('error', function () {
+        var url = image.getAttribute('src');
+        image.removeAttribute('src'); image.hidden = true;
+        save.removeAttribute('href'); save.hidden = true;
+        if (localUploadPreview(attachment) === entry && entry.url === url) {
+          URL.revokeObjectURL(entry.url); entry.url = '';
+        }
+        holder.hidden = false; holder.disabled = false;
+        holder.textContent = t('临时图片无法显示，点这里重试');
+      });
+      figure.append(holder, image, save, el('small', 'record-status',
+        t('仅此手机临时预览；刷新、切换对话或缓存回收后不可用。')));
+      return figure;
     }
     var MAX_TEXT_PREVIEW_BYTES = 64 * 1024;
     async function textPreview(blob, name) {
@@ -926,12 +1242,15 @@
       if (panel && !panel.hidden) panel.scrollIntoView({ block: 'nearest' });
     }
     async function cacheDownload(path, name, sessionId) {
+      var contextVersion = state.contextVersion;
+      var cached = state.downloadUrls.get(path);
+      if (cached && state.sessionId === sessionId) return cached;
       var result = await adapter.downloadFile({ sessionId: sessionId, path: path });
       if (!result || !result.blob || typeof result.blob.size !== 'number') throw new Error('download data missing');
       var fileName = label(result.name, name);
       var preview = null;
       try { preview = await textPreview(result.blob, fileName); } catch (_) { /* Download remains available if text decoding fails. */ }
-      if (state.sessionId !== sessionId || state.disposed) return false;
+      if (state.sessionId !== sessionId || state.contextVersion !== contextVersion || state.disposed) return false;
       if (state.downloadUrls.size >= 3) {
         var first = state.downloadUrls.keys().next().value;
         URL.revokeObjectURL(state.downloadUrls.get(first).url);
@@ -948,7 +1267,7 @@
           !state.sessionId || typeof adapter.downloadFile !== 'function') return;
       var sessionId = state.sessionId;
       button.disabled = true;
-      button.textContent = '正在读取…';
+      button.textContent = t('正在读取…');
       try {
         if (!await cacheDownload(attachment.path, label(attachment.name, '文件'), sessionId)) return;
         renderRecords();
@@ -956,7 +1275,7 @@
       } catch (error) {
         if (state.sessionId === sessionId) {
           button.disabled = false;
-          button.textContent = '↓ 重试下载';
+          button.textContent = t('↓ 重试下载');
           showError(error, '读取文件失败，请重试。');
         }
       }
@@ -1173,6 +1492,12 @@
         renderSessions(); renderTitle();
         reconcilePendingCreate();
       } else if (event.type === 'records' && safeId(event.sessionId) === state.sessionId) {
+        if (typeof event.running === 'boolean') {
+          state.runningKnown = event.running;
+          state.running = event.running;
+          if (!state.running) state.stopping = false;
+          renderControls();
+        }
         if (typeof event.hasMore === 'boolean') { state.hasMore = event.hasMore; renderControls(); }
         if (state.loadingSession === state.sessionId) state.pendingRecords.push.apply(state.pendingRecords, event.records || []);
         else mergeRecords(event.records, [], state.loadingOlder);
@@ -1186,6 +1511,7 @@
           renderSessions(); renderTitle();
         }
       } else if (event.type === 'session-status' && safeId(event.sessionId) === state.sessionId) {
+        state.runningKnown = event.running === true;
         state.running = event.running === true;
         if (!state.running) state.stopping = false;
         renderControls();
@@ -1348,7 +1674,7 @@
       state.records = [];
       restoreDraft('', '');
       resetSessionExtras();
-      state.hasMore = false; state.running = false; state.stopping = false;
+      state.hasMore = false; state.running = false; state.runningKnown = null; state.stopping = false;
       state.interactions.clear();
       state.loadingSession = '';
       state.loadingSessions = !!state.projectId;
@@ -1398,7 +1724,7 @@
       state.records = [];
       restoreDraft(state.projectId, state.sessionId);
       resetSessionExtras();
-      state.hasMore = false; state.running = false; state.stopping = false;
+      state.hasMore = false; state.running = false; state.runningKnown = null; state.stopping = false;
       state.loadingSession = state.sessionId;
       state.pendingRecords = [];
       // 换会话时把排队消息的编辑草稿丢掉 —— 它属于上一个会话。
@@ -1441,6 +1767,8 @@
       }
     }
     async function connect() {
+      closeSettingsMenu();
+      clearDownloadUrls(); renderRecords();
       var token = ++state.connecting;
       setStatus('connecting'); clearError();
       try {
@@ -1456,6 +1784,7 @@
       }
     }
     async function createSession() {
+      closeSettingsMenu();
       if (state.connection !== 'connected' || !state.projectId || state.creating) return;
       var projectId = state.projectId;
       var previousIds = new Set(state.sessions.map(function (session) { return safeId(session.id); }));
@@ -1674,7 +2003,7 @@
       state.filesLoading = true;
       state.filesRetry = null;
       if (!append) { state.filesEntries = []; state.filesNextOffset = null; }
-      refs.filesStatus.textContent = '正在读取电脑文件…';
+      refs.filesStatus.textContent = t('正在读取电脑文件…');
       refs.filesStatus.dataset.state = 'success';
       renderFiles();
       try {
@@ -1709,7 +2038,7 @@
       if (!entry || typeof entry.path !== 'string' || !state.sessionId) return;
       var sessionId = state.sessionId;
       button.disabled = true;
-      button.textContent = '正在读取…';
+      button.textContent = t('正在读取…');
       try {
         if (!await cacheDownload(entry.path, label(entry.name, '文件'), sessionId)) return;
         refs.filesStatus.textContent = t('文件已读取，请点“保存”下载到手机。');
@@ -1789,10 +2118,10 @@
       refs.attachmentList.replaceChildren();
       state.uploads.forEach(function (upload, index) {
         var chip = el('span', 'attachment-chip');
-        chip.append(el('span', '', label(upload.file && upload.file.name, '文件') + ' · 待发送'));
+        chip.append(el('span', '', label(upload.file && upload.file.name, t('文件')) + ' · ' + t('待发送')));
         var remove = el('button', '', '×');
         remove.type = 'button';
-        remove.setAttribute('aria-label', '移除 ' + label(upload.file && upload.file.name, '文件'));
+        remove.setAttribute('aria-label', t('移除附件') + ' ' + label(upload.file && upload.file.name, t('文件')));
         remove.addEventListener('click', function () {
           state.uploads.splice(index, 1);
           saveCurrentDraft();
@@ -1816,6 +2145,9 @@
       }
       var sessionId = state.sessionId;
       var projectId = state.projectId;
+      var previewScope = { sessionId: sessionId, projectId: projectId,
+        contextVersion: state.contextVersion, epoch: localUploadPreviewEpoch };
+      var previewKey = localPreviewKeyIdentity().catch(function () { return null; });
       state.uploading = true; renderControls();
       try {
         for (var i = 0; i < files.length; i++) {
@@ -1831,6 +2163,7 @@
             state.uploads.push(receipt);
             saveCurrentDraft();
             renderUploads();
+            await retainLocalUploadPreview(files[i], result, previewScope, await previewKey);
           }
         }
         clearError();
@@ -1844,6 +2177,7 @@
       setSidebar(document.body.classList.contains('sidebar-hidden'));
     });
     listen(refs.railActivity, 'click', function () {
+      closeSettingsMenu();
       if (!state.sessionId) { setSidebar(true); return; }
       setTab('activity');
       setSidebar(false);
@@ -1933,7 +2267,7 @@
       }
     }
     function showScreenShot() {
-      if (!state.sessionId) { setSidebar(true); return; }
+      closeSettingsMenu();
       closeScreenOverlay();
       var box = el('div', 'screen-overlay');
       var bar = el('div', 'screen-bar');
@@ -1955,27 +2289,40 @@
       box.addEventListener('click', function (event) { if (event.target === box) box.__liteClose(); });
 
       var lastShot = null;   // 最近一次抓到的图，供「保存到手机」用
+      var captureRequest = 0;
+      var capturePending = false;
+      function currentCapture(request) {
+        return !state.disposed && screenOverlay === box && box.isConnected && request === captureRequest;
+      }
       save.addEventListener('click', function () {
         if (!lastShot) return;
         save.disabled = true;
         save.textContent = saveShotToPhone(lastShot);
         setTimeout(function () {
+          if (!box.isConnected || screenOverlay !== box) return;
           save.textContent = t('保存到手机');
-          save.disabled = !lastShot;
+          save.disabled = capturePending || !lastShot;
         }, 1800);
       });
 
       function grab() {
+        if (capturePending || !box.isConnected || screenOverlay !== box || state.disposed) return;
         if (typeof adapter.screenShot !== 'function') {
           holder.textContent = t('这个版本还不支持看电脑屏幕，请更新桥。');
           return;
         }
         holder.textContent = t('正在抓屏…');
         holder.classList.add('is-busy');
+        var request = ++captureRequest;
+        capturePending = true;
+        again.disabled = true;
         // 抓的过程中先禁掉保存：不然按下会存到**上一张**（图上已经不是它了）
         lastShot = null;
         save.disabled = true;
-        adapter.screenShot({ maxWidth: 1280 }).then(function (result) {
+        Promise.resolve().then(function () { return adapter.screenShot({ maxWidth: 1280 }); }).then(function (result) {
+          if (!currentCapture(request)) return;
+          if (!result || typeof result.image !== 'string' || !result.image ||
+              (result.mime !== 'image/jpeg' && result.mime !== 'image/png')) throw new Error(t('抓屏失败。'));
           holder.classList.remove('is-busy');
           holder.textContent = '';
           lastShot = result;
@@ -1987,12 +2334,17 @@
           holder.append(el('span', 'screen-meta',
             result.width + '×' + result.height + ' · ' + Math.round((result.bytes || 0) / 1024) + ' KB'));
         }).catch(function (problem) {
+          if (!currentCapture(request)) return;
           holder.classList.remove('is-busy');
-          holder.textContent = (problem && problem.message) || t('抓屏失败。');
+          holder.textContent = safeError(problem, t('抓屏失败。'));
           // 失败之后画面上已经没有图了，保存按钮也得跟着不可用 ——
           // 否则按下去存到的是**上一次**那张，人还以为存的是眼前这张。
           lastShot = null;
           save.disabled = true;
+        }).finally(function () {
+          if (!currentCapture(request)) return;
+          capturePending = false;
+          again.disabled = false;
         });
       }
       again.addEventListener('click', grab);
@@ -2006,6 +2358,7 @@
     // 本来就是控制台在用的端点，手机这边带着会话 cookie 直接问就行。
     // 挂在设置菜单里（菜单本身已经在 HTML 里，只是往里加按钮，不动结构）。
     function overlay(title, build, openerOverride) {
+      closeSettingsMenu();
       // 同时开两个面板没有意义，只会互相盖住 —— 先把已有的收掉。
       // （实测踩过：连点两次「计划/目标」会叠两层，里层点不到；
       //   而且"最后一个面板"和"第一个面板"不是同一个，排查时很误导。）
@@ -2016,7 +2369,7 @@
       var bar = el('div', 'screen-bar');
       var heading = el('strong', '', title);
       bar.append(heading);
-      var shut = el('button', 'screen-action', '关闭');
+      var shut = el('button', 'screen-action', t('关闭'));
       bar.append(shut);
       var body = el('div', 'panel-body');
       box.append(bar, body);
@@ -2291,6 +2644,7 @@
         edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14.5 5.5 18.5 9.5"/>',
         clear: '<path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/>',
         save: '<path d="M5 12.5 9.5 17 19 7"/>',
+        read: '<path d="M20 6v6h-6M19.5 12a7.5 7.5 0 1 1-2.1-5.2L20 9"/>',
         cancel: '<path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/>'
       };
       var button = el('button', 'goal-icon');
@@ -2313,37 +2667,65 @@
       var bar = refs.goalBar;
       if (!bar) return;
       var goal = state.goal;
+      bar.dataset.state = state.goalError ? 'unavailable' : '';
+      if (state.goalError && (!goal || goal.phase === 'complete') && !state.goalEditing) {
+        bar.hidden = false;
+        bar.replaceChildren();
+        bar.append(el('span', 'goal-objective', t('目标状态暂时无法读取。')));
+        var retry = el('button', 'screen-action', t('重试读取'));
+        retry.type = 'button';
+        retry.addEventListener('click', function () { retry.disabled = true; refreshGoal(); });
+        bar.append(retry);
+        return;
+      }
       // 电脑端：**完成的目标什么都不渲染**（没有目标时同样不渲染）
-      if (!goal || goal.phase === 'complete') {
+      if ((!goal || goal.phase === 'complete') && !state.goalEditing) {
         bar.hidden = true;
         bar.replaceChildren();
         return;
       }
       bar.hidden = false;
-      bar.dataset.phase = goal.phase || '';
+      bar.dataset.phase = goal && goal.phase || '';
       bar.replaceChildren();
       bar.append(goalGlyph());
+      if (state.goalError) bar.append(el('span', 'goal-state-note', t('上次读取的目标，当前状态未确认。')));
 
       // 编辑态：**同一行里的内联输入框**（电脑端就是这么做的）
       if (state.goalEditing) {
+        var draft = state.goalEditing;
         var input = el('input', 'goal-input');
         input.type = 'text';
-        input.value = state.goalEditing.text;
+        input.value = draft.text;
+        input.disabled = !!draft.pending;
         input.setAttribute('aria-label', t('目标内容'));
-        input.addEventListener('input', function () { state.goalEditing.text = input.value; });
+        if (draft.feedback) input.title = draft.feedback;
+        input.addEventListener('input', function () { if (state.goalEditing === draft) draft.text = input.value; });
         input.addEventListener('keydown', function (ev) {
           if (ev.key === 'Enter') { ev.preventDefault(); commitGoalEdit(input); }
-          else if (ev.key === 'Escape') { state.goalEditing = null; renderGoalBar(); }
+          else if (ev.key === 'Escape' && !draft.pending) { state.goalEditing = null; renderGoalBar(); }
         });
         bar.append(input);
         var editing = el('span', 'goal-actions');
-        editing.append(goalIcon('save', t('保存目标'), function () { commitGoalEdit(input); }));
-        editing.append(goalIcon('cancel', t('取消编辑'), function () {
+        var save = goalIcon(draft.uncertain ? 'read' : 'save', draft.uncertain ? t('重新读取目标') : t('保存目标'), function () {
+          if (draft.uncertain) checkGoalEdit(draft);
+          else commitGoalEdit(input);
+        });
+        save.dataset.kind = draft.uncertain ? 'read' : 'save';
+        save.disabled = !!draft.pending || (!draft.uncertain && (!goal || goal.phase === 'complete'));
+        editing.append(save);
+        var cancel = goalIcon('cancel', t('取消编辑'), function () {
           state.goalEditing = null;
           renderGoalBar();
-        }));
+        });
+        cancel.disabled = !!draft.pending;
+        editing.append(cancel);
         bar.append(editing);
-        setTimeout(function () { if (input.isConnected) { input.focus(); input.select(); } }, 0);
+        if (draft.feedback) {
+          var note = el('span', 'goal-state-note', draft.feedback);
+          note.setAttribute('role', 'status');
+          bar.append(note);
+        }
+        if (!draft.pending && !draft.uncertain) setTimeout(function () { if (input.isConnected) { input.focus(); input.select(); } }, 0);
         return;
       }
 
@@ -2366,23 +2748,57 @@
     function commitGoalEdit(input) {
       var text = String(input.value || '').trim();
       if (!text) { showError({ userMessage: t('目标不能是空的。') }, t('目标不能是空的。')); return; }
-      if (!state.goal) return;
-      state.goalEditing = null;
-      runGoal('edit', text);
+      var draft = state.goalEditing;
+      if (!state.goal || !draft || draft.pending || draft.uncertain) return;
+      draft.text = input.value;
+      draft.submitted = text;
+      draft.pending = true;
+      draft.feedback = '';
+      renderGoalBar();
+      runGoal('edit', text, draft);
+    }
+    function settleGoalEdit(draft) {
+      if (state.goalEditing !== draft) return;
+      draft.pending = false;
+      if (!state.goalError && state.goal && state.goal.objective === draft.submitted) {
+        state.goalEditing = null;
+      } else {
+        draft.uncertain = !!state.goalError;
+        draft.feedback = state.goalError ? t('修改结果未确认，文字已保留。请先重新读取目标。') : t('已重新读取目标，请检查后保存。');
+      }
+      renderGoalBar();
+    }
+    function checkGoalEdit(draft) {
+      if (state.goalEditing !== draft || draft.pending) return;
+      var sessionId = state.sessionId, contextVersion = state.contextVersion;
+      draft.pending = true;
+      renderGoalBar();
+      refreshGoal().then(function () {
+        if (state.sessionId === sessionId && state.contextVersion === contextVersion) settleGoalEdit(draft);
+      });
     }
     /** 对目标做一次操作，然后**重新读一遍** —— revision 会变，拿旧值再点会被 DSH 拒。 */
-    function runGoal(kind, objective) {
+    function runGoal(kind, objective, draft) {
       var goal = state.goal;
       if (!goal || !state.sessionId || typeof adapter.goalAction !== 'function') return;
       var sessionId = state.sessionId;
       var contextVersion = state.contextVersion;
       var payload = { id: goal.id, revision: goal.revision };
       if (kind === 'edit') payload.objective = objective;
-      adapter.goalAction(sessionId, kind, payload).then(function () {
-        if (state.sessionId === sessionId && state.contextVersion === contextVersion) return refreshGoal();
+      Promise.resolve().then(function () { return adapter.goalAction(sessionId, kind, payload); }).then(function () {
+        if (state.sessionId === sessionId && state.contextVersion === contextVersion) return refreshGoal().then(function () {
+          if (draft) settleGoalEdit(draft);
+        });
       }).catch(function (err) {
-        if (state.sessionId === sessionId && state.contextVersion === contextVersion)
+        if (state.sessionId === sessionId && state.contextVersion === contextVersion) {
+          if (draft && state.goalEditing === draft) {
+            draft.pending = false;
+            draft.uncertain = true;
+            draft.feedback = t('修改结果未确认，文字已保留。请先重新读取目标。');
+            renderGoalBar();
+          }
           showError(err, t('目标操作失败。'));
+        }
       });
     }
     function refreshGoal() {
@@ -2391,18 +2807,19 @@
       var request = ++state.goalRequest;
       if (!sessionId || typeof adapter.readGoal !== 'function') {
         state.goal = null;
+        state.goalError = '';
         renderGoalBar();
         return Promise.resolve();
       }
       return Promise.resolve().then(function () { return adapter.readGoal(sessionId); }).then(function (goal) {
         if (state.sessionId !== sessionId || state.contextVersion !== contextVersion || request !== state.goalRequest) return;
         state.goal = goal || null;
-        if (!state.goal) state.goalEditing = null;
+        state.goalError = '';
         renderGoalBar();
-      }).catch(function () {
+      }).catch(function (error) {
         if (state.sessionId !== sessionId || state.contextVersion !== contextVersion || request !== state.goalRequest) return;
-        // 读不到就当没有 —— 它是附加信息，不该因为它失败而报错打扰人
-        state.goal = null;
+        // A failed read is not proof that the saved goal disappeared.
+        state.goalError = safeError(error, t('目标状态暂时无法读取。'));
         renderGoalBar();
       });
     }
@@ -2427,7 +2844,7 @@
       if (!state.sessionId) { setSidebar(true); return; }
       var sessionId = state.sessionId;
       overlay(t('目标'), function (body, box) {
-        body.append(el('p', 'panel-line', state.goal
+        body.append(el('p', 'panel-line', state.goalError ? t('目标状态暂时无法读取。') : state.goal
           ? t('目标显示在输入框上方那条里，点铅笔可以改。')
           : t('还没有设定目标。')));
 
@@ -2458,8 +2875,9 @@
             done.then(function () { return refreshGoal(); }).then(function () {
               if (!box.isConnected || state.sessionId !== sessionId) return;
               save.disabled = false;
-              goalFeedback.textContent = t('目标已保存。');
-              goalFeedback.dataset.state = 'success';
+              var confirmed = !state.goalError && state.goal && state.goal.objective === text;
+              goalFeedback.textContent = confirmed ? t('目标已保存。') : t('目标请求已发送，当前结果未确认，请重新读取。');
+              goalFeedback.dataset.state = confirmed ? 'success' : 'error';
               goalFeedback.hidden = false;
             }).catch(function (err) {
               if (!box.isConnected || state.sessionId !== sessionId) return;
@@ -2624,7 +3042,13 @@
     function runCompact(host, done) {
       var finish = function () { if (typeof done === 'function') done(); };
       if (!state.sessionId) { setSidebar(true); finish(); return; }
+      var sessionId = state.sessionId;
+      var contextVersion = state.contextVersion;
       var render = function (body) {
+        function current() {
+          return !state.disposed && state.sessionId === sessionId &&
+            state.contextVersion === contextVersion && body.isConnected;
+        }
         // 列命令只是"先确认有没有"，**列不出来也照样往下走** ——
         // 老版本 DSH 可能没有 commands/list，那不构成"不能压缩"的理由。
         // 适配器没实现这两个方法时（旧版界面/旧桥）同样直接给出明确提示。
@@ -2634,12 +3058,15 @@
           return;
         }
         var listing = typeof adapter.listCommands === 'function'
-          ? adapter.listCommands(state.sessionId).catch(function () { return null; })
+          ? Promise.resolve().then(function () { return adapter.listCommands(sessionId); }).catch(function () { return null; })
           : Promise.resolve(null);
         listing.then(function (items) {
+          // A closed sheet or a changed conversation cancels admission; a
+          // command already admitted is never automatically repeated.
+          if (!current()) return null;
           if (items) {
             var names = (items || []).map(function (item) {
-              return typeof item === 'string' ? item.replace(/^\//, '') : String((item && item.name) || '');
+              return (typeof item === 'string' ? item : String((item && (item.name || item.command)) || '')).replace(/^\//, '').toLowerCase();
             });
             if (names.length && names.indexOf('compact') < 0) {
               body.textContent = t('电脑上的这个 DSH 没有 /compact 命令。') +
@@ -2647,25 +3074,159 @@
               return null;
             }
           }
-          return adapter.runCommand(state.sessionId, '/compact');
+          body.textContent = t('压缩上下文：正在压缩…');
+          return adapter.runCommand(sessionId, '/compact');
         }).then(function (value) {
           if (value === null) { finish(); return; }
-          if (value && value.result && value.result.kind === 'error') {
-            body.textContent = String(value.result.text || '').slice(0, 600) || t('压缩上下文：完成');
+          if (!current()) { finish(); return; }
+          var result = value && value.result;
+          if (result && (result.kind === 'error' || result.kind === 'failure')) {
+            body.textContent = t('压缩上下文失败。') + (typeof result.text === 'string' && result.text ? ' ' + result.text.slice(0, 600) : '');
             finish();
             return;
           }
-          body.textContent = (value && value.result && value.result.text)
-            ? String(value.result.text).slice(0, 600) : t('压缩上下文：完成');
+          body.textContent = result && typeof result.text === 'string' && result.text
+            ? t('电脑回应：') + ' ' + result.text.slice(0, 600)
+            : t('压缩请求已发送，完成状态未确认，请在电脑端核对。');
           finish();
         }).catch(function (err) {
-          body.textContent = t('压缩上下文：现在不能压缩（正在执行或已经在压缩）') +
-            '（' + ((err && err.message) || '') + '）';
+          if (current()) body.textContent = safeError(err, t('压缩上下文失败。'));
           finish();
         });
       };
       if (host) render(host);
       else overlay(t('压缩上下文'), render);
+    }
+    // ── 授权范围（DSH 的「权限预设」）──────────────────────────────────────────
+    //
+    // 使用者提的：「目前的手机版 dsh 没有授权范围，增加」。
+    //
+    // 电脑端界面上这一项叫「权限」，包是 @deepseek-ai/dsh-client-ui-permission-presets，
+    // 三档内置预设（值和 DSH 的 SandboxMode 一一对应）：
+    //     仅可查看       read-only
+    //     工作区内修改   workspace-write
+    //     完全权限       danger-full-access
+    // 另有实验性的 auto（界面写 Auto review，带 EXP 标记）—— 默认装配里不挂，
+    // 所以这里也不提供，免得给出一个电脑端都没有的选项。
+    //
+    // ★ 做法**不是**把 `/permission xxx` 当消息发出去。理由和压缩上下文那条一样
+    //   （见上面 runCompact 的注释）：那要指望宿主去解析斜杠命令，形状完全没保证。
+    //   走 DSH 自己的命令接口 commands/execute，也就是适配器里现成的 runCommand()。
+    //
+    // ★ 「完全权限」要二次确认。电脑端选它时也要求确认（原话：
+    //   「通过可见选项选择完全权限或 Auto 时，需要分别确认对应风险」），
+    //   手机端不该比电脑端更宽松 —— 这一项意味着减少确认步骤、可直接执行敏感操作。
+    var PERMISSION_PRESETS = [
+      { id: 'read-only', label: '仅可查看', hint: '只能看，不能改文件、不能执行命令。' },
+      { id: 'workspace-write', label: '工作区内修改', hint: '可以在项目目录里改文件、执行命令；越界操作仍会询问。' },
+      { id: 'danger-full-access', label: '完全权限', hint: '减少确认步骤，可直接执行敏感操作、修改文件、运行外部命令。', danger: true }
+    ];
+    /** 这一档需不需要用户先确认风险 */
+    function permissionNeedsConfirm(id) { return id === 'danger-full-access'; }
+
+    /**
+     * 切换当前会话的授权范围。
+     *
+     * @param {Element} [host] 就地显示结果的地方；不传就自己开一个面板。
+     * @param {Function} [done] 结束回调（恢复按钮可点）。
+     */
+    function showPermissions(host, done) {
+      var finish = function () { if (typeof done === 'function') done(); };
+      if (!state.sessionId) { setSidebar(true); finish(); return; }
+      var sessionId = state.sessionId;
+      var contextVersion = state.contextVersion;
+      var render = function (body) {
+        var pending = false;
+        var readRequest = 0;
+        var buttons = [];
+        function current() {
+          return !state.disposed && state.sessionId === sessionId &&
+            state.contextVersion === contextVersion && body.isConnected;
+        }
+        body.replaceChildren();
+        if (typeof adapter.runCommand !== 'function') {
+          body.append(el('p', 'panel-line', t('此版本不支持切换授权范围，请在电脑端操作。')));
+          finish();
+          return;
+        }
+        body.append(el('p', 'panel-line',
+          t('选择这个对话的授权范围。只有电脑返回当前配置后，才会显示已确认。')));
+
+        var active = el('p', 'panel-line', t('当前授权范围未确认。'));
+        active.setAttribute('role', 'status');
+        body.append(active);
+        var status = el('p', 'panel-line', '');
+        status.setAttribute('role', 'status');
+        function readCurrent() {
+          var request = ++readRequest;
+          if (typeof adapter.readPermission !== 'function') return Promise.resolve(null);
+          return Promise.resolve().then(function () { return adapter.readPermission(sessionId); }).then(function (value) {
+            if (!current() || request !== readRequest) return null;
+            var id = typeof value === 'string' ? value : value && value.presetId;
+            var preset = PERMISSION_PRESETS.find(function (item) { return item.id === id; });
+            if (!preset) throw new Error(t('当前授权范围未确认。'));
+            active.textContent = t('电脑当前授权范围：') + ' ' + t(preset.label);
+            buttons.forEach(function (button) { button.setAttribute('aria-pressed', String(button.dataset.preset === preset.id)); });
+            return preset.id;
+          }).catch(function () {
+            if (current() && request === readRequest) {
+              active.textContent = t('当前授权范围未确认。');
+              buttons.forEach(function (button) { button.removeAttribute('aria-pressed'); });
+            }
+            return null;
+          });
+        }
+        PERMISSION_PRESETS.forEach(function (preset) {
+          var row = el('div', 'srow');
+          var btn = el('button', 'screen-action', t(preset.label));
+          btn.type = 'button';
+          btn.dataset.preset = preset.id;
+          buttons.push(btn);
+          if (preset.danger) btn.classList.add('danger');
+          btn.addEventListener('click', function () {
+            if (!current() || pending) return;
+            var go = function () {
+              if (!current() || pending) return;
+              pending = true;
+              readRequest++;
+              buttons.forEach(function (button) { button.disabled = true; });
+              status.textContent = t('正在切换…');
+              Promise.resolve().then(function () {
+                if (!current()) return null;
+                return adapter.runCommand(sessionId, '/permission ' + preset.id);
+              }).then(function (value) {
+                if (!current()) return null;
+                var result = value && value.result;
+                if (result && (result.kind === 'error' || result.kind === 'failure')) {
+                  throw new Error(typeof result.text === 'string' && result.text || t('授权范围切换失败。'));
+                }
+                return readCurrent().then(function (currentPreset) {
+                  if (!current()) return;
+                  status.textContent = currentPreset === preset.id
+                    ? t('已确认当前授权范围：') + ' ' + t(preset.label)
+                    : t('授权请求已发送，是否生效未确认，请在电脑端核对。');
+                });
+              }).catch(function (err) {
+                if (current()) status.textContent = safeError(err, t('授权范围切换失败。'));
+              }).finally(function () {
+                pending = false;
+                if (current()) buttons.forEach(function (button) { button.disabled = false; });
+              });
+            };
+            if (!permissionNeedsConfirm(preset.id)) { go(); return; }
+            // 二次确认。用它自己的话讲清代价，不用含糊的"确定吗"。
+            if (window.confirm(t('确认启用完全权限？') + '\n\n' + t(preset.hint) +
+                '\n\n' + t('仅建议在你信任后续任务时使用。'))) go();
+          });
+          row.append(el('span', 'k', t(preset.label)), btn);
+          body.append(row);
+          body.append(el('p', 'panel-line', t(preset.hint)));
+        });
+        body.append(status);
+        readCurrent();
+      };
+      if (host) render(host);
+      else overlay(t('授权范围'), render, refs.composerPicks.querySelector('[data-kind="perm"]'));
     }
     // The narrow status line under the composer mirrors DSH's connection and
     // balance indicators. Codex and connection switching remain in Settings.
@@ -2820,6 +3381,7 @@
       var picks = [
         ['model', '模型', '选择模型', showModels],
         ['mode', '工具组', '工具配置', showModes],
+        ['perm', '授权范围', '选择授权范围', function () { showPermissions(); }],
         ['goal', '目标', '计划/目标', showGoalModes]
       ];
       picks.forEach(function (pair) {
@@ -2831,7 +3393,8 @@
         holder.append(button);
       });
       composerPicksRelabel = function () {
-        holder.setAttribute('aria-label', t('模型') + ' / ' + t('工具配置') + ' / ' + t('目标'));
+        holder.setAttribute('aria-label',
+          t('模型') + ' / ' + t('工具配置') + ' / ' + t('授权范围') + ' / ' + t('目标'));
         Array.prototype.forEach.call(holder.children, function (button, index) {
           var pair = picks[index];
           var selected = pair[0] === 'model' ? state.selection.modelSelection : null;
@@ -2939,41 +3502,47 @@
     // 那一条是**一次性横幅**，而这一条要常驻，好让人随时能确认 —— 两条都有用，
     // 一条负责"当场说清楚"，一条负责"以后随时能查"。
     function hasLocalKey() {
-      try { if (window.__dshE2eeSecret) return true; } catch (err) { /* 还没解析出来 */ }
-      try { return !!(location.hash && location.hash.indexOf('k=') >= 0); } catch (err) { return false; }
+      try {
+        if (typeof window.__dshE2eeSecret === 'string' && window.__dshE2eeSecret.length >= 16) return true;
+        var key = /(?:^#|&)k=([^&]+)/.exec(location.hash || '');
+        return !!key && decodeURIComponent(key[1]).length >= 16;
+      } catch (err) { return false; }
+    }
+    function encryptionReadiness() {
+      if (!hasLocalKey()) return 'missing';
+      var e2ee = window.DshE2EE;
+      try {
+        if (!e2ee || typeof e2ee.available !== 'function' || !e2ee.available() ||
+            typeof e2ee.encryptedFetch !== 'function' ||
+            !window.WebSocket || window.WebSocket.__dshE2ee !== true ||
+            typeof window.__dshE2eeSecret !== 'string' || window.__dshE2eeSecret.length < 16) return 'unavailable';
+        var proof = typeof e2ee.proofState === 'function' ? e2ee.proofState() : null;
+        return state.connection === 'connected' && proof && proof.ok === true ? 'on' : 'pending';
+      } catch (err) { return 'unavailable'; }
     }
     function updateCryptoChip() {
+      checkLocalUploadPreviewKey();
       var node = refs.cryptoChip;
       if (!node) return;
-      var hasKey = hasLocalKey();
+      var readiness = encryptionReadiness();
       node.hidden = false;
-      node.dataset.state = hasKey ? 'on' : 'off';
-      node.textContent = hasKey ? '🔒 ' + t('已加密') : '⚠️ ' + t('缺密钥');
-      node.setAttribute('aria-label', hasKey ? t('已加密') : t('缺密钥'));
-      // 缺密钥时再去问一句**服务端到底配没配密钥**（这条端点是故意不加密的，
-      // 正因为如此它在缺密钥时也答得出来）。服务端没配 → 说明是本地/内网明文使用，
-      // 不该乱报"缺密钥"吓人；服务端配了而我们没有 → 那才是真问题，说清楚。
-      if (hasKey || state.keyState) return;
-      jsonGet('/__dsh/lite-status').then(function (data) {
-        state.keyState = data && data.needsKey ? 'missing' : (data && data.encrypted ? 'on' : 'off');
-        if (state.keyState === 'missing') {
-          node.dataset.state = 'off';
-          node.textContent = '⚠️ ' + t('缺密钥');
-        } else if (state.keyState === 'off') {
-          // 服务端压根没配密钥：就是明文（比如内网直连),如实说，不要吓人
-          node.dataset.state = 'off';
-          node.textContent = '🔓 ' + t('未加密');
-        }
-      }).catch(function () { /* 问不到就按本地判断显示 */ });
+      node.dataset.state = readiness === 'on' ? 'on' : readiness === 'pending' ? 'pending' : 'off';
+      var title = readiness === 'on' ? t('已加密') : readiness === 'missing' ? t('缺密钥') :
+        readiness === 'pending' ? t('加密待验证') : t('加密未就绪');
+      node.textContent = (readiness === 'on' ? '🔒 ' : readiness === 'pending' ? '◷ ' : '⚠️ ') + title;
+      node.setAttribute('aria-label', title);
     }
     function explainCrypto() {
-      var hasKey = hasLocalKey();
-      overlay(t('已加密'), function (body) {
-        if (hasKey) {
-          body.append(el('p', 'panel-line', t('对话内容在手机和电脑之间是加密的；中间的中继看不到正文。')));
-          return;
-        }
-        body.append(el('p', 'panel-line', t('这条地址里没有加密密钥，所以内容通道用不了 —— 发送键会变灰、对话也加载不出来。请用带 #k= 的完整地址重新打开（电脑控制台里的「复制链接」给出的那条）。')));
+      var readiness = encryptionReadiness();
+      overlay(t('连接安全'), function (body) {
+        if (readiness === 'on') {
+          body.append(el('p', 'panel-line', t('已验证内容加密通道和设备授权。被动中继只能转发密文，不能读取对话正文。')));
+          body.append(el('p', 'panel-line', t('页面代码由电脑桥提供；请使用你信任的桥和完整连接地址。加密不代表可以信任被篡改的页面。')));
+        } else if (readiness === 'pending') {
+          body.append(el('p', 'panel-line', t('加密组件已就绪，正在等待内容连接和设备授权验证。请先检查电脑和连接地址是否在线。')));
+        } else if (readiness === 'unavailable') {
+          body.append(el('p', 'panel-line', t('加密组件尚未就绪。请使用 HTTPS 完整地址，并更新或重新打开桥页面。不会改用明文发送。')));
+        } else body.append(el('p', 'panel-line', t('这条地址里没有加密密钥，所以内容通道用不了 —— 发送键会变灰、对话也加载不出来。请用带 #k= 的完整地址重新打开（电脑控制台里的「复制链接」给出的那条）。')));
         // 备选：能连上内网时，那条地址自带密钥 —— 直接给出可点的入口。
         var lan = el('button', 'screen-action', t('连接地址（内网/外网）'));
         lan.type = 'button';
@@ -2997,8 +3566,9 @@
             refs.cryptoChip.dataset.state === 'on')) clearInterval(timer);
       }, 600);
       mountTimers.push(timer);
+      mountTimers.push(setInterval(function () { if (!document.hidden) updateCryptoChip(); }, 10000));
       listen(document, 'visibilitychange', function () { if (!document.hidden) updateCryptoChip(); });
-      listen(window, 'hashchange', updateCryptoChip);
+      listen(window, 'hashchange', function () { clearDownloadUrls(); renderRecords(); updateCryptoChip(); });
     })();
 
     // 队列轮询。为什么需要它：DSH **没有**推送 inbox 投影的事件
@@ -3024,7 +3594,7 @@
     // applyAll 里会调它）重新渲染一遍。
     window.onLangChange = function () {
       try {
-        renderProjects(); renderSessions(); renderTitle(); renderRecords();
+        renderProjects(); renderSessions(); renderTitle(); renderRecords(false, true);
         renderInteractions(); renderControls(); renderUploads(); renderQueue();
         renderFiles(); renderFilePreview();
         renderGoalBar();
@@ -3074,15 +3644,32 @@
     function queueAction(id, action, node, note) {
       var sessionId = state.sessionId;
       var contextVersion = state.contextVersion;
+      var edit = action.kind === 'edit' && state.queueEditing && state.queueEditing.id === id ? state.queueEditing : null;
+      if (edit) { edit.pending = true; edit.uncertain = false; edit.submitted = action.content[0].text; edit.feedback = ''; }
       if (node) node.disabled = true;
-      adapter.updateQueueItem(sessionId, id, action).then(function () {
+      Promise.resolve().then(function () { return adapter.updateQueueItem(sessionId, id, action); }).then(function () {
         return adapter.listQueued(sessionId);
       }).then(function (items) {
         if (state.sessionId !== sessionId || state.contextVersion !== contextVersion) return;
-        if (Array.isArray(items)) state.queued = items;
+        if (!Array.isArray(items)) throw new Error(t('排队结果暂时无法确认，请重新读取。'));
+        state.queued = items;
+        if (edit && state.queueEditing === edit) {
+          var found = items.find(function (item) { return safeId(item && item.id) === id; });
+          if (!found || queueItemText(found) === edit.submitted) state.queueEditing = null;
+          else {
+            edit.pending = false; edit.uncertain = true;
+            edit.feedback = t('排队结果暂时无法确认，请重新读取。');
+          }
+        }
         renderQueue();
       }).catch(function (err) {
         if (state.sessionId !== sessionId || state.contextVersion !== contextVersion) return;
+        if (edit && state.queueEditing === edit) {
+          edit.pending = false; edit.uncertain = true;
+          edit.feedback = t('修改结果未确认，文字已保留。请先重新读取队列。');
+          renderQueue();
+          return;
+        }
         if (note) note.textContent = ((err && err.message) || '') || '';
         if (node) node.disabled = false;
       });
@@ -3102,6 +3689,7 @@
       var area = el('textarea', 'queue-edit');
       area.rows = 2;
       area.value = draft ? draft.text : queueItemText(item);
+      area.disabled = !!(draft && draft.pending);
       // 打字时只更新草稿，**不重渲染** —— 重渲染会丢焦点和光标。
       area.addEventListener('input', function () {
         if (state.queueEditing && state.queueEditing.id === id) {
@@ -3111,21 +3699,49 @@
       });
       var save = el('button', 'queue-action', t('保存'));
       save.type = 'button';
+      save.disabled = !!(draft && (draft.pending || draft.uncertain));
       save.addEventListener('click', function () {
         var value = area.value.trim();
         if (!value) { note.textContent = t('这条排队消息不能改成空的。'); return; }
         save.disabled = true;
-        state.queueEditing = null;                 // 交出去了，草稿作废
+        area.disabled = true;
+        cancel.disabled = true;
         queueAction(id, { kind: 'edit', content: [{ type: 'text', text: value }] }, save, note);
       });
       var cancel = el('button', 'queue-action', t('取消'));
       cancel.type = 'button';
+      cancel.disabled = !!(draft && draft.pending);
       cancel.addEventListener('click', function () {
         state.queueEditing = null;                 // 放弃草稿
         renderQueue();
       });
       var box = el('div', 'queue-edit-box');
       box.append(area, save, cancel);
+      if (draft && draft.feedback) note.textContent = draft.feedback;
+      if (draft && draft.uncertain) {
+        var read = el('button', 'queue-action', t('重新读取队列'));
+        read.type = 'button';
+        read.addEventListener('click', function () {
+          var sessionId = state.sessionId, contextVersion = state.contextVersion;
+          read.disabled = true;
+          area.disabled = true;
+          cancel.disabled = true;
+          Promise.resolve().then(function () { return adapter.listQueued(sessionId); }).then(function (items) {
+            if (state.sessionId !== sessionId || state.contextVersion !== contextVersion || state.queueEditing !== draft) return;
+            if (!Array.isArray(items)) throw new Error(t('排队结果暂时无法确认，请重新读取。'));
+            state.queued = items;
+            var found = items.find(function (item) { return safeId(item && item.id) === id; });
+            if (!found || queueItemText(found) === draft.submitted) state.queueEditing = null;
+            else { draft.uncertain = false; draft.feedback = t('已重新读取队列，请检查后保存。'); }
+            renderQueue();
+          }).catch(function () {
+            if (state.sessionId !== sessionId || state.contextVersion !== contextVersion || state.queueEditing !== draft) return;
+            draft.feedback = t('排队结果暂时无法确认，请重新读取。');
+            renderQueue();
+          });
+        });
+        box.append(read);
+      }
       // 重建之后把焦点和光标放回原处 —— 否则每次自动刷新都像"被打断了一下"
       if (draft) {
         setTimeout(function () {
@@ -3226,8 +3842,9 @@
     // 流式输出时更是眼看着新内容在下面刷。做成右下角的浮动按钮 ——
     // **离底部远了才出现**，不挡视线；点一下回到底部。
     //
-    // Place it at the bottom of the scrolling record area. Composer height and
-    // the controls above it vary, so a fixed viewport offset overlaps them.
+    // Place it at the bottom of a roomy record area. If goal/queue/error panels
+    // leave less than 176px for history, dock it in the existing tab bar so it
+    // cannot cover the transcript's copy/file controls.
     (function installJumpToBottom() {
       var list = refs.records;
       if (!list) return;
@@ -3236,13 +3853,19 @@
       jump.hidden = true;
       keep(jump);
       refs.chat.append(jump);
+      var tabs = refs.tabConversation && refs.tabConversation.parentNode;
       function atBottom() { return list.scrollHeight - list.scrollTop - list.clientHeight < 120; }
       function position() {
         var chatBox = refs.chat.getBoundingClientRect();
         var listBox = list.getBoundingClientRect();
-        jump.style.bottom = Math.max(12, Math.round(chatBox.bottom - listBox.bottom + 12)) + 'px';
+        var docked = !!tabs && listBox.height < 176;
+        jump.classList.toggle('is-docked', docked);
+        if (tabs) tabs.classList.toggle('has-docked-jump', docked && !jump.hidden);
+        var parent = docked ? tabs : refs.chat;
+        if (jump.parentNode !== parent) parent.append(jump);
+        jump.style.bottom = docked ? '' : Math.max(12, Math.round(chatBox.bottom - listBox.bottom + 12)) + 'px';
       }
-      function refresh() { position(); jump.hidden = atBottom(); }
+      function refresh() { jump.hidden = atBottom(); position(); }
       listen(list, 'scroll', refresh);
       listen(window, 'resize', refresh);
       jump.addEventListener('click', function () {
@@ -3264,6 +3887,7 @@
       refresh();
     })();
     listen(refs.railSearch, 'click', function () {
+      closeSettingsMenu();
       var opening = refs.search.hidden;
       refs.search.hidden = !opening;
       refs.railSearch.setAttribute('aria-pressed', String(opening));
@@ -3278,6 +3902,7 @@
     listen(refs.sidebarClose, 'click', function () { setSidebar(false); });
     listen(refs.sidebarBackdrop, 'click', function () { setSidebar(false); });
     function openProjectModal() {
+      closeSettingsMenu();
       projectMessage('', false);
       refs.modal.hidden = false;
       refs.projectPath.focus();
@@ -3334,7 +3959,14 @@
     listen(refs.uploadInput, 'change', uploadFiles);
     listen(refs.input, 'input', function () { saveCurrentDraft(); renderControls(); });
     listen(refs.input, 'keydown', function (event) {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); refs.composer.requestSubmit(); }
+      if (event.key !== 'Enter' || event.isComposing) return;
+      var shortcut = event.ctrlKey || event.metaKey;
+      var mobileInput = window.innerWidth <= 700 || navigator.maxTouchPoints > 0 ||
+        (typeof window.matchMedia === 'function' && window.matchMedia('(pointer:coarse)').matches);
+      // The phone keyboard's Return inserts a newline. Sending stays an explicit
+      // button action; Ctrl/Cmd+Enter remains an intentional keyboard shortcut.
+      if (!shortcut && (mobileInput || event.shiftKey)) return;
+      event.preventDefault(); refs.composer.requestSubmit();
     });
     listen(document, 'keydown', function (event) {
       if (event.key !== 'Escape') return;
@@ -3349,12 +3981,14 @@
         refs.railSettings.setAttribute('aria-expanded', 'false');
       } else if (!refs.search.hidden) refs.railSearch.click();
     });
-    var classic = new URL(location.href);
-    if (/\/dsh-lite(?:\.html)?$/.test(classic.pathname)) classic.pathname = '/';
-    classic.searchParams.set('target', 'dsh');
-    classic.searchParams.set('view', 'classic');
-    refs.classic.href = classic.href;
-    refs.settingsClassic.href = classic.href;
+    // The upstream classic page does not use Lite's encrypted content wrapper.
+    // Keep old IDs harmless for cached markup without advertising that route.
+    [refs.classic, refs.settingsClassic].forEach(function (link) {
+      if (!link) return;
+      link.hidden = true;
+      link.removeAttribute('href');
+      link.setAttribute('aria-hidden', 'true');
+    });
     renderProjects(); renderSessions(); renderTitle(); renderInteractions(); renderControls();
     setSidebar(true);
     connect();

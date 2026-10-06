@@ -100,7 +100,9 @@ try {
   // cloudflared never enter this fixture.
   const names = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT }).toString('utf8').split('\0').filter(Boolean);
   // This explicit public dependency also permits testing before git staging.
-  if (!names.includes('scripts/windows-shortcut.js')) names.push('scripts/windows-shortcut.js');
+  for (const dependency of ['scripts/windows-shortcut.js', 'desktop/brand-artwork.js', 'pwa/pocket-bridge.svg', 'pwa/icon-maskable.png']) {
+    if (!names.includes(dependency)) names.push(dependency);
+  }
   for (const name of names) {
     const dest = path.join(source, name);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -211,7 +213,7 @@ try {
     const link = path.join(home, 'Desktop', 'Pocket Bridge.lnk');
     assert(fs.existsSync(link), 'isolated desktop shortcut missing');
     assertShortcutFields(shortcutFields(link), path.join(desktop, 'open-desktop.vbs'), link, 7,
-      'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex');
+      'Pocket Bridge — Use DeepSeek Harness on your Windows PC from a phone browser');
   });
 
   await check('autostart shortcut points to the original launcher, not a copied batch file', () => {
@@ -248,7 +250,7 @@ try {
       { cwd: unicodeSource, env });
     assert.strictEqual(installedDesktop.status, 0, installedDesktop.stdout + installedDesktop.stderr);
     assertShortcutFields(shortcutFields(desktopLink), path.join(unicodeDesktop, 'open-desktop.vbs'), desktopLink, 7,
-      'Pocket Bridge — 在手机浏览器使用本机的 DeepSeek Harness 或 Codex');
+      'Pocket Bridge — Use DeepSeek Harness on your Windows PC from a phone browser');
     const script = path.join(unicodeSource, 'scripts', 'install-autostart.js');
     const installedAuto = run(process.execPath, [script, 'install'], { cwd: unicodeSource, env });
     assert.strictEqual(installedAuto.status, 0, installedAuto.stdout + installedAuto.stderr);

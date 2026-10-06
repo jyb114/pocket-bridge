@@ -4,9 +4,21 @@
 // need a DSH HTTP fingerprint before they become a running web target.
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
+const { Worker } = require('worker_threads');
 const CACHE_TTL_MS = 5000;
 let installationCache = null;
+let installationPending = null, installationGeneration = 0;
+const INVENTORY_OPTIONS = { encoding: 'utf8', timeout: 8000, maxBuffer: 4 * 1024 * 1024,
+  windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] };
+const INSTALLATION_TIMEOUT_MS = 65000;
+// config's legacy finder has bounded synchronous process/registry/shortcut
+// probes. Keep its exact cold discovery semantics off the gateway event loop.
+const INSTALLATION_WORKER = `
+  const { parentPort, workerData } = require('worker_threads');
+  try { parentPort.postMessage(require(workerData.modulePath).detectInstallation(workerData.config)); }
+  catch (_) { parentPort.postMessage(null); }
+`;
 
 function configKey(config) { return JSON.stringify([config.dshPort || 0, config.dshMode || 'auto', config.dshExecutable || '',
   config.dshWebExecutable || '', config.dshWebEntry || '', config.dshWebArguments || ['web', '--no-open']]); }
@@ -73,34 +85,69 @@ function classifyProcess(record = {}, deps = {}) {
   return { ...parsed, pid, version, versionSource, source: 'process' };
 }
 
+function processQuery() {
+  const filter = "Name='DeepSeek Harness.exe' OR Name='dsh-desktop.exe' OR Name='node.exe' OR Name='bun.exe' OR Name='npm.exe' OR Name='npx.exe' OR Name='dsh.exe'";
+  // Windows PowerShell otherwise writes the system code page to pipes. Node
+  // decodes UTF-8, corrupting non-ASCII installation paths before validation.
+  return '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; ' +
+    'Get-CimInstance Win32_Process -Filter "' + filter + '" | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
+}
+
+function parseWindowsProcesses(out) {
+  const raw = JSON.parse(out);
+  return (Array.isArray(raw) ? raw : [raw]).filter(Boolean).map(p => ({
+    pid: p.ProcessId, name: p.Name, executablePath: p.ExecutablePath, commandLine: p.CommandLine
+  }));
+}
+
+function parsePosixProcesses(namesText, argsText) {
+  const names = new Map(String(namesText).split(/\r?\n/).flatMap(line => {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/);
+    return match ? [[Number(match[1]), match[2].trim()]] : [];
+  }));
+  return String(argsText).split(/\r?\n/).flatMap(line => {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/), exe = match && names.get(Number(match[1]));
+    return match && exe ? [{ pid: Number(match[1]), name: paths(exe).basename(exe), executablePath: exe, commandLine: match[2] }] : [];
+  });
+}
+
 function processInventory(deps = {}) {
   const exec = deps.execFileSync || execFileSync, platform = deps.platform || process.platform;
-  const options = { encoding: 'utf8', timeout: 8000, maxBuffer: 4 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] };
   try {
     if (platform === 'win32') {
-      const filter = "Name='DeepSeek Harness.exe' OR Name='dsh-desktop.exe' OR Name='node.exe' OR Name='bun.exe' OR Name='npm.exe' OR Name='npx.exe' OR Name='dsh.exe'";
-      // Windows PowerShell otherwise writes the system code page to pipes. Node
-      // decodes UTF-8, corrupting non-ASCII installation paths before validation.
-      const script = '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; ' +
-        'Get-CimInstance Win32_Process -Filter "' + filter + '" | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
-      const raw = JSON.parse(exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], options));
-      return (Array.isArray(raw) ? raw : [raw]).filter(Boolean).map(p => ({
-        pid: p.ProcessId, name: p.Name, executablePath: p.ExecutablePath, commandLine: p.CommandLine
-      }));
+      return parseWindowsProcesses(exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', processQuery()], { ...INVENTORY_OPTIONS }));
     }
-    const names = new Map(String(exec('ps', ['-ww', '-eo', 'pid=,comm='], options)).split(/\r?\n/).flatMap(line => {
-      const match = line.match(/^\s*(\d+)\s+(.+)$/);
-      return match ? [[Number(match[1]), match[2].trim()]] : [];
-    }));
-    return String(exec('ps', ['-ww', '-eo', 'pid=,args='], options)).split(/\r?\n/).flatMap(line => {
-      const match = line.match(/^\s*(\d+)\s+(.*)$/), exe = match && names.get(Number(match[1]));
-      return match && exe ? [{ pid: Number(match[1]), name: paths(exe).basename(exe), executablePath: exe, commandLine: match[2] }] : [];
-    });
+    return parsePosixProcesses(exec('ps', ['-ww', '-eo', 'pid=,comm='], { ...INVENTORY_OPTIONS }),
+      exec('ps', ['-ww', '-eo', 'pid=,args='], { ...INVENTORY_OPTIONS }));
+  } catch (_) { return []; }
+}
+
+function executeFile(exec, file, args, options) {
+  return new Promise((resolve, reject) => {
+    exec(file, args, options, (error, out) => error ? reject(error) : resolve(out));
+  });
+}
+
+async function processInventoryAsync(deps = {}) {
+  const exec = deps.execFile || execFile, platform = deps.platform || process.platform;
+  try {
+    if (platform === 'win32') return parseWindowsProcesses(await executeFile(exec, 'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', processQuery()], { ...INVENTORY_OPTIONS }));
+    const [names, args] = await Promise.all([
+      executeFile(exec, 'ps', ['-ww', '-eo', 'pid=,comm='], { ...INVENTORY_OPTIONS }),
+      executeFile(exec, 'ps', ['-ww', '-eo', 'pid=,args='], { ...INVENTORY_OPTIONS })
+    ]);
+    return parsePosixProcesses(names, args);
   } catch (_) { return []; }
 }
 
 function scanProcesses(deps = {}) {
   const records = deps.processes || processInventory(deps);
+  return records.map(p => classifyProcess(p, deps)).filter(Boolean).sort((a, b) => a.pid - b.pid);
+}
+
+async function scanProcessesAsync(deps = {}) {
+  const records = deps.processes || await processInventoryAsync(deps);
   return records.map(p => classifyProcess(p, deps)).filter(Boolean).sort((a, b) => a.pid - b.pid);
 }
 
@@ -201,6 +248,56 @@ function detectInstallation(config, deps = {}) {
   return value;
 }
 
+function noInstallation() {
+  return { installed: false, kind: null, version: null, source: null,
+    profile: 'unsupported', supported: false, capabilities: {}, reason: null,
+    canStart: false, launch: null, desktop: null, cli: null };
+}
+
+function installationInWorker(config) {
+  // Never transfer the gateway's authentication/configuration fields to this
+  // read-only worker. Only the existing installation finder's inputs are used.
+  const input = { dshPort: config.dshPort, dshMode: config.dshMode,
+    dshExecutable: config.dshExecutable, dshWebExecutable: config.dshWebExecutable,
+    dshWebEntry: config.dshWebEntry, dshWebArguments: config.dshWebArguments };
+  return new Promise(resolve => {
+    let worker, timer, settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      resolve(value || noInstallation());
+    };
+    try {
+      worker = new Worker(INSTALLATION_WORKER, { eval: true, workerData: { modulePath: __filename, config: input } });
+      worker.once('message', finish);
+      worker.once('error', () => finish(null));
+      worker.once('exit', () => finish(null));
+      // The legacy query deadlines total at most 59 seconds. This bounds the
+      // worker itself as well; termination never signals a discovered DSH app.
+      timer = setTimeout(() => { finish(null); worker.terminate().catch(() => {}); }, INSTALLATION_TIMEOUT_MS);
+    } catch (_) { finish(null); }
+  });
+}
+
+async function detectInstallationAsync(config, deps = {}) {
+  config = config || (deps.loadConfig || (() => require('./config').loadConfig()))();
+  // Injectable filesystem/finder fixtures cannot be transferred to a worker.
+  // They remain isolated from production caches and do not execute real OS scans.
+  if (Object.keys(deps).length) return computeInstallation(config, deps);
+  const key = configKey(config), time = Date.now();
+  if (installationCache && installationCache.key === key && time - installationCache.at < CACHE_TTL_MS) return installationCache.value;
+  if (installationPending && installationPending.key === key) return installationPending.promise;
+  const started = installationGeneration;
+  const work = installationInWorker(config).then(value => {
+    if (installationPending && installationPending.promise === work && started === installationGeneration) {
+      installationCache = { key, at: Date.now(), value };
+    }
+    return value;
+  }).finally(() => { if (installationPending && installationPending.promise === work) installationPending = null; });
+  installationPending = { key, promise: work };
+  return work;
+}
+
 function publicCandidate(candidate) {
   return { kind: candidate.kind, pid: candidate.pid || null, port: candidate.port || null,
     version: candidate.version || null, profile: candidate.profile || 'unsupported',
@@ -224,16 +321,15 @@ function createRuntimeResolver(deps = {}) {
   const now = deps.now || Date.now;
   const ttl = deps.ttlMs === undefined ? CACHE_TTL_MS : deps.ttlMs;
   const loadConfig = deps.loadConfig || (() => require('./config').loadConfig());
-  const scan = deps.scanProcesses || (() => scanProcesses(deps));
+  const scan = deps.scanProcesses || (() => scanProcessesAsync(deps));
   // Lazy import avoids discover -> runtime -> discover initialization cycles.
-  const portsOf = deps.listeningPortsOf || ((pids, options) => require('./discover').listeningPortsOf(pids, options));
+  const portsOf = deps.listeningPortsOf || ((pids, options) => require('./discover').listeningPortsOfAsync(pids, options, deps));
   const probe = deps.probeDshRuntime || ((input) => (deps.adapter || adapter()).probeDshRuntime(input, { fs: deps.fs || fs }));
-  const installation = deps.detectInstallation || ((config) => detectInstallation(config, deps));
+  const installation = deps.detectInstallation || ((config) => detectInstallationAsync(config, deps));
   let cached = null, cachedKey = null, cachedAt = 0, pending = null, pendingKey = null, previous = null, generation = 0;
 
   async function discover(config) {
-    const installed = installation(config);
-    const processes = await scan();
+    const [installed, processes] = await Promise.all([installation(config), scan()]);
     const owners = await portsOf(processes.map(record => record.pid), { withOwners: true });
     const byPid = new Map(processes.map(record => [record.pid, record]));
     const inputs = [];
@@ -306,16 +402,21 @@ function createRuntimeResolver(deps = {}) {
     pending = work; pendingKey = key;
     return work;
   }
-  return { resolveRuntime, detectInstallation: config => installation(config || loadConfig()),
+  return { resolveRuntime,
+    detectInstallation: config => (deps.detectInstallation || (value => detectInstallation(value, deps)))(config || loadConfig()),
+    detectInstallationAsync: config => installation(config || loadConfig()),
     peekRuntime: () => cached && now() - cachedAt < ttl ? cached : null,
     invalidateRuntime: () => {
       generation++; cached = null; cachedKey = null; cachedAt = 0; pending = null; pendingKey = null;
-      if (!deps.detectInstallation) installationCache = null;
+      if (!deps.detectInstallation) {
+        installationGeneration++; installationCache = null; installationPending = null;
+      }
     } };
 }
 
 let singleton;
 function resolver() { return singleton || (singleton = createRuntimeResolver()); }
-module.exports = { CACHE_TTL_MS, classifyProcess, scanProcesses, detectInstallation, serializeRuntime, createRuntimeResolver,
+module.exports = { CACHE_TTL_MS, classifyProcess, scanProcesses, scanProcessesAsync,
+  detectInstallation, detectInstallationAsync, serializeRuntime, createRuntimeResolver,
   resolveRuntime: (...args) => resolver().resolveRuntime(...args),
   peekRuntime: () => resolver().peekRuntime(), invalidateRuntime: () => resolver().invalidateRuntime() };

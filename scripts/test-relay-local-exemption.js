@@ -8,9 +8,9 @@ const context={requestOrigin,isOwnAddress:req=>cfg.isOwnAddress(null,req)};vm.cr
 vm.runInContext(extractFunction(source,'isLocalRequest')+'\n'+extractFunction(source,'isSelfCheck'),context);
 const server=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({local:context.isLocalRequest(req),selfCheck:context.isSelfCheck(req)}));});
 let checks=0;
-async function request(headers) {
+async function request(headers, pathname='/') {
   return new Promise((resolve, reject) => {
-    const q = http.get({hostname:'127.0.0.1',port:server.address().port,path:'/',headers}, response => {
+    const q = http.get({hostname:'127.0.0.1',port:server.address().port,path:pathname,headers}, response => {
       let body = '';
       response.on('data', chunk => { body += chunk; });
       response.on('end', () => { try { resolve(JSON.parse(body)); } catch (cause) { reject(cause); } });
@@ -20,7 +20,11 @@ async function request(headers) {
 }
 (async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));try{
  const host='127.0.0.1:'+server.address().port;
- assert.deepEqual(await request({host,'x-dsh-selfcheck':'1'}),{local:true,selfCheck:true});checks++;
+ const dshPaths=['/','/__dsh/lite-rpc','/__dsh/lite-files','/__dsh/lite-upload','/__dsh/lite-download'];
+ for(const pathname of dshPaths){
+  assert.deepEqual(await request({host,'x-dsh-selfcheck':'1'},pathname),{local:true,selfCheck:true});checks++;
+  assert.deepEqual(await request({host},pathname),{local:true,selfCheck:false});checks++;
+ }
  for(const headers of [
   {host:'remote-phone.invalid'},
   {host,'cf-connecting-ip':'203.0.113.77'},
@@ -30,6 +34,6 @@ async function request(headers) {
   {host,'x-forwarded-host':'remote-phone.invalid'},
   {host,forwarded:'for=203.0.113.77;host=remote-phone.invalid'},
   {host:'localhost:'+server.address().port,'cf-connecting-ip':'203.0.113.77'}
- ]){assert.deepEqual(await request({...headers,'x-dsh-selfcheck':'1'}),{local:false,selfCheck:false});checks++;}
+ ])for(const pathname of dshPaths){assert.deepEqual(await request({...headers,'x-dsh-selfcheck':'1'},pathname),{local:false,selfCheck:false});checks++;}
  console.log(checks+' production local-exemption HTTP boundary checks passed; no native/device action.');
 }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}})().catch(e=>{console.error(e);process.exitCode=1;});

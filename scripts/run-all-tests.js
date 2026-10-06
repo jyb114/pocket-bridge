@@ -50,6 +50,7 @@ const NEEDS = [
 function listScripts() {
   const names = fs.readdirSync(SCRIPTS)
     .filter((f) => /\.js$/.test(f))
+    .filter((f) => require('./release-profile.js').isCurrentTest(f))
     .filter((f) => /^test-.*\.js$/.test(f) || /^(self-check|browser-check|security-audit|similarity-audit|check-frontend)\.js$/.test(f))
     .sort();
   return names;

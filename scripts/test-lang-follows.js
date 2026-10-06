@@ -166,8 +166,7 @@ function run(env) {
   //    说英文出来一堆同音错字。voice.js 本来就支持 o.lang，只是没人传。
   {
     const boot = fs.readFileSync(path.join(BASE, 'pwa', 'boot.js'), 'utf8');
-    const codex = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8');
-    for (const [name, src] of [['boot.js（DSH 页的麦克风）', boot], ['codex.html（Codex 页的麦克风）', codex]]) {
+    for (const [name, src] of [['boot.js（DSH 页的麦克风）', boot]]) {
       ok(`${name}：不再写死 zh-CN`, !/lang:\s*'zh-CN'/.test(src), '还写死着');
       ok(`${name}：语音语言由 voiceLang() 决定`, /lang:\s*voiceLang\(\)/.test(src));
       ok(`${name}：有 voiceLang() 的定义`, /function voiceLang\(/.test(src));

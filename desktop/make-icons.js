@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { renderIcon } = require('./brand-artwork');
 
 const OUT_DIR = path.join(__dirname, 'icons');
 
@@ -226,10 +227,17 @@ function encodeIco(images) {
 
 const SIZES = [16, 20, 24, 32, 48, 64, 128, 256];
 const BRAND_PNG = path.join(OUT_DIR, 'pocket-bridge-256.png');
-const brand = decodePng(fs.readFileSync(BRAND_PNG));
+const brand = { width: 256, height: 256, rgba: renderIcon(256) };
 const baseImages = SIZES.map((size) => ({ size, rgba: resize(brand, size) }));
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
+fs.writeFileSync(BRAND_PNG, encodePng(256, 256, brand.rgba));
+const PWA_DIR = path.join(__dirname, '..', 'pwa');
+for (const [name, size, maskable] of [
+  ['icon-192.png', 192, false], ['icon-512.png', 512, false],
+  ['icon-maskable.png', 512, true], ['apple-touch-icon.png', 180, false],
+  ['icon-pocket-bridge-master.png', 512, false]
+]) fs.writeFileSync(path.join(PWA_DIR, name), encodePng(size, size, renderIcon(size, maskable)));
 
 const made = [];
 for (const [name, color] of Object.entries(COLORS)) {

@@ -14,6 +14,8 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { extractFunction } = require('./page-source.js');
+const retiredTargets = require('./retired-targets.js');
 
 const BASE = path.resolve(__dirname, '..');
 const SRC = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
@@ -52,8 +54,20 @@ console.log('[1] 新用户第一次要加载的东西（**必须放行**，否�
 const mustAllow = [
   ['/', '工作台页面'],
   ['/', '根路径'],
-  ['/dot', 'Dot empty phone shell can load its proof scripts'],
-  ['/dot/', 'Dot phone shell trailing slash'],
+  ['/index.html', 'DSH-only entry shell'],
+  ['/dsh-lite', 'Owned DSH phone shell'],
+  ['/dsh-lite.css', 'Owned phone styles'],
+  ['/dsh-lite-pin.js', 'Same-origin code pin checks'],
+  ['/dsh-lite-lang.js', 'Phone translations'],
+  ['/dsh-lite-adapter.js', 'Current DSH encrypted adapter'],
+  ['/dsh-lite-legacy.js', 'Legacy DSH encrypted adapter'],
+  ['/dsh-lite-router.js', 'Verified protocol selection'],
+  ['/dsh-lite-ui.js', 'Owned phone UI'],
+  ['/dsh-lite-switch.js', 'Direct-computer compatibility switch'],
+  ['/dsh-lite-update.js', 'Owned phone update handling'],
+  ['/dsh-directory-picker.js', 'Owned folder selection'],
+  ['/prove.js', 'Device proof helper'],
+  ['/voice.js', 'Owned voice controls'],
   ['/e2ee.js', '加密实现'],
   ['/i18n.js', '多语言模块'],
   ['/route.js', '路径角标 + 挑战应答'],
@@ -72,7 +86,7 @@ const mustAllow = [
   //   不放行的话他连门都进不去，"配对"这个功能等于废掉。
   ['/pair', '配对页（还没有钥匙的设备要从这里进来）'],
   ['/__recover', '恢复票据（换隧道地址后重新拿到凭证）'],
-  ['/go', '选择页（打开 DSH / Codex 的那个岔路口）'],
+  ['/go', 'DSH connection entry'],
   ['/__probe', '存活探测（手机端自检用，不含内容）'],
   ['/__push/vapid', '推送公钥'],
   ['/__push/subscribe', '推送订阅（隧道换地址时那条通知要靠它）'],
@@ -91,6 +105,9 @@ ok('放行 /route.js?v=2（带查询串）', isBootstrap('/route.js?v=2') === tr
 // ── ② 冒名者一条内容都不能拿到 ──────────────────────────────────────────────
 console.log('\n[2] 冒名者（只有访问密钥）想拿的内容（**必须挡住**）');
 const mustBlock = [
+  ['/dot', 'Retired Dot shell'],
+  ['/dot/', 'Retired Dot shell trailing slash'],
+  ['/codex', 'Retired Codex shell'],
   ['/codex/threads', '会话列表 —— 含真实对话预览'],
   ['/codex/file?path=C:\\x', '读文件'],
   ['/codex/queue', '发消息队列'],
@@ -104,7 +121,10 @@ const mustBlock = [
   ['/__console/status', '控制台状态'],
   ['/__routes', '路径信息'],
   ['/t/someticket', '一次性票据'],
-  ['/code-manifest.json', '代码清单']
+  ['/code-manifest.json', '代码清单'],
+  ...['lite-rpc','lite-files','lite-upload','lite-download','directories','screen-shot',
+    'lite-addresses','legacy-rpc','legacy-interactions','legacy-response','legacy-upload'].map(name =>
+    ['/__dsh/' + name, 'Authenticated DSH content channel'])
 ];
 for (const [p, why] of mustBlock) {
   ok(`挡住 ${p.padEnd(24)} ${why}`, isBootstrap(p) === false);
@@ -133,6 +153,18 @@ if (flag) {
     '★ 关着的话，隧道只要看到 /k/<密钥> 这条路径就能冒充你');
   // 打开的前提是手机端真的发得出应答、被拦了还能自愈 —— 那是另一个测试盯的
   // （test-proof-enforcement.js），这里只确认开关没被人悄悄关回去。
+}
+
+// Retired shells fail before the normal auth/bootstrap dispatcher is reached.
+// Their old URLs cannot read data or construct a retired backend accidentally.
+const entry = vm.createContext({ retiredTargets, handleRequestInner() { throw Error('retired request reached content dispatcher'); } });
+vm.runInContext(extractFunction(SRC, 'handleRequest'), entry);
+for (const url of ['/dot', '/dot/', '/dot/desktop', '/codex', '/codex/threads', '/__codex/quota',
+  '/?target=codex', '/k/SYNTHETIC?target=dot']) {
+  const res = { headers: {}, writeHead(n,h) { this.status=n; this.headers=h; }, end(v) { this.body=v; } };
+  entry.handleRequest({ method:'GET', url },res);
+  ok('Retired entry returns content-free 410: ' + url, res.status===410 &&
+    JSON.parse(res.body).code==='target-retired' && res.headers['cache-control']==='no-store');
 }
 
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===\n`);

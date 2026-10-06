@@ -12,7 +12,8 @@ const clone = value => JSON.parse(JSON.stringify(value));
 let passed = 0, failed = 0;
 
 function fixture(options = {}) {
-  const calls = { spawn: [], exec: [], kill: [], invalidations: 0, timers: 0, opened: [], closed: [], unrefs: 0 };
+  const calls = { spawn: [], exec: [], kill: [], invalidations: 0, timers: 0, opened: [], closed: [], unrefs: 0,
+    syncDetect: 0, asyncDetect: 0, detectConfigs: [], runtimeConfigs: [] };
   const files = new Map();
   const normalize = value => path.win32.normalize(String(value));
   const installed = options.installed || { installed: false, kind: null, profile: 'unsupported', launch: null };
@@ -28,8 +29,13 @@ function fixture(options = {}) {
     unlinkSync(file) { files.delete(normalize(file)); }
   };
   const runtimeApi = {
-    detectInstallation() { return clone(installed); },
-    async resolveRuntime() { return clone(runtime); },
+    detectInstallation() { calls.syncDetect++; return clone(installed); },
+    async detectInstallationAsync(config) {
+      calls.asyncDetect++;calls.detectConfigs.push(clone(config));
+      if (options.beforeDetection) await options.beforeDetection();
+      return clone(installed);
+    },
+    async resolveRuntime(config) { calls.runtimeConfigs.push(clone(config));return clone(runtime); },
     serializeRuntime(value) { return clone(value); },
     invalidateRuntime() { calls.invalidations++; },
     scanProcesses() { return clone(options.processes || []); }
@@ -89,6 +95,32 @@ async function test(title, body) {
     assert.equal(st.canStart, false); assert.equal(st.exe, null);
     const available = await f.api.available(); assert.equal(available.length, 1); assert.equal(available[0].id, 'dsh');
     assert.equal(f.calls.spawn.length, 0); assert.equal(f.calls.exec.length, 0);
+  });
+  await test('Phone status and target lists never fall back to the synchronous installation finder', async () => {
+    const f = fixture({ runtime: cliRuntime, installed: cliLaunch });
+    await f.api.dsh.status('en');await f.api.list();await f.api.list({ withStatus: false });
+    assert.equal(f.calls.syncDetect, 0);assert.equal(f.calls.asyncDetect, 4);
+    assert.equal(f.calls.spawn.length + f.calls.exec.length + f.calls.kill.length, 0);
+    const before = f.calls.syncDetect;f.api.dsh.detect();assert.equal(f.calls.syncDetect, before + 1);
+  });
+  await test('Status retains exact launch metadata and uses one config snapshot for async runtime and installation', async () => {
+    const config = { dshMode: 'web', dshPort: 19387, dshExecutable: 'D:/fixture/desktop.exe', unknownField: 'preserved' };
+    const f = fixture({ runtime: cliRuntime, installed: cliLaunch, config });
+    const st = await f.api.dsh.status('en');
+    assert.equal(st.exe, cliLaunch.launch.exe);assert.equal(st.canStart, true);
+    assert.deepEqual(f.calls.detectConfigs, [config]);assert.deepEqual(f.calls.runtimeConfigs, [config]);
+    assert.equal(st.runtime.pid, cliRuntime.pid);assert.equal(st.runtime.profile, 'remote-mux');
+  });
+  await test('An outstanding async finder yields while retaining the correct target until its verified result arrives', async () => {
+    let release;const ready = new Promise(resolve => { release = resolve; });
+    const f = fixture({ runtime: cliRuntime, installed: cliLaunch, beforeDetection: () => ready });
+    let settled = false;const pending = f.api.list().then(result => { settled = true;return result; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);assert.equal(f.calls.syncDetect, 0);assert.equal(f.calls.asyncDetect, 1);
+    release();const results = await pending;
+    assert.equal(results.length, 1);assert.equal(results[0].id, 'dsh');assert.equal(results[0].port, cliRuntime.port);
+    assert.equal(results[0].exe, cliLaunch.launch.exe);assert.equal(results[0].runtime.pid, cliRuntime.pid);
+    assert.equal(f.calls.spawn.length + f.calls.exec.length + f.calls.kill.length, 0);
   });
   await test('Runtime edition and version localize from cached status in all supported languages', async () => {
     const f = fixture({ runtime: cliRuntime }); const st = await f.api.dsh.status('zh');

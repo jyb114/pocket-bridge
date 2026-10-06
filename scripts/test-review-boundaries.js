@@ -11,17 +11,7 @@ async function check(name, run) {
   catch (e) { failed++; console.log('FAIL ' + name + ': ' + e.message); }
 }
 (async () => {
-  const html = fs.readFileSync(path.join(root, 'pwa/codex.html'), 'utf8');
-  const observed = html.slice(html.indexOf('function statusKind('), html.indexOf('function noteActivity('));
-  for (const status of ['inProgress', 'completed', 'interrupted', 'failed']) {
-    await check('unloaded history is not live control: ' + status, () => {
-      const c = { state: { resumed: true }, t: s => s, clearTimeout() {}, setTask(kind, detail) { this.task = { kind, detail }; } };
-      c.setTask = (kind, detail) => { c.task = { kind, detail }; };
-      vm.createContext(c); vm.runInContext(observed, c);
-      c.applyObservedStatus({ status: { type: 'notLoaded' } }, { id: 'old-turn', status });
-      assert.equal(c.task.kind, 'unlinked'); assert.equal(c.state.resumed, false);
-    });
-  }
+  // Native Codex status control is retired; active shared crypto guards remain below.
   for (const opcode of [frames.OP_TEXT, frames.OP_BIN]) {
     await check('encrypted upstream rejects unauthenticated first frame opcode ' + opcode, () => {
       const crypt = new WsCrypto('fixture-secret-not-a-real-key', 'decrypt');

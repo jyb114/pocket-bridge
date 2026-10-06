@@ -24,7 +24,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 /**
  * 旧版日志的候选路径。
@@ -101,55 +101,106 @@ function dshPids() {
  * 这是整个发现逻辑的支点：它问的是操作系统，不是 DSH 自己怎么说，
  * 所以 DSH 换数据目录、改日志格式、改端口策略都不会让这里失效。
  */
-function listeningPortsOf(pids, options = {}) {
-  const want = new Set(pids.map(Number));
+function portCollector(pids, options) {
+  const want = new Set(pids.map(Number).filter(pid => Number.isSafeInteger(pid) && pid > 0));
   const ports = new Set();
   const owners = new Map();
   const addPort = (pid, port) => { ports.add(port); owners.set(`${pid}:${port}`, { pid, port }); };
   const result = () => options.withOwners ? [...owners.values()] : [...ports];
-  if (!want.size) return [];
+  const windows = out => {
+    for (const line of String(out).split('\n')) {
+      if (!/LISTENING/i.test(line)) continue;
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 5 || !want.has(Number(parts[parts.length - 1]))) continue;
+      const m = String(parts[1]).match(/:(\d+)$/);
+      if (m) addPort(Number(parts[parts.length - 1]), Number(m[1]));
+    }
+  };
+  const lsof = (pid, out) => {
+    for (const line of String(out).split('\n')) {
+      const m = line.match(/TCP\s+\S*:(\d+)\s+\(LISTEN\)/);
+      if (m) addPort(pid, Number(m[1]));
+    }
+  };
+  const ss = (pid, out) => {
+    for (const line of String(out).split('\n')) {
+      // Match the complete owner PID, never pid=12 inside pid=123.
+      if (!new RegExp('\\bpid=' + pid + '(?:,|\\)|\\s|$)').test(line)) continue;
+      const m = line.match(/:(\d+)\s/);
+      if (m) addPort(pid, Number(m[1]));
+    }
+  };
+  return { want, windows, lsof, ss, result };
+}
+
+function inventoryOptions(timeout) {
+  // execFileSync already used Node's 1 MiB default for these inventories.
+  return { encoding: 'utf8', timeout, maxBuffer: 1024 * 1024,
+    windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] };
+}
+
+function listeningPortsOf(pids, options = {}) {
+  const collect = portCollector(pids, options);
+  if (!collect.want.size) return [];
 
   try {
     if (process.platform === 'win32') {
       const out = execFileSync('netstat', ['-ano'],
-        { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      for (const line of String(out).split('\n')) {
-        if (!/LISTENING/i.test(line)) continue;
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 5) continue;
-        if (!want.has(Number(parts[parts.length - 1]))) continue;
-        const m = String(parts[1]).match(/:(\d+)$/);
-        if (m) addPort(Number(parts[parts.length - 1]), Number(m[1]));
-      }
-      return result();
+        inventoryOptions(10000));
+      collect.windows(out);
+      return collect.result();
     }
 
     // macOS：lsof 一进程一次；Linux 上更常见的是 lsof 或 ss
-    for (const pid of pids) {
+    for (const pid of collect.want) {
       try {
         const out = execFileSync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-a', '-p', String(pid)],
-          { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
-        for (const line of String(out).split('\n')) {
-          const m = line.match(/TCP\s+\S*:(\d+)\s+\(LISTEN\)/);
-          if (m) addPort(pid, Number(m[1]));
-        }
+          inventoryOptions(8000));
+        collect.lsof(pid, out);
         continue;
       } catch (err) { /* 试 ss */ }
 
       try {
         const out = execFileSync('ss', ['-ltnpH'],
-          { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
-        for (const line of String(out).split('\n')) {
-          if (!line.includes(`pid=${pid}`)) continue;
-          const m = line.match(/:(\d+)\s/);
-          if (m) addPort(pid, Number(m[1]));
-        }
+          inventoryOptions(8000));
+        collect.ss(pid, out);
       } catch (err) { /* 两条路都不行就算了 */ }
     }
   } catch (err) {
     // 命令不可用
   }
-  return result();
+  return collect.result();
+}
+
+function executeFile(exec, file, args, options) {
+  return new Promise((resolve, reject) => {
+    exec(file, args, options, (error, out) => error ? reject(error) : resolve(out));
+  });
+}
+
+/** Hot runtime refreshes use asynchronous, bounded OS queries. */
+async function listeningPortsOfAsync(pids, options = {}, deps = {}) {
+  const collect = portCollector(pids, options);
+  if (!collect.want.size) return [];
+  const exec = deps.execFile || execFile, platform = deps.platform || process.platform;
+  try {
+    if (platform === 'win32') {
+      collect.windows(await executeFile(exec, 'netstat', ['-ano'], inventoryOptions(10000)));
+      return collect.result();
+    }
+    // Keep per-owner fallback and a single child at a time on POSIX. A failed
+    // lsof for one PID cannot authorize another process's listener.
+    for (const pid of collect.want) {
+      try {
+        collect.lsof(pid, await executeFile(exec, 'lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-a', '-p', String(pid)], inventoryOptions(8000)));
+        continue;
+      } catch (_) { /* Try the existing ss fallback. */ }
+      try {
+        collect.ss(pid, await executeFile(exec, 'ss', ['-ltnpH'], inventoryOptions(8000)));
+      } catch (_) { /* Neither command is available. */ }
+    }
+  } catch (_) { /* Missing command, timeout or buffer overflow is no evidence. */ }
+  return collect.result();
 }
 
 /** DSH 进程正在监听的所有端口 —— 同步，不联网。 */
@@ -206,6 +257,7 @@ module.exports = {
   probeDshHttp,
   candidatePorts,
   listeningPortsOf,
+  listeningPortsOfAsync,
   dshPids,
   logCandidates,
   parsePortFromLog,

@@ -484,16 +484,6 @@
         <div class="bv" id="v-balance">—</div>
         <div class="bh" id="balance-hint"></div>
       </div>
-      <!-- Codex 一行。
-           Codex 的额度用量需要与 DeepSeek 余额分开展示。
-           它和 DeepSeek 不是一回事 —— DeepSeek 是充值余额，Codex 走 ChatGPT
-           订阅、没有「余额」这个概念，能给的是额度用量。所以数字和说明都分开算，
-           宁可如实显示「查不到」，也不拿一个不相干的数字糊上去。 -->
-      <div class="bal">
-        <div class="bl">Codex</div>
-        <div class="bv" id="v-codex-balance">—</div>
-        <div class="bh" id="codex-balance-hint"></div>
-      </div>
     </div>
     <div class="acts" id="balance-acts"></div>
 
@@ -528,7 +518,7 @@
       <div class="hint" id="lanHttpsHint"></div>
       <div class="acts">
         <button id="btn-lanhttps-on" data-i18n="开启内网 HTTPS">开启内网 HTTPS</button>
-        <button id="btn-lanhttps-off" data-i18n="关闭（回到明文）">关闭（回到明文）</button>
+        <button id="btn-lanhttps-off" data-i18n="关闭内网 HTTPS">关闭内网 HTTPS</button>
         <button class="ghost" id="btn-tls-dir" style="display:none" data-i18n="打开证书目录">打开证书目录</button>
       </div>
       <div id="lanHttpsCert"></div>
@@ -560,16 +550,6 @@
         <button class="ghost" id="btn-diagnostic" data-i18n="导出诊断包（已脱敏）">导出诊断包（已脱敏）</button>
       </div>
 
-      <!-- 托管服务的代理只在它自己的进程里设置；独立的桌面版由用户决定。 -->
-      <div class="subhead" data-i18n="Codex 桌面版代理">Codex 桌面版代理</div>
-      <div id="codex-proxy-state" class="hint" data-i18n="正在检查…">正在检查…</div>
-      <div class="acts">
-        <button class="ghost" id="btn-codex-proxy" data-i18n="设置 Windows 用户代理变量…" style="display:none">设置 Windows 用户代理变量…</button>
-      </div>
-      <div class="hint" style="margin-top:8px" data-i18n="Pocket Bridge 只给自己管理的 Codex 服务单独传代理，不会自动改 Windows 用户变量。上方按钮会覆盖当前用户的代理变量，影响其他新启动的程序；关闭系统代理后不会自动恢复。">
-        Pocket Bridge 只给自己管理的 Codex 服务单独传代理，不会自动改 Windows 用户变量。
-        上方按钮会覆盖当前用户的代理变量，影响其他新启动的程序；关闭系统代理后不会自动恢复。
-      </div>
       <div class="hint" style="margin-top:8px" data-i18n="要把设置分享给别人时，导出这个包。包里只有设置：没有凭据、设备信息和消息内容，检测到敏感内容就不会生成。">
         要给别人才用。包里不含访问密钥、加密密钥、推送凭据、设备指纹，也不含消息正文 ——
         生成时会拿本机真实凭据回搜一遍产物，搜到就拒绝写出。
@@ -697,7 +677,8 @@ function render(data) {
   state.data = data;
   var gw = data.gateway || {};
   var targets = data.targets || [];
-  var running = targets.filter(function (t) { return t.installed && t.running; });
+  var running = targets.filter(function (t) { return t.id === 'dsh' && t.installed && t.running; });
+  var best = bestEntry(data.entries || {});
 
   // 顶部结论：一句话说清现在能不能用
   var hero = $('hero'), title = $('heroTitle'), text = $('heroText');
@@ -706,15 +687,19 @@ function render(data) {
     hero.className = 'hero bad';
     title.textContent = t('服务没在运行');
     text.textContent = t('手机现在连不上。点下面的「启动服务」把它拉起来。');
-  } else if (running.length) {
+  } else if (running.length && best) {
     title.textContent = t('手机可以连');
     text.textContent = running.length === 1
       ? t('在手机上打开下面那条地址就行 —— 不用装任何 App。')
       : t('有 {n} 个可以连。手机上打开会先问你要用哪个。', { n: running.length });
+  } else if (running.length) {
+    hero.className = 'hero mid';
+    title.textContent = t('手机入口尚未就绪');
+    text.textContent = t('手机需要 HTTPS 和完整的加密密钥。请刷新地址、开启内网 HTTPS，或使用外网 HTTPS 隧道。');
   } else {
     hero.className = 'hero mid';
     title.textContent = t('服务在运行，但没有可以连的东西');
-    text.textContent = t('DSH 和 Codex 都没在跑。在下面把它们启动起来。');
+    text.textContent = t('DSH 没在运行。在下面启动它。');
   }
 
   // 快捷操作
@@ -724,7 +709,6 @@ function render(data) {
     acts.appendChild(mkBtn(t('启动服务'), 'primary', function () { action('start-gateway', t('启动服务')); }));
   } else {
     acts.appendChild(mkBtn(t('刷新一下'), '', function () { load(); toast(t('已刷新')); }));
-    var best = bestEntry(data.entries || {});
     if (addressChanging) {
       // 空窗期：地址正在换，此刻 entries 里还是旧域名旧密钥 —— 不给复制。
       var waiting = document.createElement('button');
@@ -733,11 +717,11 @@ function render(data) {
       waiting.textContent = t('正在更换地址，请稍候…');
       acts.appendChild(waiting);
     } else if (best) {
-      acts.appendChild(mkBtn(best.plain ? t('复制手机地址（明文）') : t('复制手机地址'),
-        'primary', function () { copy(best.url, t('手机地址')); }));
+      acts.appendChild(mkBtn(t('复制手机地址'),
+        'primary', function () { if (!addressChanging) copy(best.phoneUrl, t('手机地址')); }));
       var lite = dshLiteAddress(best.url);
       if (lite && targets.some(function (target) { return target.id === 'dsh' && target.installed; })) {
-        acts.appendChild(mkBtn(t('复制 DSH 轻量版地址'), '', function () { copy(lite, t('DSH 轻量版地址')); }));
+        acts.appendChild(mkBtn(t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging) copy(lite, t('DSH 轻量版地址')); }));
       }
     }
   }
@@ -750,9 +734,7 @@ function render(data) {
   renderDevices(data.devices || []);
   renderNotify(data.notify);
   loadBalance();
-  loadCodexQuota();
   renderAdvanced(data);
-  renderCodexProxy(data.codexProxy);
   if (data.recentLog) $('logs').textContent = data.recentLog;
 
   // 动态渲染出来的文案也要跟着语言走 —— data-i18n 只在 apply() 被调用时才套上去。
@@ -771,10 +753,11 @@ function mkBtn(label, cls, fn) {
 }
 
 function renderTargets(list) {
+  list = (list || []).filter(function (target) { return target && target.id === 'dsh'; });
   var box = $('targets');
   box.innerHTML = '';
   if (!list.length) {
-    box.innerHTML = '<div class="card"><div class="hint">' + tr('没有检测到 DSH 或 Codex。') + '</div></div>';
+    box.innerHTML = '<div class="card"><div class="hint">' + tr('没有检测到 DSH。') + '</div></div>';
     return;
   }
 
@@ -782,7 +765,7 @@ function renderTargets(list) {
   list.forEach(function (t) {
     var card = document.createElement('div');
     card.className = 'card target';
-    var ico = desktopIcon(t.id === 'codex' ? 'code' : 'layers');
+    var ico = desktopIcon('layers');
     var state = !t.installed ? tr('没装')
       // 状态标签统一用「运行中 / 未运行」。
       //
@@ -811,12 +794,12 @@ function renderTargets(list) {
       }));
     } else if (t.running) {
       btns.appendChild(mkBtn(tr('打开'), '', function () {
-        window.open(t.id === 'codex' ? '/codex' : '/?target=dsh', '_blank', 'noopener,noreferrer');
+        window.open('/?target=dsh', '_blank', 'noopener,noreferrer');
       }));
       btns.appendChild(mkBtn(tr('停止'), 'ghost', function () {
         if (!confirm(tr('停止 {name} ？\n\n{note}', {
           name: t.short,
-          note: t.id === 'dsh' ? tr('DSH 自己的窗口也会关掉。') : tr('只停远程服务，Codex 桌面版不受影响。')
+          note: tr('DSH 自己的窗口也会关掉。')
         }))) return;
         targetAction(t.id, 'stop', tr('停止 {name}', { name: t.short }));
       }));
@@ -832,40 +815,48 @@ function renderTargets(list) {
  * 列表显示和「复制手机地址」按钮都从这里取。
  *
  * 以前是两处各写一遍顺序（renderEntries 里一套 add()、bestEntry 里一套 concat），
- * 结果列表把加密内网排在第一位、复制按钮却取了明文内网 —— 而**明文内网永远
- * 加不了密**（浏览器在非安全上下文里不提供 crypto.subtle），所以复制出来的地址
- * 到手机上必定显示「未加密」。使用者为此问过两次「你是不是把地址弄错了」。
+ * 手机只推荐带有唯一完整密钥的 HTTPS 入口。普通 HTTP 内网不提供手机所需的
+ * WebCrypto 安全上下文，受保护的内容会被拒绝；它只作为不可用状态保留显示。
  *
  * 当时我在 bestEntry 上写了句注释「顺序必须和 renderEntries 里保持一致」——
  * 靠注释约束的约定迟早会散。现在只有这一份，两处共用，从源头消掉这类不一致。
  */
 function entryList(e) {
   var out = [];
-  // HTTPS 那条排前面，并且标成推荐 —— 它既快又加密，在家就该用它。
-  (e.lanHttps || []).forEach(function (u) {
-    out.push({ url: u, plain: false, title: t('在家用'), primary: true,
+  (Array.isArray(e.lanHttps) ? e.lanHttps : []).forEach(function (u) {
+    var phoneUrl = dshLiteAddress(u);
+    out.push({ url: u, phoneUrl: phoneUrl, usable: !!phoneUrl, kind: 'lanHttps', plain: false, title: t('在家用'), primary: !!phoneUrl,
       note: t('同一 WiFi，既快又是加密的；第一次打开会有一次证书提示') });
   });
-  (e.lan || []).forEach(function (u) {
-    out.push({ url: u, plain: true, title: t('在家用（不加密）'),
-      note: t('最快，但这条路<b>永远</b>加不了密 —— 同一 WiFi 下别人抓包能看到内容') });
-  });
   if (e.wan) {
-    out.push({ url: e.wan, plain: false, title: t('在外面用'),
+    var phoneUrl = dshLiteAddress(e.wan);
+    out.push({ url: e.wan, phoneUrl: phoneUrl, usable: !!phoneUrl, kind: 'wan', plain: false, title: t('在外面用'),
       note: t('经 Cloudflare，任何网络都能连；内容是加密的') });
   }
+  (Array.isArray(e.lan) ? e.lan : []).forEach(function (u) {
+    out.push({ url: u, phoneUrl: '', usable: false, kind: 'lan', plain: true, title: t('普通 HTTP'),
+      note: t('普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。') });
+  });
   return out;
 }
 
 function bestEntry(e) {
-  return entryList(e)[0] || null;
+  return entryList(e).filter(function (item) { return item.usable; })[0] || null;
 }
 
 function dshLiteAddress(url) {
   try {
     var parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || !parsed.hash.includes('k=')) return '';
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return '';
+    // Match the encrypted client's fragment grammar, rejecting empty/duplicate
+    // keys rather than treating an incidental 'k=' substring as usable.
+    var fragment = parsed.hash, keys = fragment.match(/[#&]k=/g) || [];
+    var match = fragment.match(/[#&]k=([^#&]+)/);
+    if (keys.length !== 1 || !match) return '';
+    var secret = decodeURIComponent(match[1]);
+    if (secret.length < 16 || secret.length > 1024 || secret !== secret.trim() || /[\u0000-\u001f\u007f]/.test(secret)) return '';
     parsed.searchParams.set('target', 'lite');
+    parsed.searchParams.delete('view');
     return parsed.toString();
   } catch (e) { return ''; }
 }
@@ -873,81 +864,70 @@ function dshLiteAddress(url) {
 /**
  * 独立桌面版的用户级代理状态。匹配环境变量不等于能证明正在运行的客户端已继承。
  */
-function renderCodexProxy(info) {
-  var el = $('codex-proxy-state');
-  var btn = $('btn-codex-proxy');
-  if (!el || !btn) return;
-  if (!info) { el.textContent = t('正在检查…'); btn.style.display = 'none'; return; }
-  if (!info.system) {
-    el.textContent = info.staleUserProxy
-      ? t('系统代理已关闭，但 Windows 用户代理变量仍有旧值；它可能继续影响新启动的程序，请在系统设置中检查。')
-      : t('未检测到系统代理。Pocket Bridge 不会自动修改桌面版 Codex 的网络设置。');
-    el.style.color = '#ffb454';
-    btn.style.display = 'none';
-    return;
-  }
-  if (info.ok) {
-    el.textContent = t('Windows 用户代理变量与系统代理一致（{proxy}）。这不保证正在运行的桌面版已继承；如刚改动，请完整退出后重开。', { proxy: info.system });
-    el.style.color = '';
-    btn.style.display = 'none';
-    return;
-  }
-  el.textContent = t('Windows 用户代理变量与系统代理不一致。Pocket Bridge 管理的手机端服务仍使用自己的进程级代理；如需改变桌面版，请先了解下方按钮的影响。');
-  el.style.color = '#ff8a80';
-  btn.style.display = '';
-}
+
 
 function renderEntries(e) {
   var box = $('entries');
   box.innerHTML = '';
-  var items = entryList(e), byTitle = {};
-  items.forEach(function (item) { byTitle[item.title] = item; });
+  var items = entryList(e);
   function card(kind, title, subtitle, url, state, note) {
     var el = document.createElement('article');
     el.className = 'access-card ' + kind;
     // 这一条到底加没加密，直接标出来 —— 使用者要能一眼分辨，
     // 不该逼他从「HTTPS / 普通 HTTP」这种词里去猜。
     //
-    // 判据是「HTTPS **且**地址里带 #k=」。只有 HTTPS 而没带密钥的那种，
-    // 内容是明文过隧道的（实时通道还会被拒），标成「加密」就是骗人。
-    var eu = String(url || '');
-    var encOk = /^https:/i.test(eu) && eu.includes('#k=');
+    // This is link readiness, not a claim that a live connection has succeeded.
+    // Unusable addresses cannot reach phone content through a plaintext fallback.
+    var encOk = !!dshLiteAddress(url);
     el.innerHTML = '<div class="access-head"><div><span class="access-kicker">' + esc(subtitle) +
       '</span><h3>' + esc(title) + '</h3></div>' +
       '<span class="enctag" style="font-size:12px;padding:2px 8px;border-radius:999px;' +
       'margin-right:6px;white-space:nowrap;' +
       (encOk ? 'background:#12341f;color:#8ce0a8' : 'background:#3a2a12;color:#ffb454') + '">' +
-      (encOk ? t('加密') : t('明文')) + '</span>' +
+      (encOk ? t('加密') : t('手机不可用')) + '</span>' +
       '<span class="access-state ' + state.tone + '">' +
-      esc(state.label) + '</span></div><div class="address-preview" title="' + esc(url || '') + '">' +
+      esc(state.label) + '</span></div><div class="address-preview" title="' + esc(maskedEntry(url)) + '">' +
       esc(maskedEntry(url) || t('尚未就绪')) + '</div><p class="access-note">' + esc(note) + '</p>';
     return el;
   }
   function addButton(el, label, tone, fn) { el.appendChild(mkBtn(label, tone || '', fn)); }
-  var lan = byTitle[t('在家用')] || byTitle[t('在家用（不加密）')];
+  function addEntryButtons(el, phoneUrl, label) {
+    var copyButton = mkBtn(t('复制链接'), phoneUrl ? 'primary' : '', function () {
+      if (phoneUrl && !addressChanging) copy(phoneUrl, label);
+    });
+    var openButton = mkBtn(t('打开'), '', function () {
+      if (phoneUrl && !addressChanging) window.open(phoneUrl, '_blank', 'noopener,noreferrer');
+    });
+    copyButton.disabled = openButton.disabled = !phoneUrl || addressChanging;
+    el.appendChild(copyButton);el.appendChild(openButton);
+  }
+  var lan = items.filter(function (item) { return item.kind === 'lanHttps' && item.usable; })[0] ||
+    items.filter(function (item) { return item.kind === 'lanHttps' || item.kind === 'lan'; })[0];
   var lanUrl = lan && lan.url;
+  var lanLite = lan && lan.phoneUrl;
   var lanCard = card('lan-card', t('内网连接'), t('同一 Wi-Fi'), lanUrl,
-    { tone: lan && !lan.plain ? 'good' : 'warn', label: lan ? (lan.plain ? t('普通 HTTP') : 'HTTPS') : t('等待中') },
-    lan ? (lan.plain ? t('同一 Wi-Fi 内速度最快。需要更高保护时，开启 HTTPS。') : t('同一 Wi-Fi 内的加密连接。首次访问可能需确认本机证书。')) : t('先确认本机服务已启动。'));
+    { tone: lanLite ? 'good' : 'warn', label: lanLite ? 'HTTPS' : (lan ? t('手机不可用') : t('等待中')) },
+    lan ? (lan.plain ? t('普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。') :
+      (lanLite ? t('同一 Wi-Fi 内的加密连接。首次访问可能需确认本机证书。') : t('链接缺少有效的加密密钥。请刷新地址；仍不可用时，更换密钥后复制新链接。'))) : t('先确认本机服务已启动。'));
   var lanActs = document.createElement('div'); lanActs.className = 'access-actions';
-  if (lanUrl) addButton(lanActs, t('复制链接'), 'primary', function () { copy(lanUrl, t('内网连接')); });
-  var lanLite = dshLiteAddress(lanUrl);
-  if (lanLite) addButton(lanActs, t('复制 DSH 轻量版地址'), '', function () { copy(lanLite, t('DSH 轻量版地址')); });
+  addEntryButtons(lanActs, lanLite, t('内网连接'));
+  if (lanLite) addButton(lanActs, t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging) copy(lanLite, t('DSH 轻量版地址')); });
   addButton(lanActs, t('刷新当前地址'), '', function () { homeOperation(t('正在刷新当前内网地址…')); load(); });
   if (lan && lan.plain) addButton(lanActs, t('开启 HTTPS'), '', function () { $('btn-lanhttps-on').click(); });
   lanCard.appendChild(lanActs); box.appendChild(lanCard);
 
-  var wan = byTitle[t('在外面用')], wanUrl = wan && wan.url;
+  var wan = items.filter(function (item) { return item.kind === 'wan'; })[0], wanUrl = wan && wan.url;
+  var wanLite = wan && wan.phoneUrl;
   var wanCard = card('wan-card', t('外网临时通道'), 'TRY CLOUDFLARE', wanUrl,
-    { tone: wanUrl ? 'good' : 'warn', label: wanUrl ? t('可用') : t('建立中') },
-    t('无需注册即可在外网使用。地址不是永久的，重建后旧地址会失效。'));
+    { tone: wanLite ? 'good' : 'warn', label: wanLite ? t('可用') : (wanUrl ? t('手机不可用') : t('建立中')) },
+    wanUrl && !wanLite ? t('手机需要带有效密钥的 HTTPS 隧道链接。请刷新地址；仍不可用时，换新地址和密钥。') :
+      t('无需注册即可在外网使用。地址不是永久的，重建后旧地址会失效。'));
   var notice = document.createElement('div'); notice.className = 'tunnel-notice';
   notice.innerHTML = t('<b>地址变更后：</b>手机已开启系统通知的，会自动收到新的恢复链接；没开启的，在手机页面点一次“开启系统通知”。');
   wanCard.appendChild(notice);
   var wanActs = document.createElement('div'); wanActs.className = 'access-actions';
-  if (wanUrl) addButton(wanActs, t('复制链接'), 'primary', function () { copy(wanUrl, t('外网临时通道')); });
-  var wanLite = dshLiteAddress(wanUrl);
-  if (wanLite) addButton(wanActs, t('复制 DSH 轻量版地址'), '', function () { copy(wanLite, t('DSH 轻量版地址')); });
+  addEntryButtons(wanActs, wanLite, t('外网临时通道'));
+  if (wanLite) addButton(wanActs, t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging) copy(wanLite, t('DSH 轻量版地址')); });
   addButton(wanActs, t('刷新当前地址'), '', function () { homeOperation(t('正在刷新当前外网地址…')); load(); });
   addButton(wanActs, t('更换密钥'), '', function () { homeMutate('key'); });
   addButton(wanActs, t('换新地址和密钥'), '', function () { homeMutate('renew'); });
@@ -1004,28 +984,28 @@ function renderEntries(e) {
 
   // ── 「这条地址到底能干什么」 ────────────────────────────────────────────────
   //
-  // 连接地址旁应说明：目标程序运行时，手机可通过此地址操作 DSH / Codex。
+  // 连接地址旁应说明：目标程序运行时，手机可通过此地址操作 DSH。
   //
   // 一句话概括：**上面那两行地址不是「查看链接」，是遥控器。** 发到手机上打开，
-  // 就能在手机上给电脑的 DSH / Codex 下指令、看进度、批准操作。
+  // 就能在手机上给电脑的 DSH 下指令、看进度、批准操作。
   // 前提只有一个：电脑上得先把它们跑起来 —— 这一条不说清楚，使用者会以为
   // 「复制了却连不上」是地址坏了。
   var howto = document.createElement('p');
   howto.className = 'hint';
   howto.id = 'entries-howto';
   howto.style.marginTop = '12px';
-  howto.setAttribute('data-i18n', '把上面的地址发到手机打开，就能用手机操控电脑上的 DSH / Codex：发消息、看进度、批准操作。电脑上要先启动它们。');
-  howto.textContent = t('把上面的地址发到手机打开，就能用手机操控电脑上的 DSH / Codex：发消息、看进度、批准操作。电脑上要先启动它们。');
+  howto.setAttribute('data-i18n', '把上面的地址发到手机打开，就能用手机操控电脑上的 DSH：发消息、看进度、批准操作。电脑上要先启动 DSH。');
+  howto.textContent = t('把上面的地址发到手机打开，就能用手机操控电脑上的 DSH：发消息、看进度、批准操作。电脑上要先启动 DSH。');
   box.appendChild(howto);
 
-  var up = ((state.data && state.data.targets) || []).filter(function (x) { return x.installed && x.running; });
+  var up = ((state.data && state.data.targets) || []).filter(function (x) { return x.id === 'dsh' && x.installed && x.running; });
   if (!up.length) {
     var warn = document.createElement('p');
     warn.className = 'hint';
     warn.id = 'entries-no-target';
     warn.style.cssText = 'margin-top:6px;color:#ffb454';
-    warn.setAttribute('data-i18n', '先在下面「本机服务」里启动 DSH / Codex，手机连上才有东西可用。');
-    warn.textContent = t('先在下面「本机服务」里启动 DSH / Codex，手机连上才有东西可用。');
+    warn.setAttribute('data-i18n', '先在下面「本机服务」里启动 DSH，手机连上才有东西可用。');
+    warn.textContent = t('先在下面「本机服务」里启动 DSH，手机连上才有东西可用。');
     box.appendChild(warn);
   }
 }
@@ -1080,7 +1060,7 @@ function renderBalance(b) {
   var b2 = document.createElement('button');
   b2.textContent = t('刷新');
   // 两个来源一起刷 —— 它们就在同一张卡里，分开刷会让人以为另一个没生效
-  b2.onclick = function () { loadBalance(true); loadCodexQuota(true); };
+  b2.onclick = function () { loadBalance(true); };
   acts.appendChild(b2);
 }
 
@@ -1112,56 +1092,9 @@ function jsonOrExplain(r) {
   return r.json();
 }
 
-/**
- * Codex 的额度。
- *
- * 它**不是余额** —— Codex 走 ChatGPT 订阅，没有金额概念。能拿到的是
- * 「本周期额度用了几成、什么时候重置、今天用了多少 token」。
- * 所以这里显示百分比而不是 ¥，文案也说「额度」。宁可看上去和上面那行不一样，
- * 也不拿一个不相干的数字冒充余额。
- */
-function loadCodexQuota(force) {
-  fetch('/__codex/quota' + (force ? '?force=1' : ''))
-    .then(jsonOrExplain)
-    .then(renderCodexQuota)
-    .catch(function (e) { renderCodexQuota({ ok: false, error: e.message }); });
-}
 
-function renderCodexQuota(v) {
-  var el = $('v-codex-balance'), hint = $('codex-balance-hint');
-  if (!el || !hint) return;
-  el.className = 'bv';
-  hint.textContent = '';
 
-  if (!v || v.ok === false) {
-    el.textContent = '—';
-    el.className = 'bv err';
-    hint.textContent = t('读不到：{why}', { why: (v && v.error) || t('未知原因') });
-    return;
-  }
 
-  var d = v.desc;
-  if (!d) {
-    el.textContent = '—';
-    el.className = 'bv err';
-    // 连不上 app-server 是常态（没启动 Codex 时它本来就不在跑），要说清是哪种
-    var errs = (v.errors || []).join('；');
-    hint.textContent = errs ? t('读不到额度（{why}）', { why: errs }) : t('这个账号没有周期额度');
-    return;
-  }
-
-  el.textContent = d.pct + '%';
-  el.style.color = d.tone === 'bad' ? 'var(--bad)' : d.tone === 'warn' ? 'var(--warn)' : '';
-
-  // 大数字已经是百分比了，说明里不再重复一遍
-  var bits = [];
-  if (d.reached) bits.push(t('已达到上限'));
-  if (d.windowLabel) bits.push(tr(d.windowLabel));
-  if (d.reset) bits.push(tr(d.reset));
-  if (v.today && v.today.exists) bits.push(t('今天 {n} tokens', { n: fmtTokens(v.today.tokens) }));
-  hint.textContent = bits.join(t('　·　'));
-  if (v.account && v.account.planType) hint.title = t('套餐 {plan}', { plan: v.account.planType });
-}
 
 function fmtTokens(n) {
   n = Number(n) || 0;
@@ -1364,7 +1297,7 @@ function renderAdvanced(data) {
   $('lanHttpsTitle').textContent = t('内网加密：{state}', { state: lh.running ? t('已开启') : t('关闭中') });
   $('lanHttpsHint').textContent = lh.running
     ? t('同一个 WiFi 下的其他人看不到你的内容。手机上第一次打开会提示一次证书，选「继续访问」即可。')
-    : t('同一个 WiFi 下的其他人抓包就能看到你在做什么。开启后这一段会加密。');
+    : t('普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。');
   $('btn-lanhttps-on').className = lh.running ? 'primary' : '';
   $('btn-lanhttps-off').className = (!lh.running && !lh.enabled) ? 'primary' : '';
   $('btn-tls-dir').style.display = lh.certReady ? '' : 'none';
@@ -1545,7 +1478,7 @@ $('btn-lanhttps-on').onclick = function () {
   action('set-lan-https', t('开启内网 HTTPS'), { enabled: true });
 };
 $('btn-lanhttps-off').onclick = function () {
-  if (!confirm(t('关闭内网 HTTPS？\n\n内网会回到明文 —— 同一个 WiFi 下的其他人抓包就能看到你的内容。\n\n继续吗？'))) return;
+  if (!confirm(t('关闭内网 HTTPS？\n\n手机将无法通过普通 HTTP 内网访问受保护内容。请使用 HTTPS 隧道地址，或重新开启内网 HTTPS。\n\n继续吗？'))) return;
   action('set-lan-https', t('关闭内网 HTTPS'), { enabled: false });
 };
 $('btn-rotate').onclick = function () {
@@ -1554,11 +1487,6 @@ $('btn-rotate').onclick = function () {
 };
 $('btn-logs').onclick = function () { action('open-logs', t('打开日志目录')); };
 $('btn-diagnostic').onclick = function () { action('export-diagnostic', t('导出诊断包')); };
-$('btn-codex-proxy').onclick = function () {
-  if (!confirm(t('要覆盖 Windows 当前用户的代理环境变量吗？\n\n· 会改写 HTTPS_PROXY、HTTP_PROXY、ALL_PROXY、NO_PROXY\n· 不仅 Codex，其他之后启动的程序也可能受影响\n· 关闭系统代理后不会自动撤销；现有变量不会备份\n· 桌面版 Codex 需完整退出再打开，登录仍不保证成功\n\n继续吗？'))) return;
-  action('fix-codex-proxy', t('设置 Windows 用户代理变量…'), { confirm: true });
-};
-renderCodexProxy(state.data && state.data.codexProxy);
 // 刷新隧道地址：**不可逆**（地址一定变），所以确认框要把后果说清楚
 $('btn-refresh-tunnel').onclick = function () {
   if (!confirm(t('重建隧道、换一个新地址？\n\n· 新地址和现在这条**一定不一样**\n· 旧书签立刻失效；建好后自动推一条能直接点开的链接\n\n只是网卡了一下？等一会儿或刷新页面。\n确定要重建吗？'))) return;
@@ -1952,33 +1880,6 @@ if (window.DshI18n && window.DshI18n.register) {
     },
 
     // ── 脱敏诊断包 ───────────────────────────────────────────────────────
-    'Codex 桌面版代理': { en: 'Codex desktop proxy', es: 'Proxy de Codex de escritorio' },
-    '设置 Windows 用户代理变量…': { en: 'Set Windows user proxy variables…', es: 'Configurar variables de proxy del usuario de Windows…' },
-    '正在检查…': { en: 'Checking…', es: 'Comprobando…' },
-    '未检测到系统代理。Pocket Bridge 不会自动修改桌面版 Codex 的网络设置。': {
-      en: 'No system proxy was detected. Pocket Bridge does not automatically change Codex desktop network settings.',
-      es: 'No se detectó un proxy de sistema. Pocket Bridge no cambia automáticamente la configuración de red de Codex de escritorio.'
-    },
-    '系统代理已关闭，但 Windows 用户代理变量仍有旧值；它可能继续影响新启动的程序，请在系统设置中检查。': {
-      en: 'The system proxy is off, but Windows user proxy variables still have old values. They may affect newly launched programs; check your system settings.',
-      es: 'El proxy del sistema está desactivado, pero las variables de proxy del usuario de Windows conservan valores antiguos. Podrían afectar a programas nuevos; revísalas en la configuración del sistema.'
-    },
-    'Windows 用户代理变量与系统代理一致（{proxy}）。这不保证正在运行的桌面版已继承；如刚改动，请完整退出后重开。': {
-      en: 'Windows user proxy variables match the system proxy ({proxy}). This does not prove the running desktop app inherited them; if you just changed them, fully quit and reopen it.',
-      es: 'Las variables de proxy del usuario de Windows coinciden con el proxy del sistema ({proxy}). Esto no garantiza que la aplicación abierta las haya heredado; si acabas de cambiarlas, ciérrala por completo y vuelve a abrirla.'
-    },
-    'Pocket Bridge 只给自己管理的 Codex 服务单独传代理，不会自动改 Windows 用户变量。上方按钮会覆盖当前用户的代理变量，影响其他新启动的程序；关闭系统代理后不会自动恢复。': {
-      en: 'Pocket Bridge passes a proxy only to the Codex service it manages; it does not automatically change Windows user variables. The button above overwrites those variables and may affect other newly launched apps. They are not restored when the system proxy is turned off.',
-      es: 'Pocket Bridge pasa el proxy solo al servicio Codex que administra; no cambia automáticamente las variables del usuario de Windows. El botón anterior sobrescribe esas variables y puede afectar a otros programas nuevos. No se restauran al desactivar el proxy del sistema.'
-    },
-    'Windows 用户代理变量与系统代理不一致。Pocket Bridge 管理的手机端服务仍使用自己的进程级代理；如需改变桌面版，请先了解下方按钮的影响。': {
-      en: 'Windows user proxy variables differ from the system proxy. The phone-side service managed by Pocket Bridge still uses its own process-scoped proxy. Read the impact below before changing the desktop setup.',
-      es: 'Las variables de proxy del usuario de Windows difieren del proxy del sistema. El servicio móvil administrado por Pocket Bridge sigue usando su proxy de proceso. Lee las consecuencias antes de cambiar la configuración de escritorio.'
-    },
-    '要覆盖 Windows 当前用户的代理环境变量吗？\n\n· 会改写 HTTPS_PROXY、HTTP_PROXY、ALL_PROXY、NO_PROXY\n· 不仅 Codex，其他之后启动的程序也可能受影响\n· 关闭系统代理后不会自动撤销；现有变量不会备份\n· 桌面版 Codex 需完整退出再打开，登录仍不保证成功\n\n继续吗？': {
-      en: 'Overwrite the current Windows user proxy variables?\n\n· HTTPS_PROXY, HTTP_PROXY, ALL_PROXY and NO_PROXY will change\n· Other apps launched later may be affected, not just Codex\n· Turning off the system proxy will not undo this; existing values are not backed up\n· Fully quit and reopen Codex desktop; sign-in is not guaranteed\n\nContinue?',
-      es: '¿Sobrescribir las variables de proxy del usuario actual de Windows?\n\n· Cambiarán HTTPS_PROXY, HTTP_PROXY, ALL_PROXY y NO_PROXY\n· También pueden verse afectados otros programas que se inicien después, no solo Codex\n· Desactivar el proxy del sistema no revierte el cambio; no se guardan los valores anteriores\n· Cierra por completo y vuelve a abrir Codex de escritorio; el inicio de sesión no está garantizado\n\n¿Continuar?'
-    },
     '导出诊断包（已脱敏）': {
       en: 'Export diagnostics (scrubbed)',
       es: 'Exportar diagnóstico (sin datos sensibles)'
@@ -1990,9 +1891,9 @@ if (window.DshI18n && window.DshI18n.register) {
     '临时地址': { en: 'Temporary address', es: 'Dirección temporal' },
     '{n} 台': { en: '{n} devices', es: '{n} dispositivos' },
     '最近同步 {time}': { en: 'Last synced {time}', es: 'Última sincronización {time}' },
-    'DSH 和 Codex 都没在跑。在下面把它们启动起来。': {
-      en: 'Neither DSH nor Codex is running. Start one of them below.',
-      es: 'Ni DSH ni Codex están en marcha. Inicia uno de los dos abajo.'
+    'DSH 没在运行。在下面启动它。': {
+      en: 'DSH is not running. Start it below.',
+      es: 'DSH no está en marcha. Inícialo abajo.'
     },
     '启动服务': { en: 'Start service', es: 'Iniciar servicio' },
     '刷新一下': { en: 'Refresh', es: 'Actualizar' },
@@ -2014,7 +1915,25 @@ if (window.DshI18n && window.DshI18n.register) {
     '新地址已就绪：点「复制手机地址」发到手机上，重新打开一次并重存书签。': { en: 'The new address is ready: tap "Copy phone address", send it to your phone, open it once and save the bookmark again.', es: 'La dirección nueva está lista: toca «Copiar la dirección del teléfono», envíala al teléfono, ábrela una vez y vuelve a guardar el marcador.' },
     '还没等到新地址 —— 点「刷新一下」，确认地址变了再复制。': { en: 'The new address has not shown up yet — tap "Refresh" and copy only once the address has actually changed.', es: 'La dirección nueva aún no aparece: toca «Actualizar» y copia solo cuando la dirección haya cambiado.' },
     '手机地址': { en: 'Phone address', es: 'Dirección del teléfono' },
-    '没有检测到 DSH 或 Codex。': { en: 'DSH and Codex were not found.', es: 'No se ha encontrado ni DSH ni Codex.' },
+    '手机不可用': { en: 'Unavailable on phone', es: 'No disponible en el teléfono' },
+    '手机入口尚未就绪': { en: 'The phone address is not ready', es: 'La dirección del teléfono no está lista' },
+    '手机需要 HTTPS 和完整的加密密钥。请刷新地址、开启内网 HTTPS，或使用外网 HTTPS 隧道。': {
+      en: 'Your phone needs HTTPS and a complete encryption key. Refresh the address, turn on local HTTPS, or use the HTTPS internet tunnel.',
+      es: 'El teléfono necesita HTTPS y una clave de cifrado completa. Actualiza la dirección, activa HTTPS local o usa el túnel HTTPS de internet.'
+    },
+    '普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。': {
+      en: 'Plain HTTP cannot provide the protected phone connection. Turn on local HTTPS, or use the HTTPS internet tunnel address.',
+      es: 'HTTP sin cifrar no permite la conexión protegida del teléfono. Activa HTTPS local o usa la dirección HTTPS del túnel de internet.'
+    },
+    '链接缺少有效的加密密钥。请刷新地址；仍不可用时，更换密钥后复制新链接。': {
+      en: 'The link is missing a valid encryption key. Refresh the address; if it remains unavailable, change the key and copy the new link.',
+      es: 'El enlace no tiene una clave de cifrado válida. Actualiza la dirección; si sigue sin estar disponible, cambia la clave y copia el enlace nuevo.'
+    },
+    '手机需要带有效密钥的 HTTPS 隧道链接。请刷新地址；仍不可用时，换新地址和密钥。': {
+      en: 'Your phone needs an HTTPS tunnel link with a valid key. Refresh the address; if it remains unavailable, change the address and key.',
+      es: 'El teléfono necesita un enlace HTTPS del túnel con una clave válida. Actualiza la dirección; si sigue sin estar disponible, cambia la dirección y la clave.'
+    },
+    '没有检测到 DSH。': { en: 'DSH was not found.', es: 'No se ha encontrado DSH.' },
     '没装': { en: 'Not installed', es: 'No instalado' },
     '正在运行': { en: 'Running', es: 'En marcha' },
     '没在运行': { en: 'Not running', es: 'Parado' },
@@ -2025,14 +1944,10 @@ if (window.DshI18n && window.DshI18n.register) {
     '停止 {name}': { en: 'Stopping {name}', es: 'Deteniendo {name}' },
     '停止 {name} ？\n\n{note}': { en: 'Stop {name}?\n\n{note}', es: '¿Detener {name}?\n\n{note}' },
     'DSH 自己的窗口也会关掉。': { en: "DSH's own window closes too.", es: 'También se cerrará la propia ventana de DSH.' },
-    '只停远程服务，Codex 桌面版不受影响。': {
-      en: 'Only the remote service stops; the Codex desktop app is unaffected.',
-      es: 'Solo se detiene el servicio remoto; la app de escritorio de Codex no se ve afectada.'
-    },
 
     // ── 手机入口（地址列表）──────────────────────────────────────────────
-    '把上面的地址发到手机打开，就能用手机操控电脑上的 DSH / Codex：发消息、看进度、批准操作。电脑上要先启动它们。': { en: 'Send the address above to your phone and open it to drive DSH / Codex on your computer: send messages, watch progress, approve actions. Start them on the computer first.', es: 'Envía la dirección de arriba al teléfono y ábrela para controlar DSH / Codex del ordenador: enviar mensajes, ver el progreso, aprobar acciones. Antes inícialos en el ordenador.' },
-    '先在下面「本机服务」里启动 DSH / Codex，手机连上才有东西可用。': { en: 'Start DSH / Codex under “Local services” below, so your phone has something to work with.', es: 'Inicia DSH / Codex en «Servicios locales», más abajo, para que el teléfono tenga con qué trabajar.' },
+    '把上面的地址发到手机打开，就能用手机操控电脑上的 DSH：发消息、看进度、批准操作。电脑上要先启动 DSH。': { en: 'Send the address above to your phone and open it to drive DSH on your computer: send messages, watch progress, approve actions. Start them on the computer first.', es: 'Envía la dirección de arriba al teléfono y ábrela para controlar DSH del ordenador: enviar mensajes, ver el progreso, aprobar acciones. Antes inícialos en el ordenador.' },
+    '先在下面「本机服务」里启动 DSH，手机连上才有东西可用。': { en: 'Start DSH under “Local services” below, so your phone has something to work with.', es: 'Inicia DSH en «Servicios locales», más abajo, para que el teléfono tenga con qué trabajar.' },
     '在家用': { en: 'At home', es: 'En casa' },
     '同一 WiFi，既快又是加密的；第一次打开会有一次证书提示': {
       en: 'Same WiFi — fast and encrypted; the first visit shows a certificate warning',
@@ -2344,9 +2259,9 @@ if (window.DshI18n && window.DshI18n.register) {
       es: 'Cualquiera en la misma WiFi puede ver lo que haces. Si lo activas, este tramo irá cifrado.'
     },
     '开启内网 HTTPS？\n\n· 同一个 WiFi 下的人看不到你的内容\n· 手机第一次打开会提示证书，选「继续访问」\n\n继续吗？': { en: 'Turn on local HTTPS?\n\n· Nobody else on the same WiFi can see your content\n· The first time your phone opens the local address it warns about a certificate — choose “Continue”\n\nContinue?', es: '¿Activar HTTPS en la red local?\n\n· Nadie más en la misma WiFi podrá ver tu contenido\n· La primera vez que el teléfono abra la dirección local verás un aviso de certificado: elige «Continuar»\n\n¿Continuar?' },
-    '关闭内网 HTTPS？\n\n内网会回到明文 —— 同一个 WiFi 下的其他人抓包就能看到你的内容。\n\n继续吗？': {
-      en: 'Turn off local HTTPS?\n\nThe local network goes back to plain HTTP — anyone else on the same WiFi can sniff your content.\n\nContinue?',
-      es: '¿Desactivar HTTPS en la red local?\n\nLa red local vuelve a HTTP sin cifrar: cualquiera en la misma WiFi podrá ver tu contenido.\n\n¿Continuar?'
+    '关闭内网 HTTPS？\n\n手机将无法通过普通 HTTP 内网访问受保护内容。请使用 HTTPS 隧道地址，或重新开启内网 HTTPS。\n\n继续吗？': {
+      en: 'Turn off local HTTPS?\n\nYour phone will no longer be able to access protected content over plain local HTTP. Use the HTTPS tunnel address, or turn local HTTPS back on.\n\nContinue?',
+      es: '¿Desactivar HTTPS local?\n\nEl teléfono ya no podrá acceder al contenido protegido mediante HTTP local sin cifrar. Usa la dirección HTTPS del túnel o vuelve a activar HTTPS local.\n\n¿Continuar?'
     },
     '想彻底不看到那个证书提示，把这张 CA 装到手机上信任一次：<br>': {
       en: 'To get rid of that certificate warning for good, install this CA on your phone and trust it once:<br>',
@@ -2417,13 +2332,8 @@ if (window.DshI18n && window.DshI18n.register) {
       en: 'The full DSH interface from this computer, moved to your phone as is',
       es: 'La interfaz completa de DSH de este ordenador, tal cual en tu teléfono'
     },
-    'OpenAI Codex 的会话，手机上有专门的界面': {
-      en: 'Your OpenAI Codex sessions, with a dedicated interface on your phone',
-      es: 'Tus sesiones de OpenAI Codex, con una interfaz propia en el teléfono'
-    },
     '已安装，当前没在运行': { en: 'Installed, not running right now', es: 'Instalado, ahora mismo no está en marcha' },
     '没找到 DSH': { en: 'DSH not found', es: 'No se ha encontrado DSH' },
-    '没找到 Codex': { en: 'Codex not found', es: 'No se ha encontrado Codex' },
     '已安装，远程服务没在运行': { en: 'Installed, the remote service is not running', es: 'Instalado, el servicio remoto no está en marcha' },
     '固定地址（自有域名）': { en: 'fixed address (your own domain)', es: 'dirección fija (tu propio dominio)' },
     '动态地址（每次更换）': { en: 'dynamic address (changes every time)', es: 'dirección dinámica (cambia cada vez)' },

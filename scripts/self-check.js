@@ -19,13 +19,6 @@ const path = require('path');
 const http = require('http');
 const net = require('net');
 const crypto = require('crypto');
-// execFileSync 用来问 Codex 的版本号（`codex --version`）。
-//
-// ★ 这个 require 一度是漏的 —— 于是 checkCodexVersion 里那次调用每次都抛
-//   「execFileSync is not defined」，而那个 catch 又把错误吞掉了，
-//   自检常年只报一句「（读不到版本号）」，完全看不出是缺了个 require。
-//   教训是两层的：一是别漏 import，二是 **catch 里不能把错误扔掉** ——
-//   扔掉的代价是我在「超时 / 占用 / 代理」上白猜了好几轮。
 const { execFileSync } = require('child_process');
 
 const cfg = require('./config.js');
@@ -637,78 +630,12 @@ async function checkLanHttps() {
   }
 }
 
-// ── 检查 20：Codex 的版本与路径 ──────────────────────────────────────────────
 //
 // 升级这件事对这个项目有两层影响：
 //   1. CLI 装在 LocalAppData 下一个**带哈希的目录**里，升级会换目录 ——
 //      写死路径的话一次更新就废了，而且会静默地继续用旧版本
 //   2. 协议可能变。这个只能做到「发现变了」，不保证兼容
-async function checkCodexVersion() {
-  let t;
-  try { t = require('./targets.js').codex; }
-  catch (err) { record('codex-version', 'Codex 版本与路径', 'warn', `模块加载失败: ${err.message}`); return; }
 
-  const d = t.detect();
-  if (!d.installed) {
-    record('codex-version', 'Codex 版本与路径', 'warn', '没找到 Codex（这一项跳过，不影响 DSH）');
-    return;
-  }
-
-  // 版本目录是带哈希的，路径里应当有那一层 —— 说明是自动发现的
-  const autoFound = /bin[\\/][0-9a-f]{8,}/i.test(d.exe || '');
-
-  // 读版本号。
-  //
-  // ★ 失败原因必须留下来。
-  //   原来这里写的是 `catch (err) { ver = ''; }` —— 把错误**直接扔掉**了。
-  //   结果就是自检报告里只有一句「（读不到版本号）」，而单独运行
-  //   同一条命令明明能拿到版本。没有错误信息，就只能靠猜（我猜过是超时、
-  //   是文件被占用、是代理干扰），全是白费功夫。
-  let ver = '';
-  let verErr = '';
-  try {
-    ver = execFileSync(d.exe, ['--version'], { encoding: 'utf8', timeout: 12000, windowsHide: true })
-      .trim().split('\n')[0];
-  } catch (err) {
-    verErr = (err && (err.message || String(err))) || '未知错误';
-    if (err && err.stderr) verErr += ' | stderr: ' + String(err.stderr).slice(0, 120);
-  }
-
-  const file = path.join(LOG_DIR, 'codex-version.txt');
-  const prev = (() => { try { return fs.readFileSync(file, 'utf8').trim(); } catch (e) { return null; } })();
-
-  // 只写**真的版本号**。
-  //
-  // 原来是 `ver || d.exe` —— 读不到版本就把**可执行文件的路径**写进版本文件。
-  // 后果有两层：
-  //   1. 那个文件从此装的是一行路径，名字叫 version 却存着别的东西；
-  //   2. 下一次运行拿它当「上一个版本」比对，会报出
-  //      「Codex 从 C:\...\codex.exe 变成了 0.154…」这种莫名其妙的告警。
-  // 读不到就不写 —— 保留上一次的真实版本号，比写进去一行假的强。
-  if (ver) { try { fs.writeFileSync(file, ver, 'utf8'); } catch (e) { /* 写不了不影响 */ } }
-
-  if (!autoFound) {
-    record('codex-version', 'Codex 版本与路径', 'warn',
-      `可执行文件不是自动发现的（来源：${d.source}）—— 升级后可能失效`);
-    return;
-  }
-
-  // 只拿**看起来像版本号**的历史值来比。文件里可能是早期版本写进去的路径，
-  // 拿它比会报出无意义的「版本变化」。
-  const prevLooksLikeVersion = !!prev && /^[a-z-]*\s*\d+\.\d+/.test(prev) && !/[\\/]/.test(prev);
-
-  if (prevLooksLikeVersion && ver && prev !== ver) {
-    record('codex-version', 'Codex 版本与路径', 'warn',
-      `Codex 从 ${prev} 变成了 ${ver} —— 路径是自动发现的，已经跟上了；` +
-      '但协议可能有变化，建议把手机上的会话、审批、发消息各试一遍');
-    return;
-  }
-
-  record('codex-version', 'Codex 版本与路径', ver ? 'pass' : 'warn',
-    ver
-      ? `${ver}；路径自动发现，升级换了目录也能跟上（来源：${d.source}）`
-      : `读不到版本号（${verErr}）—— 不影响使用，只是升级后没法自动提醒你协议可能变了`);
-}
 
 // ── 检查 21：任务完成通知 ────────────────────────────────────────────────────
 //
@@ -926,7 +853,7 @@ function printReport() {
   await checkRouteSelection();
   await checkDevices();
   await checkLanHttps();
-  await checkCodexVersion();
+
   await checkNotifications();
   await checkSecurityBasics();
   await checkSensitiveEndpoints();

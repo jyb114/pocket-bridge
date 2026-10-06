@@ -1,0 +1,35 @@
+'use strict';
+const fs=require('fs'),path=require('path'),vm=require('vm'),http=require('http'),net=require('net'),assert=require('node:assert/strict');
+const {extractFunction,sliceBalanced}=require('./page-source.js');
+const retiredTargets=require('./retired-targets.js');
+const source=fs.readFileSync(path.join(__dirname,'mobile-proxy.js'),'utf8');
+let dispatched=0,auth=0,native=0,passed=0;
+const context=vm.createContext({retiredTargets,URL,Buffer,handleRequestInner(req,res){dispatched++;res.writeHead(204);res.end();},hasAuthCookie(){auth++;return false;},log(){},require(name){if(/codex|dot|desktop-ui-action/.test(name))native++;throw Error('no adapter may be loaded');},isLoopback:()=>true});
+for(const name of ['handleRequest','handleUpgrade','handleConsole'])vm.runInContext(extractFunction(source,name),context);
+async function request(port,url,method='GET',body){return await new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port,path:url,method,headers:body?{'content-type':'application/json'}:{}},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks).toString()}));});req.on('error',reject);req.end(body&&JSON.stringify(body));});}
+async function check(name,fn){await fn();passed++;console.log('OK '+name);}
+(async()=>{
+ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://localhost');if(u.pathname==='/__console/action'){context.handleConsole(req,res,u);return;}context.handleRequest(req,res);});
+ server.on('upgrade',(req,socket,head)=>context.handleUpgrade(req,socket,head));await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=server.address().port;
+ try{
+  const old=['/codex','/codex/','/codex.html','/codex/file','/codex/upload','/codex/threads','/codex/queue','/codex/desktop-relay','/codex/release-lock','/codex/takeover','/dot','/dot.html','/dot/desktop','/dot-guide','/__codex/quota','/k/isolated?target=codex','/?target=dot','/%63odex/desktop-relay'];
+  for(const url of old)await check('cached HTTP target is inert: '+url,async()=>{const before=dispatched;const response=await request(port,url,'POST',{action:'send',text:'synthetic draft'});assert.equal(response.status,410);assert.equal(response.headers['cache-control'],'no-store');assert.equal(response.headers['set-cookie'],undefined);const body=JSON.parse(response.body);assert.equal(body.code,'target-retired');assert.deepEqual(body.supportedTargets,['dsh']);assert.doesNotMatch(response.body,/synthetic draft|isolated-request|window|PID/);assert.equal(dispatched,before);});
+  await check('HEAD returns the same refusal metadata without a body',async()=>{const r=await request(port,'/codex','HEAD');assert.equal(r.status,410);assert.equal(r.body,'');assert(Number(r.headers['content-length'])>0);});
+  for(const url of ['/codex','/codex/ws','/dot/desktop','/?target=codex'])await check('cached WebSocket gets HTTP410 before auth/upstream: '+url,async()=>{const response=await new Promise((resolve,reject)=>{const socket=net.createConnection({host:'127.0.0.1',port});let result='';socket.setTimeout(3000,()=>socket.destroy(Error('timeout')));socket.on('connect',()=>socket.write('GET '+url+' HTTP/1.1\r\nHost: 127.0.0.1:'+port+'\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'));socket.on('data',c=>result+=c);socket.on('error',reject);socket.on('end',()=>resolve(result));});assert.match(response,/^HTTP\/1\.1 410 Gone\r\n/);assert.match(response,/Connection: close/);assert.doesNotMatch(response,/101 Switching|synthetic draft/);});
+  await check('stale local console proxy action is retired before any child launch',async()=>{const r=await request(port,'/__console/action','POST',{action:'fix-codex-proxy',confirm:true});assert.equal(r.status,410);assert.equal(JSON.parse(r.body).code,'target-retired');});
+  await check('DSH/shared request still reaches its original handler',async()=>{for(const url of ['/dsh-lite','/__dsh/lite-rpc','/api/rpc','/console','/__probe'])assert.equal((await request(port,url)).status,204);});
+  await check('no retired dependency, watchdog, observer or native action exists in the active gateway',()=>{assert.equal(auth,0);assert.equal(native,0);assert.doesNotMatch(source,/require\(['"]\.\/(?:codex-|dot-|desktop-ui-action)/);assert.doesNotMatch(source,/startCodexWatchdog\s*\(|codexPhoneEntering\s*\(|codexQueue\.|codexDesktopRelay\.|dotDesktopRuntime\./);const targets=fs.readFileSync(path.join(__dirname,'targets.js'),'utf8');assert.doesNotMatch(targets,/['"]app-server['"]|stopDesktop|const codex\s*=/);assert.match(targets,/const ALL = \[dsh\]/);});
+  await check('old target actions refuse before loading target discovery',()=>{const at=source.indexOf("if (u.pathname === '/__targets/action'"),open=source.indexOf('{',at),end=sliceBalanced(source,open,'{','}');assert(at>=0&&end>open);const action=source.slice(at,end+1);const box=vm.createContext({u:new URL('http://local/__targets/action'),req:new(require('events').EventEmitter)(),res:{writeHead(code){this.code=code;},end(value){this.body=value;}},Buffer,retiredTargets,require(){native++;throw Error('must not discover');}});box.req.method='POST';vm.runInContext('(function(){'+action+'})()',box);box.req.emit('data',Buffer.from(JSON.stringify({target:'codex',action:'stop-desktop'})));box.req.emit('end');assert.equal(box.res.code,410);assert.equal(native,0);});
+  await check('console cached lists expose only DSH and keep its real controls usable',()=>{
+    const html=fs.readFileSync(path.join(__dirname,'../pwa/console.html'),'utf8'),actions=[],opens=[];
+    function element(){return{children:[],style:{},innerHTML:'',appendChild(c){this.children.push(c);}};}
+    const list=element();const ui=vm.createContext({document:{createElement:element},$:()=>list,tr:s=>s,esc:String,desktopIcon:()=>'',mkBtn:(label,cls,fn)=>({label,onclick:fn}),targetAction:(...args)=>actions.push(args),confirm:()=>true,window:{open:(...args)=>opens.push(args)}});
+    vm.runInContext(extractFunction(html,'renderTargets'),ui);
+    ui.renderTargets([{id:'codex',installed:true,running:true,short:'Codex'},{id:'dot',installed:true,running:true,short:'Dot'},{id:'dsh',installed:true,running:true,short:'DSH'}]);
+    assert.equal(list.children.length,1);const buttons=list.children[0].children[0].children;assert.equal(buttons.length,2);buttons[0].onclick();buttons[1].onclick();assert.equal(opens[0][0],'/?target=dsh');assert.equal(actions[0][0],'dsh');assert.equal(actions[0][1],'stop');
+    assert.doesNotMatch(html,/id=["'](?:btn-codex-proxy|v-codex-balance)["']|loadCodexQuota\(|renderCodexProxy\(|fetch\(['"]\/__codex/);
+    const tray=fs.readFileSync(path.join(__dirname,'../desktop/tray.ps1'),'utf8');assert.doesNotMatch(tray,/id\s*=\s*'codex'|nm\s*=\s*'Codex'/);
+  });
+  console.log('Passed '+passed+' real isolated retirement checks; no production/native action.');
+ }finally{await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1});

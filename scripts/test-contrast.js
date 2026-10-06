@@ -41,9 +41,10 @@ function ratio(a, b) {
 function palettes(file) {
   const src = fs.readFileSync(path.join(BASE, file), 'utf8');
   const out = [];
-  for (const m of src.matchAll(/:root\{([^}]*)\}/g)) {
+  for (const m of src.matchAll(/:root\s*\{([^}]*)\}/g)) {
     const vars = {};
-    for (const v of m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6})\b/g)) vars[v[1]] = v[2];
+    for (const v of m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})\b/g)) vars[v[1]] = v[2].length === 4 ? '#' + [...v[2].slice(1)].map(c => c + c).join('') : v[2];
+    if (vars.paper && vars.ink) { vars.bg = vars.paper; vars.fg = vars.ink; vars.dim = vars.muted; }
     if (vars.bg && vars.fg) out.push({ vars, at: m.index });
   }
   return out;
@@ -58,8 +59,8 @@ function palettes(file) {
 // 那是**断言过头**，不是页面有问题。约定不同就分开声明，别用一条规则套所有页面。
 const PAGES = [
   ['pwa/console.html', [['fg', '正文'], ['dim', '次要文字'], ['dim2', '更淡的文字']], { hierarchy: true }],
-  ['pwa/codex.html', [['fg', '正文'], ['dim', '次要文字'], ['dim2', '标签文字']], { hierarchy: false }],
-  ['pwa/go.html', [['fg', '正文'], ['dim', '次要文字']], { hierarchy: false }]
+  ['pwa/go.html', [['fg', '正文'], ['dim', '次要文字']], { hierarchy: false }],
+  ['pwa/dsh-lite.css', [['fg', '正文'], ['dim', '次要文字'], ['accent', '链接']], { hierarchy: false }]
 ];
 
 console.log('\n=== 文字对比度（WCAG AA 正文 4.5:1）===\n');
@@ -94,10 +95,10 @@ for (const [file, levels, opts] of PAGES) {
   console.log('\n  焦点可见性');
   const consoleSrc = fs.readFileSync(path.join(BASE, 'pwa/console.html'), 'utf8');
   ok('  控制台有 :focus-visible 描边', /:focus-visible/.test(consoleSrc));
-  const codexSrc = fs.readFileSync(path.join(BASE, 'pwa/codex.html'), 'utf8');
+  const phoneSrc = fs.readFileSync(path.join(BASE, 'pwa/dsh-lite.css'), 'utf8');
   // 手机页是触摸优先，但接了键盘（iPad / 蓝牙键盘）也要能用
-  ok('  手机页有 :focus-visible 兜底', /:focus-visible/.test(codexSrc),
-    /:focus-visible/.test(codexSrc) ? '' : '手机页没有 —— 接了键盘就看不见焦点在哪');
+  ok('  手机页有 :focus-visible 兜底', /:focus-visible/.test(phoneSrc),
+    /:focus-visible/.test(phoneSrc) ? '' : '手机页没有 —— 接了键盘就看不见焦点在哪');
 }
 
 console.log(`\n${failed ? failed + ' 项失败' : '全部通过'}\n`);

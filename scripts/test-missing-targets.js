@@ -10,6 +10,8 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { extractFunction, sliceBalanced } = require('./page-source.js');
+const requestOrigin = require('./request-origin.js');
+const dshPhoneSurface = require('./dsh-phone-surface.js');
 const src = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
 const dictStart = src.indexOf('{', src.indexOf('const PAGE_TEXT ='));
 const dictEnd = sliceBalanced(src, dictStart, '{', '}');
@@ -27,9 +29,10 @@ function response() {
 }
 function environment(options = {}) {
   const upstream = new EventEmitter();
-  let starts = 0, codexReads = 0, refreshes = 0;
+  let starts = 0, codexReads = 0, refreshes = 0, upstreamRequests = 0;
   const box = {
-    Buffer, path, zlib, URL, Date,
+    Buffer, path, zlib, URL, Date, requestOrigin, dshPhoneSurface,
+    cfg: { isOwnAddress: (_address, req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket && req.socket.remoteAddress) },
     require(name) {
       assert.equal(name, './targets.js');
       return { codex: {
@@ -63,22 +66,23 @@ function environment(options = {}) {
     buildUpstreamHeaders: (req) => req.headers,
     dshLazyImageStore: { originalModuleUrl: () => null },
     markActivity() {}, log() {},
-    http: { request: () => upstream }
+    http: { request: () => { upstreamRequests++; return upstream; } }
   };
   vm.createContext(box);
   vm.runInContext('const PAGE_TEXT = ' + src.slice(dictStart, dictEnd + 1) + ';', box);
-  for (const name of ['normLang', 'pageText', 'readTargetCookie', 'shouldShowLauncher',
-    'launcherPage', 'serveLauncherPage', 'handleMissingDsh', 'serveCodexPage',
+  for (const name of ['isOwnAddress', 'isLocalRequest', 'normLang', 'pageText', 'readTargetCookie', 'shouldShowLauncher',
+    'launcherPage', 'serveLauncherPage', 'handleMissingDsh',
     'dshStartingPage', 'proxyRequest']) {
     const code = extractFunction(src, name);
     assert.ok(code, 'extract real ' + name);
     vm.runInContext(code, box);
   }
   const req = { method: 'GET', url: '/', lang: options.lang || 'en',
-    headers: { cookie: options.choice ? 'pb-target=' + options.choice : '' },
+    headers: { host: 'localhost:8080', cookie: options.choice ? 'pb-target=' + options.choice : '' },
+    socket: { remoteAddress: '127.0.0.1' },
     pipe() {} };
   return { box, req, upstream,
-    counts: () => ({ starts, codexReads, refreshes }) };
+    counts: () => ({ starts, codexReads, refreshes, upstreamRequests }) };
 }
 function target(id, installed = true, running = false) {
   return { id, installed, running, short: id === 'dsh' ? 'DSH' : 'Codex', blurb: 'test', note: 'test' };
@@ -101,18 +105,15 @@ function browserRender(html, list) {
 }
 (async () => {
   const routingCases = [
-    ['neither installed', {}, true],
-    ['DSH only keeps direct entry', { list: [target('dsh')] }, false],
-    ['Codex only offers Codex instead of trying DSH', { list: [target('codex')] }, true],
-    ['both installed', { list: [target('dsh'), target('codex')] }, true],
-    ['remembered available Codex', { list: [target('codex')], choice: 'codex' }, false],
-    ['uninstalled remembered Codex', { list: [target('dsh')], choice: 'codex' }, true],
-    ['uninstalled remembered DSH', { list: [target('codex')], choice: 'dsh' }, true],
-    ['running DSH outside install search', { list: [target('dsh', false, true)] }, false],
-    ['explicit upstream without install', { explicitPort: 19876 }, false],
-    ['explicit upstream with only Codex detected', { explicitPort: 19876, list: [target('codex')] }, false],
-    ['remembered explicit DSH upstream', { explicitPort: 19876, choice: 'dsh' }, false],
-    ['missing Codex cookie does not route to explicit DSH', { explicitPort: 19876, choice: 'codex' }, true]
+    ['DSH missing', {}, true],
+    ['DSH direct entry', {list:[target('dsh')]}, false],
+    ['retired cached target is not an alternative', {list:[target('codex')]}, true],
+    ['retired cached target cannot force a selector for DSH', {list:[target('dsh'),target('codex')]}, false],
+    ['legacy Codex cookie ignored for available DSH', {list:[target('dsh')],choice:'codex'}, false],
+    ['legacy Codex cookie ignored for explicit upstream', {explicitPort:19876,choice:'codex'}, false],
+    ['running DSH outside install search', {list:[target('dsh',false,true)]}, false],
+    ['explicit upstream without local install', {explicitPort:19876}, false],
+    ['remembered missing DSH shows setup', {choice:'dsh'}, true]
   ];
   for (const [label, opts, expected] of routingCases) check(label, () => {
     const h = environment(opts);
@@ -126,6 +127,19 @@ function browserRender(html, list) {
     const h = environment(); h.box.targetCache.at = 0;
     assert.equal(h.box.shouldShowLauncher(h.req), true);
     assert.equal(h.counts().refreshes, 1);
+  });
+  for (const [label, host, remote, forwarded] of [
+    ['public authority', 'fixture.trycloudflare.com', '127.0.0.1', {}],
+    ['forwarded local authority', 'localhost:8080', '127.0.0.1', { 'x-forwarded-for': '192.0.2.4' }],
+    ['LAN phone with local authority', 'localhost:8080', '192.0.2.4', {}]
+  ]) check('remote raw request cannot discover, start or forward DSH: ' + label, () => {
+    const h = environment({ dshInstalled: true, movedPort: 58348 });
+    h.req.headers = { host, ...forwarded }; h.req.socket.remoteAddress = remote;
+    h.req.url = '/api/session/projections'; const res = response();
+    h.box.proxyRequest(h.req, res);
+    assert.equal(res.status, 410); assert.equal(JSON.parse(res.body).code, 'dsh-classic-retired');
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.deepEqual(h.counts(), { starts: 0, codexReads: 0, refreshes: 0, upstreamRequests: 0 });
   });
   for (const lang of ['zh', 'en', 'es']) {
     const h = environment({ lang }); const res = response();
@@ -159,47 +173,16 @@ function browserRender(html, list) {
     assert.equal(res.status, 307); assert.equal(res.headers.location, '/');
     assert.equal(h.counts().starts, 0);
   });
-  for (const opts of [{}, { statusError: true }]) {
-    const h = environment(opts); const res = response();
-    h.box.serveCodexPage(h.req, res); await flush();
-    check('missing Codex never serves the reconnecting chat UI' + (opts.statusError ? ' on discovery error' : ''), () => {
-      assert.equal(res.status, 503); assert.equal(h.counts().codexReads, 0);
-      assert.ok(res.body.includes('Codex was not found'));
-      assert.ok(res.body.includes('/prove.js'));
-      assert.doesNotMatch(res.body, /codex-session-ui|http-equiv=["']refresh/i);
-    });
-  }
-  for (const opts of [{ codexInstalled: true }, { codexRunning: true }]) {
-    const h = environment(opts); const res = response(); h.req.headers['accept-encoding'] = 'gzip';
-    h.box.serveCodexPage(h.req, res); await flush();
-    check('installed or independently running Codex retains its compressed UI: ' + JSON.stringify(opts), () => {
-      assert.equal(res.status, 200); assert.equal(h.counts().codexReads, 1);
-      assert.equal(res.headers['content-encoding'], 'gzip');
-      assert.match(zlib.gunzipSync(res.body).toString(), /codex-session-ui/);
-    });
-  }
-  check('missing-app selector offers a running alternative and carries both keys', () => {
-    const h = environment(); const res = response(); h.box.serveLauncherPage(h.req, res, 503, 'dsh');
-    const box = browserRender(res.body, [target('dsh', false, false), target('codex', false, true)]);
-    assert.equal(box.children.length, 1);
-    const open = box.children[0].children[0].children[0];
-    assert.equal(open.href, '/k/test-access?target=codex#k=test-fragment');
+  check('DSH setup carries both keys and filters stale retired entries', () => {
+    const h=environment(); const res=response();h.box.serveLauncherPage(h.req,res,503,'dsh');
+    const box=browserRender(res.body,[target('codex',true,true),target('dsh',true,true)]);
+    assert.equal(box.children.length,1);
+    assert.equal(box.children[0].children[0].children[0].href,'/k/test-access?target=dsh#k=test-fragment');
+    const noDsh=browserRender(res.body,[target('codex',true,true)]); assert.equal(noDsh.children.length,0);
   });
-  {
-    const h = environment(); const res = response();
-    h.box.serveCodexPage(h.req, res); await flush();
-    check('missing Codex leaves the page usable and offers installed DSH', () => {
-      assert.equal(h.counts().codexReads, 0);
-      assert.ok(res.body.includes('Codex was not found'));
-      const box = browserRender(res.body, [target('codex', false, false), target('dsh', true, true)]);
-      assert.equal(box.children.length, 1);
-      assert.equal(box.children[0].children[0].children[0].href, '/k/test-access?target=dsh#k=test-fragment');
-    });
-  }
-  // Check the public entry points use the functions tested above, not a dead helper.
-  check('actual routes are wired to the availability checks', () => {
-    assert.match(src, /if \(u\.pathname === '\/codex' \|\| u\.pathname === '\/codex\/'\) \{\s*serveCodexPage\(req, res\)/);
+  check('actual routes retain localized DSH setup without a retired page handler',()=>{
     assert.ok(src.includes('res.end(injectProofAssets(launcherPage(req, lang)));'));
+    assert.doesNotMatch(src,/function serveCodexPage\(/);
   });
   {
     let publicSource = Buffer.from('Public static asset content. '.repeat(40));

@@ -1,6 +1,6 @@
 // 控制台「复制地址」旁边那句说明 —— 它到底能不能用手机操控电脑。
 //
-// 地址旁需要解释目标程序运行时，手机可以查看和操作电脑上的 DSH / Codex。
+// 地址旁需要解释目标程序运行时，手机可以查看和操作电脑上的 DSH。
 //
 // 也就是：这按钮复制出来的东西，**是什么、能干什么、前提是什么**，得说清楚。
 // 这一条测试盯的就是那几句话：在不在、翻没翻、什么时候出现。
@@ -26,8 +26,8 @@ const vm = require('vm');
 const BASE = path.resolve(__dirname, '..');
 const { extractRegisterArg, extractFunction } = require('./page-source.js');
 
-const HOWTO = '把上面的地址发到手机打开，就能用手机操控电脑上的 DSH / Codex：发消息、看进度、批准操作。电脑上要先启动它们。';
-const NO_TARGET = '先在下面「本机服务」里启动 DSH / Codex，手机连上才有东西可用。';
+const HOWTO = '把上面的地址发到手机打开，就能用手机操控电脑上的 DSH：发消息、看进度、批准操作。电脑上要先启动 DSH。';
+const NO_TARGET = '先在下面「本机服务」里启动 DSH，手机连上才有东西可用。';
 
 let bad = 0;
 const ok = (m) => console.log(`  ✓ ${m}`);
@@ -82,6 +82,14 @@ function runRenderEntries(targets, opts) {
   const o = opts || {};
   const box = fakeEl('div');
   const copied = [];
+  const opened = [];
+  let httpsRequests = 0;
+  const nodes = new Map([['entries', box]]);
+  const node = (id) => {
+    if (!nodes.has(id)) nodes.set(id, fakeEl('div'));
+    return nodes.get(id);
+  };
+  node('btn-lanhttps-on').click = () => { httpsRequests++; };
   const lang = o.lang || 'zh';
   const T = (s) => {
     if (lang === 'zh') return s;
@@ -89,34 +97,38 @@ function runRenderEntries(targets, opts) {
     return (e && e[lang]) || s;
   };
   const entries = {
-    lan: 'http://192.168.1.5:8080/#k=abc',
-    wan: 'https://x.trycloudflare.com/#k=abc',
+    lan: ['http://192.168.1.5:8080/k/fixture-access#k=fixture-encryption-key-123456'],
+    lanHttps: [],
+    wan: 'https://fixture.example/k/fixture-access#k=fixture-encryption-key-123456',
     // 默认给一个配对码 —— 服务端（/__console/status）一直都会给这个字段。
-    pairCode: o.pairCode === undefined ? '419203' : o.pairCode
+    pairCode: o.pairCode === undefined ? '419203' : o.pairCode,
+    ...o.entries
   };
   const sandbox = {
     state: { data: { targets } },
     document: { createElement: fakeEl },
-    $: (id) => (id === 'entries' ? box : fakeEl('div')),
+    $: node,
     t: T, tr: T,
     esc: (s) => String(s == null ? '' : s),
-    maskedEntry: (u) => String(u || ''),
     mkBtn: (label, cls, fn) => { const b = fakeEl('button'); b.textContent = label; b.className = cls || ''; b.onclick = fn; return b; },
     copy: (v, label) => { copied.push([v, label]); }, homeOperation: () => { }, homeMutate: () => { },
-    entryList: (e) => [
-      { title: '在家用', url: e.lan, plain: true, note: 'n' },
-      { title: '在外面用', url: e.wan, plain: false, note: 'n' }
-    ],
+    open: (...args) => { opened.push(args); }, addressChanging: !!o.addressChanging,
+    load: () => {}, renderDevices: () => {}, renderNotify: () => {}, loadBalance: () => {},
+    renderAdvanced: () => {}, applyI18n: () => {}, renderDesktopSummary: () => {}, renderRestartWait: () => {},
+    renderTargets: () => {},
     console
   };
   sandbox.window = sandbox;
   sandbox.URL = URL;
   vm.createContext(sandbox);
-  vm.runInContext(extractFunction(html, 'dshLiteAddress'), sandbox, { filename: 'dshLiteAddress' });
+  for (const fn of ['dshLiteAddress', 'entryList', 'bestEntry', 'maskedEntry', 'render']) {
+    vm.runInContext(extractFunction(html, fn), sandbox, { filename: fn });
+  }
   vm.runInContext(extractFunction(html, 'renderEntries'), sandbox, { filename: 'renderEntries' });
-  sandbox.renderEntries(entries);
+  if (o.hero) sandbox.render({ gateway: { running: true }, targets, entries, devices: [] });
+  else sandbox.renderEntries(entries);
   const find = (id) => box.children.find((c) => c.id === id) || null;
-  return { box, find, copied };
+  return { box, find, copied, opened, entries, sandbox, node, get httpsRequests() { return httpsRequests; } };
 }
 
 console.log('\n[静态] 那几句说明在不在、翻没翻\n');
@@ -155,8 +167,8 @@ console.log('\n[行为] 真的把 renderEntries() 跑一遍\n');
     ]);
     const howto = r.find('entries-howto');
     if (!howto) fail('有目标在跑：那句「这条地址能干什么」没显示');
-    else if (!/DSH \/ Codex/.test(howto.textContent) || !/手机/.test(howto.textContent)) fail(`说明内容不对：${howto.textContent}`);
-    else ok('有目标在跑：显示「手机能操控电脑上的 DSH / Codex」');
+    else if (!/DSH/.test(howto.textContent) || !/手机/.test(howto.textContent)) fail(`说明内容不对：${howto.textContent}`);
+    else ok('有目标在跑：显示「手机能操控电脑上的 DSH」');
     if (r.find('entries-no-target')) fail('有目标在跑，却还在提示「都没在跑」');
     else ok('有目标在跑：不会乱喊「都没在跑」');
   }
@@ -253,8 +265,156 @@ console.log('\n[行为] 真的把 renderEntries() 跑一遍\n');
   }
 }
 
+console.log('\n[行为] 安全的手机入口排序、复制、打开与不可用说明\n');
+{
+  const targets = [{ id: 'dsh', installed: true, running: true }];
+  const KEY = 'fixture-encryption-key-123456';
+  const lan = `https://192.168.1.5:8443/k/fixture-access?view=classic&extra=keep#k=${KEY}`;
+  const wan = `https://fixture.example/k/fixture-access#k=${KEY}`;
+  const check = (label, fn) => {
+    try { fn();ok(label); } catch (error) { fail(`${label}: ${error.message}`); }
+  };
+  const card = (r, kind) => r.box.children.find((c) => c.className === `access-card ${kind}-card`);
+  const buttons = (r, kind) => deepButtons(card(r, kind));
+  const entryButtons = (r, kind) => buttons(r, kind).slice(0, 2);
+
+  check('未开启内网 HTTPS 时，真正的推荐函数选择 HTTPS 隧道而非普通内网', () => {
+    const r = runRenderEntries(targets);
+    assert.equal(r.sandbox.bestEntry(r.entries).kind, 'wan');
+    assert.equal(new URL(r.sandbox.bestEntry(r.entries).phoneUrl).protocol, 'https:');
+  });
+  check('普通 HTTP 的复制和打开都禁用，残留回调也不能复制或打开', () => {
+    const r = runRenderEntries(targets);
+    const unusable = entryButtons(r, 'lan');
+    assert.equal(unusable.length, 2);
+    for (const b of unusable) { assert.equal(b.disabled, true);b.onclick(); }
+    assert.equal(r.copied.length, 0);assert.equal(r.opened.length, 0);
+    assert.match(card(r, 'lan').innerHTML, /普通 HTTP 不能用于手机加密连接/);
+    assert.match(card(r, 'lan').innerHTML, /开启内网 HTTPS/);
+    assert.match(card(r, 'lan').innerHTML, /外网 HTTPS 隧道/);
+  });
+  check('渲染不会开启 HTTPS；只有用户明确点击开启按钮才发起该动作', () => {
+    const r = runRenderEntries(targets);
+    assert.equal(r.httpsRequests, 0);
+    const enable = buttons(r, 'lan').find((b) => b.textContent === '开启 HTTPS');
+    assert.ok(enable);enable.onclick();assert.equal(r.httpsRequests, 1);
+  });
+  check('HTTPS 隧道复制与打开保留完整访问路径和密钥，并进入 Lite', () => {
+    const r = runRenderEntries(targets);
+    const available = entryButtons(r, 'wan');
+    for (const b of available) { assert.equal(b.disabled, false);b.onclick(); }
+    const copied = new URL(r.copied[0][0]), opened = new URL(r.opened[0][0]);
+    assert.equal(copied.pathname, '/k/fixture-access');assert.equal(copied.hash, '#k=' + KEY);
+    assert.equal(copied.searchParams.get('target'), 'lite');assert.equal(opened.href, copied.href);
+    assert.equal(r.opened[0][2], 'noopener,noreferrer');
+  });
+  check('渲染的地址和鼠标提示都隐藏访问凭据与加密密钥', () => {
+    const r = runRenderEntries(targets, { entries: { lanHttps: [lan], wan } });
+    for (const kind of ['lan', 'wan']) {
+      assert.equal(card(r, kind).innerHTML.includes(KEY), false);
+      assert.equal(card(r, kind).innerHTML.includes('fixture-access'), false);
+    }
+  });
+  check('地址更换过程中复制/打开禁用；旧回调也不能发送尚未就绪的链接', () => {
+    const waiting = runRenderEntries(targets, { addressChanging: true });
+    for (const b of entryButtons(waiting, 'wan')) { assert.equal(b.disabled, true);b.onclick(); }
+    assert.equal(waiting.copied.length + waiting.opened.length, 0);
+    const r = runRenderEntries(targets);
+    r.sandbox.addressChanging = true;
+    for (const b of entryButtons(r, 'wan')) b.onclick();
+    assert.equal(r.copied.length + r.opened.length, 0);
+  });
+  check('所有旧的顶部与轻量复制回调也拒绝地址更换空窗期', () => {
+    const r = runRenderEntries(targets, { hero: true, entries: { lanHttps: [lan], wan } });
+    const oldCallbacks = deepButtons(r.node('heroActs')).concat(buttons(r, 'lan'), buttons(r, 'wan'))
+      .filter((b) => /复制/.test(b.textContent));
+    assert.equal(oldCallbacks.length, 6);
+    r.sandbox.addressChanging = true;
+    for (const b of oldCallbacks) b.onclick();
+    assert.equal(r.copied.length, 0);
+  });
+  check('可用的 HTTPS 内网优先，跳过第一条坏链接且去除已退役 classic 参数', () => {
+    const r = runRenderEntries(targets, { entries: { lanHttps: ['https://invalid.example/#k=short', lan], wan } });
+    const best = r.sandbox.bestEntry(r.entries), u = new URL(best.phoneUrl);
+    assert.equal(best.kind, 'lanHttps');assert.equal(u.hostname, '192.168.1.5');
+    assert.equal(u.hash, '#k=' + KEY);assert.equal(u.searchParams.get('extra'), 'keep');
+    assert.equal(u.searchParams.has('view'), false);assert.equal(u.searchParams.get('target'), 'lite');
+    entryButtons(r, 'lan')[0].onclick();assert.equal(r.copied[0][0], best.phoneUrl);
+  });
+  check('无有效内网 HTTPS 时回退 HTTPS 隧道；只有普通 HTTP 时不推荐任何入口', () => {
+    const fallback = runRenderEntries(targets, { entries: { lanHttps: ['https://invalid.example/#k=short'], wan } });
+    assert.equal(fallback.sandbox.bestEntry(fallback.entries).kind, 'wan');
+    const unavailable = runRenderEntries(targets, { entries: { wan: null } });
+    assert.equal(unavailable.sandbox.bestEntry(unavailable.entries), null);
+    assert.equal(entryButtons(unavailable, 'wan').every((b) => b.disabled), true);
+  });
+  const badKeys = [
+    '', '#k=', '#k=short', '#marker=k=' + KEY, '#k=' + KEY + '&k=',
+    '#k=' + KEY + '&k=' + KEY, '#k=' + KEY + '#k=' + KEY,
+    '#k=' + KEY + '%ZZ', '#k=' + KEY + '%00', '#k=' + 'a'.repeat(1025),
+    '#k=' + '%20'.repeat(16), '#k=%20' + KEY
+  ];
+  for (let i = 0; i < badKeys.length; i++) {
+    check(`缺少、重复或损坏的密钥片段拒绝推荐/复制/打开（${i + 1}）`, () => {
+      const r = runRenderEntries(targets, { entries: { lan: [], wan: 'https://fixture.example/k/fixture-access' + badKeys[i] } });
+      assert.equal(r.sandbox.bestEntry(r.entries), null);
+      for (const b of entryButtons(r, 'wan')) { assert.equal(b.disabled, true);b.onclick(); }
+      assert.equal(r.copied.length + r.opened.length, 0);
+      assert.match(card(r, 'wan').innerHTML, /换新地址和密钥/);
+    });
+  }
+  check('伪 HTTPS 栏位中的 HTTP、带用户名地址和无效 URL 不能冒充可用入口', () => {
+    const r = runRenderEntries(targets);
+    for (const u of [`http://fixture.example/#k=${KEY}`, `https://user@fixture.example/#k=${KEY}`, 'invalid']) {
+      assert.equal(r.sandbox.dshLiteAddress(u), '');
+    }
+  });
+  check('密钥按加密客户端规则解码，保留合法 URL 编码字符与额外片段', () => {
+    const r = runRenderEntries(targets);
+    const url = `https://fixture.example/k/fixture-access#other=keep&k=${encodeURIComponent('fixture+key with Unicode 桥123456')}`;
+    const parsed = new URL(r.sandbox.dshLiteAddress(url));
+    assert.equal(parsed.hash, new URL(url).hash);assert.equal(parsed.searchParams.get('target'), 'lite');
+  });
+  for (const lang of ['en', 'es']) {
+    check(`HTTP 不可用状态与修复指引在 ${lang} 下全部翻译，按钮保持禁用`, () => {
+      const r = runRenderEntries(targets, { lang });
+      assert.doesNotMatch(card(r, 'lan').innerHTML, /[\u4e00-\u9fff]/);
+      assert.equal(entryButtons(r, 'lan').every((b) => b.disabled), true);
+      assert.match(card(r, 'lan').innerHTML, /HTTPS/);
+      assert.equal(r.httpsRequests, 0);
+    });
+    check(`缺密钥的隧道修复说明在 ${lang} 下全部翻译`, () => {
+      const r = runRenderEntries(targets, { lang, entries: { wan: 'https://fixture.example/#k=short' } });
+      assert.doesNotMatch(card(r, 'wan').innerHTML, /[\u4e00-\u9fff]/);
+      assert.equal(entryButtons(r, 'wan').every((b) => b.disabled), true);
+    });
+  }
+  check('真正的顶部快捷复制使用推荐的加密 Lite 入口', () => {
+    const r = runRenderEntries(targets, { hero: true });
+    const copy = deepButtons(r.node('heroActs')).find((b) => b.textContent === '复制手机地址');
+    assert.ok(copy);copy.onclick();
+    assert.equal(new URL(r.copied[0][0]).hostname, 'fixture.example');
+    assert.equal(new URL(r.copied[0][0]).searchParams.get('target'), 'lite');
+  });
+  check('只有 HTTP 时顶部不误报手机可连接，也不提供快捷复制', () => {
+    const r = runRenderEntries(targets, { hero: true, entries: { wan: null } });
+    assert.equal(r.node('heroTitle').textContent, '手机入口尚未就绪');
+    assert.match(r.node('heroText').textContent, /HTTPS/);
+    assert.equal(deepButtons(r.node('heroActs')).some((b) => /复制/.test(b.textContent)), false);
+  });
+  check('旧 Codex 运行记录不能冒充当前 DSH 服务', () => {
+    const r = runRenderEntries([{ id: 'codex', installed: true, running: true }], { hero: true });
+    assert.ok(r.find('entries-no-target'));
+    assert.equal(r.node('heroTitle').textContent, '服务在运行，但没有可以连的东西');
+  });
+}
+
 console.log('\n[真机] 控制台上真的显示出来了吗\n');
 (async () => {
+  if (process.argv.includes('--isolated-only')) {
+    console.log('  · Live gateway/browser acceptance is explicitly separate; isolated cases only.\n');
+    return finish();
+  }
   const up = await new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port: 8080, path: '/__probe', timeout: 1500 }, (r) => {
       r.resume(); resolve(r.statusCode === 204 || r.statusCode === 200);
@@ -319,7 +479,7 @@ console.log('\n[真机] 控制台上真的显示出来了吗\n');
       `${codeOnDisk ? '，与本次启动' + (String(r.pairCode).trim() === codeOnDisk ? '一致' : '不一致') : ''}` +
       `   装了 ${r.installed} 个目标，其中在跑 ${r.running} 个`);
 
-    if (r.howto && /DSH \/ Codex/.test(r.howto) && /手机/.test(r.howto)) ok('控制台上真的显示了那句说明');
+    if (r.howto && /DSH/.test(r.howto) && /手机/.test(r.howto)) ok('控制台上真的显示了那句说明');
     else fail(`控制台上看不到那句说明（拿到的是 ${JSON.stringify(r.howto)}）`);
 
     if (!r.pairCard) fail('控制台第一页上没有配对码那张卡');

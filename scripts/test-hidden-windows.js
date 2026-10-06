@@ -23,7 +23,7 @@ const BASE = path.resolve(__dirname, '..');
 const FILES = [
   'scripts/mobile-proxy.js', 'scripts/targets.js', 'scripts/gateway-daemon.js',
   'scripts/refresh-tunnel.js', 'scripts/install-autostart.js', 'scripts/config.js',
-  'scripts/open-console.js', 'scripts/codex-lock.js', 'scripts/first-run.js',
+  'scripts/open-console.js', 'scripts/first-run.js',
   'scripts/notify.js', 'scripts/webpush-notify.js', 'desktop/open-console-app.js',
   'desktop/open-desktop-app.js'
 ];
@@ -65,13 +65,10 @@ console.log('\n[1] 运行期起进程：窗口必须隐藏');
   ok(`运行期 ${checked} 处调用都带了隐藏窗口标记`, bad.length === 0, bad.slice(0, 6).join(' | '));
 }
 
-console.log('\n[2] 最要命的那一处：Codex app-server（常驻控制台程序）');
+console.log('\n[2] Retired native executors are never started');
 {
   const t = fs.readFileSync(path.join(BASE, 'scripts', 'targets.js'), 'utf8');
-  const i = t.indexOf("'app-server'");
-  ok('启动 app-server 时带 windowsHide',
-    i > 0 && /windowsHide\s*:\s*true/.test(t.slice(i, i + 420)),
-    '这一处漏了就会有一个黑窗一直挂在桌面上');
+  ok('DSH targets contain no app-server launcher', !/['"]app-server['"]/.test(t));
 }
 
 console.log('\n[3] 计划任务这一层也不弹窗（守护进程每 5 分钟跑一次）');
@@ -86,6 +83,7 @@ console.log('\n[3] 计划任务这一层也不弹窗（守护进程每 5 分钟�
     // 这台机器上的任务是安装时建好的）。查不到就跳过，不硬判。
     let xml = '';
     try {
+      if (process.argv.includes('--static-only')) throw Error('isolated source check');
       xml = require('child_process').execFileSync('schtasks',
         ['/query', '/tn', '\\PocketBridge Gateway Watchdog', '/xml'],
         { encoding: 'utf8', timeout: 8000, windowsHide: true });

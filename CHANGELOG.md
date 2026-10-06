@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-preview.9 - DSH-only mobile interface
+
+- Focus current gateway and Windows installers exclusively on DSH. Retire Codex and Dot target discovery, startup, actions and package dependencies. Keep all older GitHub installers and existing local user data.
+- Close raw/classic remote HTTP and unknown WebSocket paths before upstream dispatch. Retain authenticated encrypted Lite content, file boundaries and direct computer-local access to the original interface.
+- Give phone conversations their full screen width, move secondary actions into a labelled menu, separate four conversation settings from Send, and increase primary touch targets. Use original bridge artwork and small local icon assets.
+- Bind commands to the original conversation and verify permission changes through runtime readback. Preserve queue and goal edits across failure or uncertain acknowledgement. Show supported, unavailable and unconfirmed outcomes distinctly.
+- Correct completed-task Stop status, phone Return behavior, broken image Retry and stale Copy closures. Preserve unchanged history rows, open reasoning, loaded images and selections; coalesce streaming layout work.
+- Document the exact desktop baseline and the partial actual historical npm tests. Do not claim complete plugin, old-wrapper, physical-phone or all-version compatibility.
+- Separate isolated checks, fresh installed public-route operation and compiled installer acceptance. See the current release notes and DSH mobile acceptance record for results and pending limits.
 ## 1.0.0-preview.8 — Windows preview
 
 - Stabilized the isolated pagination fixture by waiting for the pending scroll-triggered load before operating its Retry control. Product behavior and the previously documented compatibility and privacy limits remain unchanged.

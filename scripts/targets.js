@@ -1,18 +1,4 @@
-// DSH 移动端网关 — 可连接的目标（DSH / Codex）
-//
-// 为什么要有这一层：
-//
-// 原来这个网关只服务一个东西 —— DSH。但电脑上跑的不止一个 AI 工具，
-// 使用者的心智是「我要用手机上那个东西」，而不是「我要连 8080 端口的那个进程」。
-// 所以把「能连什么」抽成一个概念：每个目标知道自己装没装、在不在跑、怎么起、怎么停。
-//
-// 两个目标的形态完全不同，这里如实体现，不硬凑成一样：
-//
-//   DSH   —— Electron 应用，自带一个网页界面，我们把它反代出去就行
-//   Codex —— 命令行程序，能开一个 WebSocket 服务（app-server --listen ws://），
-//            但没有网页界面，界面得我们自己写（pwa/codex.html）
-//
-// 所以这个模块只负责「发现 / 起停 / 探活」，界面各写各的。
+// DeepSeek Harness detection, scoped startup and status for the DSH-only gateway.
 'use strict';
 
 const fs = require('fs');
@@ -57,28 +43,12 @@ const TEXT = {
     dshStopped: '已关闭 DSH',
     dshNoRunning: '没找到正在运行的 DSH',
 
-    cxReady: '服务已就绪（端口 {port}）',
-    cxMissing: '没找到 Codex',
-    cxInstalled: '已安装，远程服务没在运行',
-    cxNoInstall: '没找到 Codex。装好 Codex 桌面版或 CLI 之后重试',
-    cxAlready: 'Codex 远程服务已经在运行了',
-    cxPortTaken: '端口 {port} 被别的程序占着，改一下 config.json 里 codex.port',
-    cxStarted: 'Codex 远程服务已启动（端口 {port}）',
-    cxExited: 'Codex 进程退出了。日志尾部：{tail}',
-    cxNotReady: '等了 24 秒还没就绪，看 logs/codex-app-server.log',
-    cxNotOurs: '这个端口上的 Codex 不是本网关启动的，没有去动它',
-    cxNotRunning: 'Codex 远程服务没在运行',
-    cxStopped: '已停止 Codex 远程服务（桌面版不受影响）',
-    cxSignalSent: '已发出停止信号，端口还没释放',
-    cxDesktopNotOpen: '电脑上的 Codex 没开着',
-    cxDesktopClosed: '电脑上的 Codex 已关闭，会话占用也释放了',
 
     empty: '（空）',
     startFail: '启动失败: {msg}',
     stopFail: '停止失败: {msg}',
     killFail: '关闭失败: {msg}',
-    blurbDsh: '电脑上那个完整的 DSH 界面，原样搬到手机上',
-    blurbCodex: 'OpenAI Codex 的会话，手机上有专门的界面'
+    blurbDsh: '在手机浏览器中连接电脑上的 DeepSeek Harness',
   },
   en: {
     dshRunning: 'Running (port {port})',
@@ -97,28 +67,12 @@ const TEXT = {
     dshStopped: 'DSH closed',
     dshNoRunning: 'No running DSH found',
 
-    cxReady: 'Ready (port {port})',
-    cxMissing: 'Codex not found',
-    cxInstalled: 'Installed, remote service is not running',
-    cxNoInstall: 'Codex not found. Install the Codex desktop app or CLI, then try again',
-    cxAlready: 'The Codex remote service is already running',
-    cxPortTaken: 'Port {port} is taken by something else — change codex.port in config.json',
-    cxStarted: 'Codex remote service started (port {port})',
-    cxExited: 'The Codex process exited. End of its log: {tail}',
-    cxNotReady: 'Still not ready after 24 seconds — see logs/codex-app-server.log',
-    cxNotOurs: 'The Codex on this port was not started by this gateway, so it was left alone',
-    cxNotRunning: 'The Codex remote service is not running',
-    cxStopped: 'Codex remote service stopped (the desktop app is unaffected)',
-    cxSignalSent: 'Stop signal sent, but the port is not released yet',
-    cxDesktopNotOpen: 'Codex is not open on the computer',
-    cxDesktopClosed: 'Codex on the computer is closed and the session hold was released',
 
     empty: '(empty)',
     startFail: 'Could not start: {msg}',
     stopFail: 'Could not stop: {msg}',
     killFail: 'Could not close: {msg}',
-    blurbDsh: 'The full DSH interface from your computer, moved to your phone as it is',
-    blurbCodex: 'Your OpenAI Codex sessions, with a purpose-built phone interface'
+    blurbDsh: 'Connect to DeepSeek Harness on your computer from a phone browser',
   },
   es: {
     dshRunning: 'En marcha (puerto {port})',
@@ -137,28 +91,12 @@ const TEXT = {
     dshStopped: 'DSH cerrado',
     dshNoRunning: 'No se encontró ningún DSH en marcha',
 
-    cxReady: 'Listo (puerto {port})',
-    cxMissing: 'No se encontró Codex',
-    cxInstalled: 'Instalado, el servicio remoto no está en marcha',
-    cxNoInstall: 'No se encontró Codex. Instala la app de escritorio o la CLI de Codex y vuelve a intentarlo',
-    cxAlready: 'El servicio remoto de Codex ya está en marcha',
-    cxPortTaken: 'El puerto {port} lo ocupa otro programa: cambia codex.port en config.json',
-    cxStarted: 'Servicio remoto de Codex iniciado (puerto {port})',
-    cxExited: 'El proceso de Codex terminó. Final de su registro: {tail}',
-    cxNotReady: 'Sigue sin estar listo tras 24 segundos: mira logs/codex-app-server.log',
-    cxNotOurs: 'El Codex de este puerto no lo arrancó esta pasarela, así que no se ha tocado',
-    cxNotRunning: 'El servicio remoto de Codex no está en marcha',
-    cxStopped: 'Servicio remoto de Codex detenido (la app de escritorio no se ve afectada)',
-    cxSignalSent: 'Señal de parada enviada, pero el puerto aún no se ha liberado',
-    cxDesktopNotOpen: 'Codex no está abierto en el ordenador',
-    cxDesktopClosed: 'Codex en el ordenador está cerrado y se liberó la sesión retenida',
 
     empty: '(vacío)',
     startFail: 'No se pudo iniciar: {msg}',
     stopFail: 'No se pudo detener: {msg}',
     killFail: 'No se pudo cerrar: {msg}',
     blurbDsh: 'La interfaz completa de DSH de tu ordenador, tal cual, en el teléfono',
-    blurbCodex: 'Tus sesiones de OpenAI Codex, con una interfaz pensada para el teléfono'
   }
 };
 
@@ -237,10 +175,18 @@ const dsh = {
       canStart: Boolean(detected.launch) };
   },
 
+  async detectAsync(config = cfg.loadConfig()) {
+    const detected = await require('./dsh-runtime.js').detectInstallationAsync(config);
+    return { ...detected, exe: detected.launch ? detected.launch.exe : null,
+      canStart: Boolean(detected.launch) };
+  },
+
   async status(lang) {
     const runtimeApi = require('./dsh-runtime.js');
-    const runtime = await runtimeApi.resolveRuntime(cfg.loadConfig());
-    const d = dsh.detect();
+    const config = cfg.loadConfig();
+    const [runtime, d] = await Promise.all([
+      runtimeApi.resolveRuntime(config), dsh.detectAsync(config)
+    ]);
     const running = Boolean(runtime.running && runtime.port);
     const ipcOnly = !running && d.profile === 'desktop-ipc';
     const key = running ? 'dshRunningVersion' : ipcOnly ? 'dshIpc'
@@ -335,308 +281,8 @@ const dsh = {
   }
 };
 
-/**
- * 读出系统代理，转成环境变量。
- *
- * 为什么必须做这件事：这台机器上开着代理（v2rayN 之类），它设的是 **Windows 系统代理**。
- * Electron 应用（DSH、Codex 桌面版）会自动用它，所以桌面版一切正常；
- * 而 `codex.exe app-server` 是 Rust 程序，**不读系统代理，只认 HTTP(S)_PROXY 环境变量** ——
- * 由网关拉起来的那个实例因此连不上 OpenAI，所有回合都卡在
- * 「Reconnecting… request timed out」，界面上表现为「发出去了但一直没反应」。
- *
- * 更阴的是：这种情况下**审批请求永远不会出现**（因为压根没跑到要审批的那一步），
- * 看起来就像「审批功能没做」。
- */
-function systemProxyEnv() {
-  const env = {};
-  if (process.platform !== 'win32') {
-    // 类 Unix 上一般本来就用环境变量，不用额外做
-    return env;
-  }
-
-  try {
-    const KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
-    const q = (name) => {
-      try {
-        const out = execFileSync('reg', ['query', KEY, '/v', name],
-          { encoding: 'utf8', timeout: 5000, windowsHide: true });
-        const m = out.match(new RegExp(name + '\\s+REG_\\w+\\s+(.+)'));
-        return m ? m[1].trim() : null;
-      } catch (err) { return null; }
-    };
-
-    const enabled = q('ProxyEnable');
-    if (enabled !== '0x1' && enabled !== '1') return env;
-
-    const server = q('ProxyServer');
-    if (!server) return env;
-
-    // ProxyServer 可能是 "host:port"，也可能是
-    // "http=host:port;https=host:port" 这种按协议分的写法
-    let http = null, https = null;
-    if (server.includes('=')) {
-      for (const seg of server.split(';')) {
-        const [k, v] = seg.split('=');
-        if (!v) continue;
-        if (/^https$/i.test(k.trim())) https = v.trim();
-        else if (/^http$/i.test(k.trim())) http = v.trim();
-      }
-    } else {
-      http = https = server;
-    }
-
-    const url = (v) => (v ? (/^https?:\/\//.test(v) ? v : 'http://' + v) : null);
-    if (http) { env.HTTP_PROXY = url(http); env.http_proxy = url(http); }
-    if (https) { env.HTTPS_PROXY = url(https); env.https_proxy = url(https); }
-
-    // 本机地址不走代理 —— 中间层和 app-server 之间全是回环流量，
-    // 绕进代理里只会平白多一跳，还可能因为代理不转发而连不上。
-    const bypass = q('ProxyOverride') || '';
-    const local = ['localhost', '127.0.0.1', '::1', '192.168.*', '10.*'];
-    for (const b of bypass.split(';')) {
-      const t = b.trim();
-      if (t && t !== '<local>' && local.indexOf(t) < 0) local.push(t);
-    }
-    env.NO_PROXY = local.join(',');
-    env.no_proxy = env.NO_PROXY;
-  } catch (err) {
-    // 读不到就不设 —— 直连本来也能用的情况很多，不该因为读注册表失败就不启动
-  }
-  return env;
-}
-
-// ── Codex ─────────────────────────────────────────────────────────────────────
-
-const codex = {
-  id: 'codex',
-  name: 'Codex',
-  short: 'Codex',
-  blurbKey: 'blurbCodex',
-  ui: '/codex',
-
-  /** Codex 的 CLI 装在 LocalAppData 下一个带哈希的目录里，版本升级会换目录 */
-  detect() {
-    const conf = cfg.loadConfig();
-    if (conf.codex && conf.codex.executable && fs.existsSync(conf.codex.executable)) {
-      return { installed: true, exe: conf.codex.executable, source: 'config.json' };
-    }
-
-    const roots = process.platform === 'win32'
-      ? [path.join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin')]
-      : [path.join(os.homedir(), '.local', 'bin'), '/usr/local/bin', '/opt/homebrew/bin'];
-
-    const exeName = process.platform === 'win32' ? 'codex.exe' : 'codex';
-
-    for (const root of roots) {
-      if (!fs.existsSync(root)) continue;
-
-      // 关键：**按修改时间从新到旧**排，不能按目录顺序取。
-      //
-      // 实测这台机器上 bin 下同时躺着 3 个版本目录（升级不会删旧的）。
-      // 按目录顺序取是听天由命 —— 很可能挑到一个旧版本，而且是静默的：
-      // 一切看起来正常，只是用的是过期的 CLI。
-      const subs = (() => {
-        try {
-          return fs.readdirSync(root)
-            .map((name) => {
-              const p = path.join(root, name, exeName);
-              let st = null;
-              try { st = fs.statSync(p); } catch (err) { return null; }
-              return st.isFile() ? { path: p, mtime: st.mtimeMs } : null;
-            })
-            .filter(Boolean)
-            .sort((a, b) => b.mtime - a.mtime);
-        } catch (err) { return []; }
-      })();
-
-      if (subs.length) {
-        return {
-          installed: true,
-          exe: subs[0].path,
-          source: `自动发现（${subs.length} 个版本里取最新的）`
-        };
-      }
-
-      const direct = path.join(root, exeName);
-      if (fs.existsSync(direct)) return { installed: true, exe: direct, source: '自动发现' };
-    }
-
-    // 有些桌面版会把 CLI 放在应用目录里
-    const appCli = process.platform === 'win32'
-      ? path.join(process.env.ProgramFiles || '', 'WindowsApps')
-      : '';
-    if (appCli && fs.existsSync(appCli)) {
-      try {
-        for (const d of fs.readdirSync(appCli)) {
-          if (!/^OpenAI\.Codex/i.test(d)) continue;
-          const p = path.join(appCli, d, 'app', 'resources', 'codex.exe');
-          if (fs.existsSync(p)) return { installed: true, exe: p, source: '应用目录' };
-        }
-      } catch (err) { /* 权限不够就算了 */ }
-    }
-
-    return { installed: false, exe: null, source: '未找到' };
-  },
-
-  port() {
-    const conf = cfg.loadConfig();
-    return Number(conf.codex && conf.codex.port) || 18790;
-  },
-
-  /** 这个 app-server 是不是我们起的（区别于 Codex 桌面版自己那个） */
-  managedPid() {
-    const pid = readPid('codex');
-    return alive(pid) ? pid : null;
-  },
-
-  async status(lang) {
-    const d = codex.detect();
-    const port = codex.port();
-    const listening = await portOpen(port);
-    let healthy = false;
-    let threads = null;
-
-    if (listening) {
-      const h = await httpJson(`http://127.0.0.1:${port}/healthz`);
-      healthy = !!h && h.status === 200;
-    }
-
-    return {
-      installed: d.installed,
-      running: listening && healthy,
-      port: listening ? port : null,
-      exe: d.exe,
-      source: d.source,
-      managed: !!codex.managedPid(),
-      note: listening && healthy
-        ? fill(T(lang).cxReady, { port })
-        : (!d.installed ? T(lang).cxMissing : T(lang).cxInstalled),
-      noteKey: (listening && healthy)
-        ? 'cxReady'
-        : (!d.installed ? 'cxMissing' : 'cxInstalled'),
-      noteArgs: (listening && healthy) ? { port } : {}
-    };
-  },
-
-  /**
-   * 启动一个带 WebSocket 的 app-server。
-   *
-   * 注意它和 Codex 桌面版自己那个 app-server 是两个实例，但共用 ~/.codex 里的数据 ——
-   * 所以手机上看到的就是电脑上那些会话（实测过：thread/list 返回的是真实会话）。
-   * 桌面版不需要关掉，也不受影响。
-   */
-  async start(lang) {
-    const d = codex.detect();
-    if (!d.installed) {
-      return { ok: false, message: T(lang).cxNoInstall };
-    }
-
-    const st = await codex.status(lang);
-    if (st.running) return { ok: true, message: T(lang).cxAlready, already: true };
-
-    const port = codex.port();
-    if (await portOpen(port)) {
-      return { ok: false, message: fill(T(lang).cxPortTaken, { port }) };
-    }
-
-    const logFile = path.join(LOG_DIR, 'codex-app-server.log');
-    let out;
-    try { out = fs.openSync(logFile, 'a'); } catch (err) { out = 'ignore'; }
-
-    let child;
-    try {
-      const proxy = systemProxyEnv();
-      if (proxy.HTTPS_PROXY) {
-        log(`Codex 将经由系统代理 ${proxy.HTTPS_PROXY} 出网（Rust 程序不读系统代理，得显式告诉它）`);
-      }
-      child = spawn(d.exe, ['app-server', '--listen', `ws://127.0.0.1:${port}`], {
-        detached: true,
-        stdio: ['ignore', out, out],
-        cwd: os.homedir(),
-        // ★ windowsHide 不能少：app-server 是**控制台程序**，从手机点「启动 Codex」
-        //   会把它拉起来并一直开着 —— 不隐藏就会有一个黑窗一直挂在桌面上，
-        //   打断使用者正在做的事（他原话：「跳出 cmd 窗口打断电脑工作，这个真的很烦」）。
-        windowsHide: true,
-        env: Object.assign({}, process.env, proxy)
-      });
-      child.unref();
-    } catch (err) {
-      return { ok: false, message: fill(T(lang).startFail, { msg: err.message }) };
-    }
-
-    writePid('codex', child.pid);
-
-    for (let i = 0; i < 30; i++) {
-      await sleep(800);
-      if (await portOpen(port)) {
-        const h = await httpJson(`http://127.0.0.1:${port}/healthz`);
-        if (h && h.status === 200) {
-          return { ok: true, message: fill(T(lang).cxStarted, { port }), port };
-        }
-      }
-      if (!alive(child.pid)) {
-        let tail = '';
-        try { tail = fs.readFileSync(logFile, 'utf8').slice(-400); } catch (err) { }
-        return { ok: false, message: fill(T(lang).cxExited, { tail: tail || T(lang).empty }) };
-      }
-    }
-    return { ok: false, message: T(lang).cxNotReady };
-  },
-
-  /** 只停我们起的那个实例，不动 Codex 桌面版自己那个 */
-  async stop(lang) {
-    const pid = readPid('codex');
-    if (!pid || !alive(pid)) {
-      clearPid('codex');
-      // 端口还占着的话，说明是别的实例（比如桌面版），不该由我们关
-      if (await portOpen(codex.port())) {
-        return { ok: false, message: T(lang).cxNotOurs };
-      }
-      return { ok: false, message: T(lang).cxNotRunning };
-    }
-
-    try {
-      if (process.platform === 'win32') {
-        execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'],
-          { timeout: 8000, windowsHide: true });
-      } else {
-        process.kill(pid, 'SIGTERM');
-      }
-    } catch (err) {
-      return { ok: false, message: fill(T(lang).stopFail, { msg: err.message }) };
-    }
-    clearPid('codex');
-
-    for (let i = 0; i < 10; i++) {
-      await sleep(500);
-      if (!(await portOpen(codex.port()))) {
-        return { ok: true, message: T(lang).cxStopped };
-      }
-    }
-    return { ok: true, message: T(lang).cxSignalSent };
-  },
-
-  /**
-   * The configured backend cannot attest which desktop process owns a writer.
-   * Do not use a process-name inventory as authorization to stop that process.
-   */
-  desktopStatus() {
-    return { running: null, count: null, ownerVerified: false, canStop: false, code: 'owner-unverified' };
-  },
-
-  /**
-   * Keep the old entry point safe for callers outside the mobile lock route.
-   * No current protocol response proves a desktop PID owns a given thread.
-   * Even an explicit confirmation therefore cannot authorize a global kill.
-   */
-  async stopDesktop(lang, opts = {}) {
-    return require('./codex-lock.js').desktopTakeoverDenied(opts.threadId, { ...opts, lang });
-  }
-};
-
-// ── 对外 ──────────────────────────────────────────────────────────────────────
-
-const ALL = [dsh, codex];
+// DSH is the only runtime target in this release.
+const ALL = [dsh];
 
 /**
  * 按语言重新组装一批目标条目。
@@ -666,7 +312,7 @@ function localize(list, lang) {
 async function list(opts = {}) {
   const out = [];
   for (const t of ALL) {
-    const d = t.detect();
+    const d = await t.detectAsync();
     const base = {
       id: t.id, name: t.name, short: t.short,
       // blurb 按语言取（对象上只存 key）；取不到就退回 key 本身，
@@ -700,4 +346,4 @@ async function available() {
   return l.filter((t) => t.running);
 }
 
-module.exports = { list, localize, get, available, ALL, dsh, codex };
+module.exports = { list, localize, get, available, ALL, dsh };

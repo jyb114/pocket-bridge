@@ -767,7 +767,7 @@ $miStop = New-Item2 '停止服务' {
 }
 $menu.Items.Add($miStop) | Out-Null
 
-# ── 电脑上跑的东西（DSH / Codex）──────────────────────────────────────────────
+# ── 电脑上跑的 DSH──────────────────────────────────────────────
 #
 # 起停逻辑走网关的 HTTP 接口，不在客户端里重写一遍 ——
 # 两处各写一份的话行为迟早会不一致（比如「Codex 只停自己起的那个、不动桌面版」
@@ -795,7 +795,7 @@ function Invoke-TargetAction($id, $action) {
 }
 
 $miTargets = New-Object System.Windows.Forms.ToolStripMenuItem('电脑上跑的东西')
-foreach ($t in @(@{ id = 'dsh'; nm = 'DSH' }, @{ id = 'codex'; nm = 'Codex' })) {
+foreach ($t in @(@{ id = 'dsh'; nm = 'DSH' })) {
   $sub = New-Object System.Windows.Forms.ToolStripMenuItem($t.nm)
   $tid = $t.id
   $sub.DropDownItems.Add((New-Item2 '启动' { Invoke-TargetAction $tid 'start' })) | Out-Null

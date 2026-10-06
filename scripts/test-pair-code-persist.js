@@ -244,7 +244,7 @@ async function checkStartupPublication() {
       writePairCodeFile() { events.push('write-pair'); pc.writeIfChanged(pairFile, '123456'); },
       currentPairCode() { events.push('current-pair'); return pc.current(pairFile).code; },
       startHttpsIfEnabled: () => events.push('https'), startDshWatchdog: () => events.push('dsh-watchdog'),
-      startCodexWatchdog: () => events.push('codex-watchdog'), sessions: { dedupe: () => ({ merged: 0 }) },
+      startCodexWatchdog: () => { throw Error('retired native watchdog must never start'); }, sessions: { dedupe: () => ({ merged: 0 }) },
       setTimeout() { events.push('warmup-scheduled'); }
     };
     const completion = vm.runInNewContext(startup, context, { timeout: 1000 });
@@ -271,7 +271,7 @@ async function checkStartupPublication() {
       events.indexOf('write-pair') < events.indexOf('current-pair') &&
       events.indexOf('current-pair') < events.indexOf('startup-log') &&
       events.indexOf('startup-log') < events.indexOf('dsh-watchdog') &&
-      events.indexOf('startup-log') < events.indexOf('codex-watchdog'));
+      !events.includes('codex-watchdog'));
 
   const rejected = fixture('rejected');
   fs.writeFileSync(rejected.pairFile, '222222'); const originalMtime = fs.statSync(rejected.pairFile).mtimeMs;

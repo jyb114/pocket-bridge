@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { isPayloadPath } = require('../../scripts/release-profile.js');
 
 const root = path.resolve(__dirname, '..', '..');
 const destination = path.resolve(process.argv[2] || '');
@@ -26,7 +27,7 @@ const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root })
   .toString('utf8').split('\0').filter(Boolean);
 const selected = [...new Set([...tracked, 'scripts/first-run.js'])].filter((entry) =>
   (allowedRoots.has(entry) || allowedDirs.some((prefix) => entry.startsWith(prefix)))
-  && !excludedFiles.has(entry));
+  && !excludedFiles.has(entry) && isPayloadPath(entry));
 
 fs.mkdirSync(destination, { recursive: true });
 for (const relative of selected) {
@@ -38,20 +39,39 @@ for (const relative of selected) {
   fs.copyFileSync(source, output);
 }
 for (const required of [
-  'scripts/gateway-daemon.js', 'scripts/mobile-proxy.js', 'scripts/first-run.js',
-  'scripts/gateway-listener.js',
-  'scripts/windows-shortcut.js',
-  'scripts/codex-history-transport.js',
-  'scripts/desktop-ui-action.js', 'scripts/codex-desktop-driver.js',
-  'scripts/codex-desktop-ui.ps1', 'scripts/codex-desktop-relay.js', 'scripts/codex-desktop-target.js', 'scripts/codex-desktop-text.js',
-  'scripts/codex-desktop-source-guard.ps1',
-  'scripts/dot-desktop-driver.js', 'scripts/dot-desktop-ui.ps1', 'scripts/dot-desktop-service.js',
-  'scripts/dot-desktop-protocol.js', 'scripts/dot-desktop-owner.js', 'scripts/dot-desktop-journal.js',
-  'scripts/dot-desktop-private-store.js', 'scripts/dot-desktop-runtime.js',
-  'scripts/dot-desktop-send-driver.js', 'scripts/dot-desktop-send.ps1',
-  'scripts/dot-desktop-source-guard.ps1', 'scripts/dot-desktop-navigation-guard.ps1', 'pwa/dot.html',
-  'desktop/open-desktop.vbs', 'desktop/open-desktop-app.js',
-  'desktop/icons/app.ico', 'pwa/console.html'
+  "scripts/gateway-daemon.js",
+  "scripts/mobile-proxy.js",
+  "scripts/first-run.js",
+  "scripts/gateway-listener.js",
+  "scripts/gateway-lifecycle.js",
+  "scripts/retired-targets.js",
+  "scripts/dsh-phone-surface.js",
+  "scripts/release-profile.js",
+  "scripts/windows-shortcut.js",
+  "scripts/dsh-runtime.js",
+  "scripts/dsh-adapter.js",
+  "scripts/dsh-lite-rpc.js",
+  "pwa/dsh-lite-adapter.js",
+  "pwa/dsh-lite-router.js",
+  "pwa/dsh-lite-legacy.js",
+  "scripts/dsh-lite-legacy-rpc.js",
+  "scripts/dsh-lite-upload.js",
+  "scripts/dsh-lite-download.js",
+  "scripts/dsh-lite-files.js",
+  "scripts/dsh-lite-attachment.js",
+  "scripts/dsh-runtime-identity.js",
+  "desktop/open-desktop.vbs",
+  "desktop/open-desktop-app.js",
+  "desktop/icons/app.ico",
+  "desktop/brand-artwork.js",
+  "pwa/pocket-bridge.svg",
+  "pwa/icon-maskable.png",
+  "pwa/console.html",
+  "pwa/dsh-lite.html",
+  "pwa/dsh-lite-ui.js",
+  "pwa/dsh-lite-lang.js",
+  "pwa/dsh-lite.css",
+  "pwa/e2ee.js"
 ]) {
   if (!fs.existsSync(path.join(destination, required))) {
     throw new Error(`Missing required payload file: ${required}`);

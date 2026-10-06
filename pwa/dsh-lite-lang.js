@@ -21,6 +21,26 @@
   if (!global.DshI18n || typeof global.DshI18n.register !== 'function') return;
 
   global.DshI18n.register({
+    // Router failures can appear before the main UI has mounted.
+    '连接不可用': { en: 'Connection unavailable', es: 'Conexión no disponible' },
+    '旧版 DSH 连接组件': { en: 'Legacy DSH connector', es: 'Conector de DSH anterior' },
+    '新版 DSH 连接组件': { en: 'Current DSH connector', es: 'Conector de DSH actual' },
+    '手机界面组件': { en: 'Phone interface', es: 'Interfaz del teléfono' },
+    '{name}（{path}）': { en: '{name} ({path})', es: '{name} ({path})' },
+    '、': { en: ', ', es: ', ' },
+    'DSH 手机组件未加载：{components}。已重试 2 次，请检查连接后刷新桥页面。': {
+      en: 'DSH phone components did not load: {components}. Two retries failed. Check the connection, then refresh the bridge page.',
+      es: 'No se cargaron los componentes de DSH para el teléfono: {components}. Fallaron dos reintentos. Comprueba la conexión y actualiza la página del puente.' },
+    '加密连接或设备授权尚未准备好，请用电脑控制台复制完整地址重新打开。': {
+      en: 'The encrypted connection or device authorization is not ready. Copy the full link from the computer console and reopen it.',
+      es: 'La conexión cifrada o la autorización del dispositivo no está lista. Copia el enlace completo de la consola del ordenador y vuelve a abrirlo.' },
+    '无法识别电脑上的 DSH 版本（HTTP {status}）。': {
+      en: 'Could not identify the computer\'s DSH version (HTTP {status}).',
+      es: 'No se pudo identificar la versión de DSH del ordenador (HTTP {status}).' },
+    '这台电脑的 DSH 协议尚未得到验证。请在电脑上检查 DSH 版本后重新连接；手机不会改用未加密的原版界面。': {
+      en: 'This computer\'s DSH protocol is unverified. Check the DSH version on the computer, then reconnect. The phone will not fall back to the unencrypted original interface.',
+      es: 'El protocolo de DSH de este ordenador no está verificado. Revisa la versión de DSH en el ordenador y reconecta. El teléfono no usará la interfaz original sin cifrar.' },
+    '连接 DSH 失败，请重试。': { en: 'Could not connect to DSH. Please retry.', es: 'No se pudo conectar con DSH. Vuelve a intentarlo.' },
     // ── 连接状态 / 侧栏 ─────────────────────────────────────────────────────
     '正在连接': { en: 'Connecting', es: 'Conectando' },
     '已连接': { en: 'Connected', es: 'Conectado' },
@@ -320,6 +340,43 @@
       en: 'This version cannot capture the screen yet — update the bridge.',
       es: 'Esta versión aún no puede capturar la pantalla; actualiza el puente.'
     },
+    // 授权范围（DSH 的「权限预设」）。中文标签照抄电脑端：
+    // 仅可查看 / 工作区内修改 / 完全权限；英文照抄 DSH 内置的
+    // Read Only / Workspace Write / Full access。
+    '授权范围': { en: 'Access scope', es: 'Alcance de acceso' },
+    '选择授权范围': { en: 'Choose access scope', es: 'Elegir el alcance de acceso' },
+    '仅可查看': { en: 'Read Only', es: 'Solo lectura' },
+    '工作区内修改': { en: 'Workspace Write', es: 'Escritura en el espacio de trabajo' },
+    '完全权限': { en: 'Full access', es: 'Acceso total' },
+    '只能看，不能改文件、不能执行命令。': {
+      en: 'View only — cannot change files or run commands.',
+      es: 'Solo ver: no puede cambiar archivos ni ejecutar comandos.'
+    },
+    '可以在项目目录里改文件、执行命令；越界操作仍会询问。': {
+      en: 'Can change files and run commands inside the project folder; anything outside it still asks first.',
+      es: 'Puede cambiar archivos y ejecutar comandos dentro del proyecto; fuera de él seguirá preguntando.'
+    },
+    '减少确认步骤，可直接执行敏感操作、修改文件、运行外部命令。': {
+      en: 'Fewer confirmations: sensitive operations, file changes and external commands can run directly.',
+      es: 'Menos confirmaciones: puede ejecutar directamente operaciones sensibles, cambios de archivos y comandos externos.'
+    },
+    '授权范围决定这次对话能做多少事。它只影响当前对话；改完立刻生效，不会重开对话。': {
+      en: 'The access scope decides how much this conversation may do. It affects only this conversation, takes effect immediately, and does not restart it.',
+      es: 'El alcance de acceso decide cuánto puede hacer esta conversación. Solo afecta a esta conversación, se aplica al momento y no la reinicia.'
+    },
+    '正在切换…': { en: 'Switching…', es: 'Cambiando…' },
+    '已切换为': { en: 'Switched to ', es: 'Cambiado a ' },
+    '没能切换：': { en: 'Could not switch: ', es: 'No se pudo cambiar: ' },
+    '切换失败：': { en: 'Switch failed: ', es: 'Error al cambiar: ' },
+    '此版本不支持切换授权范围，请在电脑端操作。': {
+      en: 'This version cannot change the access scope; use the computer.',
+      es: 'Esta versión no puede cambiar el alcance de acceso; usa el ordenador.'
+    },
+    '确认启用完全权限？': { en: 'Turn on Full access?', es: '¿Activar el acceso total?' },
+    '仅建议在你信任后续任务时使用。': {
+      en: 'Only do this when you trust what the agent will do next.',
+      es: 'Hazlo solo si confías en lo que hará el agente a continuación.'
+    },
     '保存到手机': { en: 'Save to phone', es: 'Guardar en el teléfono' },
     '已保存': { en: 'Saved', es: 'Guardado' },
     '已开始下载': { en: 'Download started', es: 'Descarga iniciada' },
@@ -340,6 +397,18 @@
     //   使用者的原话就是「英语，西班牙语的时候不是所有的都改变」。
     //   （t() 找不到词条会原样返回中文，这个兜底本身是对的；漏了就是这个表现。）
     '点一下加载图片': { en: 'Tap to load the image', es: 'Toca para cargar la imagen' },
+    '图片附件标识无效。': { en: 'Invalid image attachment identifier.', es: 'Identificador de adjunto de imagen no válido.' },
+    '这个 DSH 版本尚不支持按附件标识读取图片。': { en: 'This DSH version does not support reading images by attachment ID.', es: 'Esta versión de DSH no permite leer imágenes por su identificador de adjunto.' },
+    'DSH 找不到这张图片，或它不属于当前对话。': { en: 'DSH cannot find this image, or it does not belong to this conversation.', es: 'DSH no encuentra esta imagen o no pertenece a esta conversación.' },
+    '图片超过安全预览限制。': { en: 'The image exceeds the safe preview limits.', es: 'La imagen supera los límites de vista previa segura.' },
+    '图片读取失败，请检查连接后重试。': { en: 'Image read failed. Check the connection and retry.', es: 'Falló la lectura de la imagen. Comprueba la conexión y reintenta.' },
+    '图片响应没有通过加密验证。': { en: 'The image response did not pass encryption verification.', es: 'La respuesta de imagen no pasó la verificación de cifrado.' },
+    '图片格式不受支持。': { en: 'Unsupported image format.', es: 'Formato de imagen no compatible.' },
+    '已有三张图片正在读取，请稍后重试。': { en: 'Three images are already loading. Try again shortly.', es: 'Ya se están cargando tres imágenes. Inténtalo de nuevo en un momento.' },
+    '点一下加载手机临时预览': { en: 'Tap to load this phone\'s temporary preview', es: 'Toca para cargar la vista temporal de este teléfono' },
+    '临时图片无法显示，点这里重试': { en: 'Temporary image could not be displayed. Tap to retry.', es: 'No se pudo mostrar la imagen temporal. Toca para reintentar.' },
+    '仅此手机临时预览；刷新、切换对话或缓存回收后不可用。': { en: 'Temporary preview on this phone only. Refreshing, changing conversations, or cache eviction removes it.', es: 'Vista temporal solo en este teléfono. Se elimina al actualizar, cambiar de conversación o liberar la caché.' },
+    '这张图片没有可读取的电脑路径，当前手机也没有临时副本。': { en: 'This image has no readable computer path, and this phone has no temporary copy.', es: 'Esta imagen no tiene una ruta legible en el ordenador ni una copia temporal en este teléfono.' },
     '正在取图…': { en: 'Loading image…', es: 'Cargando imagen…' },
     '取不到这张图，点这里再试': {
       en: 'Could not fetch this image — tap here to retry',
@@ -381,6 +450,13 @@
     '目标不能是空的。': { en: 'The goal cannot be empty.', es: 'La meta no puede estar vacía.' },
     '目标操作失败。': { en: 'The goal operation failed.', es: 'La operación sobre la meta falló.' },
     '目标已保存。': { en: 'Goal saved.', es: 'Meta guardada.' },
+    '目标状态暂时无法读取。': { en: 'The current goal is unavailable.', es: 'No se puede leer la meta actual.' },
+    '上次读取的目标，当前状态未确认。': { en: 'Last retrieved goal; current state is unconfirmed.', es: 'Última meta leída; el estado actual no está confirmado.' },
+    '目标请求已发送，当前结果未确认，请重新读取。': { en: 'Goal request sent; the result is unconfirmed. Read it again.', es: 'Solicitud enviada; el resultado no está confirmado. Vuelve a leerlo.' },
+    '重试读取': { en: 'Retry reading', es: 'Reintentar lectura' },
+    '重新读取目标': { en: 'Read goal again', es: 'Volver a leer la meta' },
+    '修改结果未确认，文字已保留。请先重新读取目标。': { en: 'The edit is unconfirmed and your text is retained. Read the goal before saving again.', es: 'La edición no está confirmada y el texto se conserva. Lee la meta antes de volver a guardar.' },
+    '已重新读取目标，请检查后保存。': { en: 'Goal read again. Review it before saving.', es: 'La meta se ha vuelto a leer. Revísala antes de guardar.' },
     '正在检查计划模式…': { en: 'Checking plan mode…', es: 'Comprobando el modo plan…' },
     '进入计划模式': { en: 'Enter plan mode', es: 'Entrar en modo plan' },
     '退出计划模式': { en: 'Exit plan mode', es: 'Salir del modo plan' },
@@ -418,6 +494,34 @@
     '缺少加密连接密钥，请重新打开完整地址。': { en: 'Missing the encryption key. Reopen the full address.', es: 'Falta la clave de cifrado. Vuelve a abrir la dirección completa.' },
     '压缩上下文：正在压缩…': { en: 'Compacting context…', es: 'Compactando el contexto…' },
     '压缩上下文：完成': { en: 'Context compacted', es: 'Contexto compactado' },
+    '压缩上下文失败。': { en: 'Context compaction failed.', es: 'No se pudo compactar el contexto.' },
+    '电脑回应：': { en: 'Computer response:', es: 'Respuesta del ordenador:' },
+    '压缩请求已发送，完成状态未确认，请在电脑端核对。': { en: 'Compaction request sent; completion is unconfirmed. Check the desktop.', es: 'Solicitud de compactación enviada; su finalización no está confirmada. Comprueba el escritorio.' },
+    '选择这个对话的授权范围。只有电脑返回当前配置后，才会显示已确认。': { en: 'Choose the access scope for this conversation. It is confirmed only after the computer reports its current setting.', es: 'Elige el alcance de acceso de esta conversación. Solo se confirma cuando el ordenador comunica la configuración actual.' },
+    '当前授权范围未确认。': { en: 'Current access scope is unconfirmed.', es: 'El alcance de acceso actual no está confirmado.' },
+    '电脑当前授权范围：': { en: 'Current access scope on the computer:', es: 'Alcance de acceso actual en el ordenador:' },
+    '已确认当前授权范围：': { en: 'Confirmed current access scope:', es: 'Alcance de acceso actual confirmado:' },
+    '授权请求已发送，是否生效未确认，请在电脑端核对。': { en: 'Access request sent; its effect is unconfirmed. Check the desktop.', es: 'Solicitud de acceso enviada; su efecto no está confirmado. Comprueba el escritorio.' },
+    '授权范围切换失败。': { en: 'Could not change the access scope.', es: 'No se pudo cambiar el alcance de acceso.' },
+    '此版本未报告当前授权范围。': { en: 'This version did not report the current access scope.', es: 'Esta versión no comunicó el alcance de acceso actual.' },
+    '连接安全': { en: 'Connection security', es: 'Seguridad de la conexión' },
+    '加密待验证': { en: 'Encryption pending verification', es: 'Cifrado pendiente de verificación' },
+    '加密未就绪': { en: 'Encryption unavailable', es: 'Cifrado no disponible' },
+    '已验证内容加密通道和设备授权。被动中继只能转发密文，不能读取对话正文。': { en: 'The encrypted content channel and device authorization are verified. A passive relay forwards ciphertext without reading conversation text.', es: 'El canal de contenido cifrado y la autorización del dispositivo están verificados. Un intermediario pasivo transmite texto cifrado sin leer la conversación.' },
+    '页面代码由电脑桥提供；请使用你信任的桥和完整连接地址。加密不代表可以信任被篡改的页面。': { en: 'The computer bridge serves the page code. Use a bridge you trust and its full connection link. Encryption does not make a tampered page trustworthy.', es: 'El puente del ordenador proporciona el código de la página. Usa un puente de confianza y su enlace completo. El cifrado no hace fiable una página alterada.' },
+    '加密组件已就绪，正在等待内容连接和设备授权验证。请先检查电脑和连接地址是否在线。': { en: 'Encryption is ready, but the content connection and device authorization are not yet verified. Check that the computer and connection address are online.', es: 'El cifrado está listo, pero la conexión de contenido y la autorización del dispositivo aún no están verificadas. Comprueba que el ordenador y la dirección estén disponibles.' },
+    '加密组件尚未就绪。请使用 HTTPS 完整地址，并更新或重新打开桥页面。不会改用明文发送。': { en: 'Encryption is unavailable. Use the full HTTPS link and update or reopen the bridge page. Sending will not fall back to plaintext.', es: 'El cifrado no está disponible. Usa el enlace HTTPS completo y actualiza o vuelve a abrir la página del puente. No se enviará texto sin cifrar.' },
+    '已中断': { en: 'Interrupted', es: 'Interrumpido' },
+    '准备中': { en: 'Preparing', es: 'Preparando' },
+    '待发送': { en: 'Pending send', es: 'Pendiente de envío' },
+    '移除附件': { en: 'Remove attachment', es: 'Quitar adjunto' },
+    '正在读取电脑文件…': { en: 'Reading computer files…', es: 'Leyendo archivos del ordenador…' },
+    '加载图片': { en: 'Load image', es: 'Cargar imagen' },
+    '↓ 重试下载': { en: '↓ Retry download', es: '↓ Reintentar descarga' },
+    '排队结果暂时无法确认，请重新读取。': { en: 'The queue result is unconfirmed. Read the queue again.', es: 'El resultado de la cola no está confirmado. Vuelve a leerla.' },
+    '修改结果未确认，文字已保留。请先重新读取队列。': { en: 'The edit is unconfirmed and your text is retained. Read the queue before saving again.', es: 'La edición no está confirmada y el texto se conserva. Lee la cola antes de volver a guardar.' },
+    '重新读取队列': { en: 'Read queue again', es: 'Volver a leer la cola' },
+    '已重新读取队列，请检查后保存。': { en: 'Queue read again. Review it before saving.', es: 'La cola se ha vuelto a leer. Revísala antes de guardar.' },
     '压缩上下文：现在不能压缩（正在执行或已经在压缩）': { en: 'Cannot compact right now (a turn or a compaction is running)', es: 'Ahora no se puede compactar (hay un turno o una compactación en curso)' },
     '电脑上的这个 DSH 没有 /compact 命令。': { en: 'This DSH build has no /compact command.', es: 'Esta versión de DSH no tiene el comando /compact.' }
   });

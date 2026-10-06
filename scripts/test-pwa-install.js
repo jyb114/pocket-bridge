@@ -20,6 +20,11 @@ const http = require('http');
 const path = require('path');
 
 const BASE = path.join(__dirname, '..');
+let expectedInstance = null, PORT = 0;
+try {
+  expectedInstance = JSON.parse(fs.readFileSync(path.join(BASE, 'logs', 'instance.json'), 'utf8')).instanceId;
+  PORT = Number(fs.readFileSync(path.join(BASE, 'logs', 'gateway-port.txt'), 'utf8').trim());
+} catch (_) {}
 let failed = 0;
 function check(name, ok, detail) {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${ok || !detail ? '' : '  → ' + detail}`);
@@ -29,9 +34,10 @@ function check(name, ok, detail) {
 
 function get(pathname, cookie) {
   return new Promise((resolve) => {
-    const headers = { host: '127.0.0.1:8080' };
+    if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) return resolve({status:0,body:'No scoped gateway port',headers:{}});
+    const headers = { host: '127.0.0.1:' + PORT };
     if (cookie) headers.cookie = cookie;
-    const r = http.request({ host: '127.0.0.1', port: 8080, path: pathname, method: 'GET', headers }, (res) => {
+    const r = http.request({ host: '127.0.0.1', port: PORT, path: pathname, method: 'GET', headers }, (res) => {
       let b = '';
       res.on('data', (d) => { if (b.length < 400000) b += d; });
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }));
@@ -56,7 +62,7 @@ const NEEDS = ['apple-touch-icon'];
 console.log('\n【PWA 安装能力】');
 
 // ── 1. 静态：仓库里的页面本身要声明 ────────────────────────────────────
-for (const f of ['go.html', 'codex.html', 'console.html']) {
+for (const f of ['go.html', 'dsh-lite.html', 'console.html']) {
   const src = fs.readFileSync(path.join(BASE, 'pwa', f), 'utf8');
   const head = src.slice(0, src.indexOf('</head>') + 7 || 4000);
   for (const need of NEEDS) {
@@ -88,6 +94,12 @@ for (const f of ['go.html', 'codex.html', 'console.html']) {
     console.log(`  · 网关没在跑（/__health = ${health.status}）—— 跳过现场检查（不算通过）`);
     return finish();
   }
+  let identity;
+  try { identity = JSON.parse(health.body); } catch (_) {}
+  if (!expectedInstance || !identity || identity.service !== 'pocket-bridge-gateway' || identity.instanceId !== expectedInstance || identity.port !== PORT || !Number.isInteger(identity.pid)) {
+    console.log('  · Scoped gateway identity is unconfirmed; live checks were not run and no credential was sent.');
+    return finish();
+  }
 
   // 免认证就能取的
   const man = await get('/manifest.webmanifest');
@@ -98,7 +110,7 @@ for (const f of ['go.html', 'codex.html', 'console.html']) {
     check('manifest 里没有引用别人的产品名',
       !/DeepSeek|DSH/.test(String(parsed.name) + String(parsed.short_name)),
       `name=${parsed.name} short_name=${parsed.short_name}`);
-    const themeMeta = fs.readFileSync(path.join(BASE, 'pwa', 'codex.html'), 'utf8')
+    const themeMeta = fs.readFileSync(path.join(BASE, 'pwa', 'dsh-lite.html'), 'utf8')
       .match(/name="theme-color" content="([^"]+)"/);
     check('manifest 的 theme_color 和页面 <meta theme-color> 一致',
       !!themeMeta && parsed.theme_color === themeMeta[1],
@@ -126,10 +138,10 @@ for (const f of ['go.html', 'codex.html', 'console.html']) {
   const auth = await get('/k/' + encodeURIComponent(key));
   const cookie = (auth.headers['set-cookie'] || []).map((c) => c.split(';')[0]).join('; ');
 
-  for (const p of ['/', '/codex']) {
+  for (const p of ['/?target=lite', '/dsh-lite']) {
     const r = await get(p, cookie);
     const ok = r.status === 200 && NEEDS.every((n) => r.body.includes(n));
-    check(`现场 ${p} 的响应里有 manifest + apple-touch-icon`, ok, `status=${r.status}`);
+    check(`现场 ${p} 的响应里有 apple-touch-icon`, ok, `status=${r.status}`);
   }
 
   finish();
@@ -137,7 +149,7 @@ for (const f of ['go.html', 'codex.html', 'console.html']) {
 
 function finish() {
   console.log(failed === 0
-    ? '\n结论: PWA 安装这条链是接上的（manifest 被引用、iOS 图标不再 404）。\n'
+    ? '\nConfigured PWA checks passed; any explicitly omitted live checks remain unverified.\n'
     : `\n结论: ${failed} 项不通过 —— 手机「添加到主屏幕」会拿到没有图标的壳。\n`);
   process.exitCode = failed === 0 ? 0 : 1;
 }

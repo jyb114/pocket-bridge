@@ -11,10 +11,16 @@ The Windows installer is built using [NSIS](https://nsis.sourceforge.io/Docs/App
 
 ## Software not included
 
-DeepSeek Harness (DSH) and OpenAI Codex are **not bundled**. To use their respective features, install and configure the corresponding computer-side software and accounts separately. Pocket Bridge only provides a local gateway and browser interface. It does not provide DSH, Codex, model access, or a ChatGPT subscription. Their availability, license terms, and fees are determined by their respective providers. In particular, using the Codex integration does not mean Pocket Bridge includes or replaces the ChatGPT desktop app.
+DeepSeek Harness (DSH) is **not bundled**. Install and configure it and the required model account separately. Pocket Bridge provides a local gateway and its own browser interface; it does not provide model access or a subscription. New installers are DSH-only. Historical combined installers are retained in GitHub Releases and are not updated.
 
 ## Names and attribution
 
 Pocket Bridge is independent and unofficial. It is not affiliated with, sponsored by, or endorsed by DeepSeek, OpenAI, or Cloudflare. Their product names, as well as the names of optional notification providers, identify compatibility or a service used; all trademarks remain with their respective owners. No third-party logo or screenshot is included as a claim of endorsement.
 
 A similarity check, when run, is only a limited text comparison. Passing it is not proof of non-infringement or a legal clearance. If you identify a specific licensing or attribution concern, please contact the maintainer using the appropriate non-public channel described in [SECURITY.md](SECURITY.md); do not post sensitive details publicly.
+
+## Original artwork and DSH branding
+
+The current Pocket Bridge mark, PWA icons, and Windows icons use original geometric artwork authored in `desktop/brand-artwork.js` and `pwa/pocket-bridge.svg`, licensed with this project's MIT source. They do not use the official DeepSeek whale, an external font, or a copied brand image.
+
+DSH is named to accurately identify the connected software. DeepSeek's [brand asset guidelines](https://github.com/deepseek-ai/deepseek-harness/blob/master/BRAND_GUIDELINES.md) permit accurate descriptive references, recommend the DSH abbreviation, and warn against names or promotional material that suggest official endorsement. Its [MIT software license](https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE) does not by itself clear every trademark, logo, or visual design use. These choices reduce avoidable confusion; they are not a blanket legal clearance.

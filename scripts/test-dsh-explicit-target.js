@@ -17,7 +17,7 @@ function fixture(explicitPort, runtime) {
   const resolutions = [], authentications = [];
   const context = vm.createContext({
     EXPLICIT_TARGET_PORT: explicitPort, TARGET_PORT: explicitPort || 58347,
-    DSH_LAST_CONFIRMED_PROFILE: null, DSH_UPSTREAM_AUTH_OK: null, UPSTREAM_COOKIE: null,
+    DSH_UPSTREAM_AUTH_OK: null, UPSTREAM_COOKIE: null,
     cfg: { loadConfig: () => ({ dshPort: 19003, dshMode: 'web' }) },
     dshRuntime: {
       async resolveRuntime(config, options) { resolutions.push({ config, options }); return runtime.value; },
@@ -45,14 +45,20 @@ function fixture(explicitPort, runtime) {
   assert.equal(initial.runtime.profile, 'legacy-events');
   assert.equal(fixed.resolutions[0].config.dshPort, 19087, 'environment target overrides config preference');
   assert.equal(fixed.authentications.length, 1, 'fixed target still authenticates the verified runtime');
-  assert.equal(fixed.context.DSH_LAST_CONFIRMED_PROFILE, 'legacy-events');
+  assert.equal(initial.runtime, runtime.value, 'the profile belongs to this exact verified runtime, not remembered discovery');
   assert.equal(await fixed.ready(true), true);
   assert.equal(fixed.resolutions[1].options.force, true, 'writes request a fresh runtime verification');
   assert.equal(fixed.authentications[1].options.force, true);
   runtime.value = { ...runtime.value, profile: 'remote-mux', version: '0.1.7-rc.2' };
-  assert.equal((await fixed.refresh(true)).runtime.profile, 'remote-mux', 'genuine same-port protocol upgrade remains detectable');
+  const upgraded = await fixed.refresh(true);
+  assert.equal(upgraded.runtime.profile, 'remote-mux', 'genuine same-port protocol upgrade remains detectable');
+  assert.equal(upgraded.runtime, runtime.value);
+  assert.equal(initial.runtime.profile, 'legacy-events', 'later discovery cannot mutate an earlier request result');
   runtime.auth = { ok: false, cookie: null };
-  assert.equal((await fixed.refresh()).ready, false, 'auth failure cannot masquerade as a healthy fixed target');
+  const rejected = await fixed.refresh();
+  assert.equal(rejected.ready, false, 'auth failure cannot masquerade as a healthy fixed target');
+  assert.equal(rejected.runtime, runtime.value, 'failed auth reports the current runtime without a stale profile');
+  assert.equal(fixed.context.UPSTREAM_COOKIE, null);
   runtime.auth = { ok: true, cookie: { name: 'dsh-auth', value: 'temporary-test-only' } };
   await fixed.refresh();
   assert.ok(fixed.context.UPSTREAM_COOKIE);

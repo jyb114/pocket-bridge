@@ -3,21 +3,32 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { sliceBalanced } = require('./page-source.js');
+const requestOrigin = require('./request-origin.js');
+const dshPhoneSurface = require('./dsh-phone-surface.js');
 const source = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-switch.js'), 'utf8');
 const gateway = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
 assert.match(gateway, /'<script src=\\?"\/dsh-lite-switch\.js/);
 assert.match(gateway, /'\/dsh-lite-switch\.js': \{ file: 'dsh-lite-switch\.js'/);
 assert.match(gateway, /'\/dsh-lite-switch\.js',/);
-assert.match(gateway, /const canUseSmallPhoneShell = viaRelay\(req\) && phoneAgent &&\s*\(DSH_LAST_CONFIRMED_PROFILE === 'remote-mux' \|\|\s*DSH_LAST_CONFIRMED_PROFILE === 'legacy-events'\)/,
-  'tunnel phone HTML must be served directly before official preloads');
-assert.match(gateway, /runtime\.running && \(runtime\.profile === 'remote-mux' \|\| runtime\.profile === 'legacy-events'\)/,
-  'route profile must persist across discovery gaps and unrecognized transient probes');
-assert.match(gateway, /u\.searchParams\.get\('view'\) !== 'classic'/,
-  'explicit classic view must bypass the small page');
-assert.match(gateway, /if \(want === 'dsh' && canUseSmallPhoneShell\) \{[\s\S]*?servePwa\(req, res, \{ file: 'dsh-lite\.html'/,
-  'normal launcher choice and canonical key link must serve the small page');
-assert.match(gateway, /readTargetCookie\(req\) === 'dsh' && canUseSmallPhoneShell/,
-  'bookmarked root with an existing DSH target must serve the small page');
+const rootAt = gateway.indexOf("if (u.pathname === '/' || u.pathname === '/index.html')");
+const rootOpen = gateway.indexOf('{', rootAt), rootEnd = sliceBalanced(gateway, rootOpen, '{', '}');
+assert(rootAt >= 0 && rootEnd > rootOpen);
+const route = vm.createContext({ Buffer, URL, dshPhoneSurface, TARGET_COOKIE:'fixture-target',
+  isLocalRequest: requestOrigin.isLoopback,
+  targetCookie: () => 'fixture-target=dsh', shouldShowLauncher: () => false,
+  servePwa(_req,res,asset) { assert.equal(asset.file,'dsh-lite.html'); res.writeHead(200); res.end('OWNED_LITE'); } });
+vm.runInContext('function root(req,res,u){' + gateway.slice(rootAt,rootEnd+1) + ';return false;}',route);
+for (const query of ['', '?target=dsh', '?target=lite', '?target=pick', '?view=classic']) {
+  const req={method:'GET',url:'/k/SYNTHETIC'+query,headers:{host:'fixture.trycloudflare.com','user-agent':'unknown'},socket:{remoteAddress:'127.0.0.1'}};
+  const res={headers:{},getHeader(k){return this.headers[k];},setHeader(k,v){this.headers[k]=v;},writeHead(n){this.status=n;},end(v){this.body=v;}};
+  route.root(req,res,new URL('http://localhost/'+query));
+  if(query==='?view=classic') { assert.equal(res.status,410);assert.equal(JSON.parse(res.body).code,'dsh-classic-retired'); }
+  else { assert.equal(res.status,200);assert.equal(res.body,'OWNED_LITE'); }
+  assert.equal(req.url,'/k/SYNTHETIC'+query,'owned remote shell does not rewrite the key path');
+}
+// This injected switch is now only a compatibility aid for the original UI
+// opened directly on the computer. Remote requests never load that UI.
 function page(href, agent, touchPoints = 0, profile = 'remote-mux', encrypted = true) {
   let button = null, assigned = null, replaced = null;
   const document = {
@@ -48,11 +59,11 @@ assert.equal(page(original, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Saf
 assert.equal(new URL(page(original, 'Mozilla/5.0 (iPhone) Mobile Safari', 0, 'legacy-events').replaced)
   .searchParams.get('target'), 'lite', 'verified legacy DSH uses the encrypted phone adapter');
 assert.equal(page(original, 'Mozilla/5.0 (iPhone) Mobile Safari', 0, 'remote-mux', false).replaced,
-  null, 'insecure LAN without WebCrypto stays on the working original frontend');
+  null, 'a direct-computer classic page does not redirect without WebCrypto');
 
 const classic = page('https://example.test/k/ACCESS?target=dsh&view=classic#k=SECRET',
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile Safari');
-assert.equal(classic.replaced, null, 'explicit original view remains available');
+assert.equal(classic.replaced, null, 'direct-computer explicit original view is not automatically redirected');
 assert.equal(classic.button.textContent, '手机界面');
 classic.button.click();
 const back = new URL(classic.assigned);
@@ -63,4 +74,4 @@ assert.equal(back.hash, '#k=SECRET');
 const desktop = page(original, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome');
 assert.equal(desktop.replaced, null, 'desktop DSH keeps original view');
 assert.equal(desktop.button.textContent, '手机界面');
-console.log('DSH phone route redirects before official plugins and preserves full keys; classic/desktop remain available');
+console.log('DSH phone root always uses owned Lite; direct-computer compatibility switch preserves full keys and explicit local classic view.');

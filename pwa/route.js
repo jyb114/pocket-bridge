@@ -34,7 +34,6 @@
     "未加密": { en: "Unencrypted", es: "Sin cifrar" },
     "这条连接方式（明文 HTTP）没法加密 —— 点一下换一条能加密的路": { en: "This connection (plain HTTP) cannot be encrypted — tap to switch to one that can", es: "Esta conexión (HTTP sin cifrar) no se puede cifrar; toca para cambiar a una que sí" },
     "这条链接没带加密密钥 —— 实时通道会被拒绝，打不开对话": { en: "This link has no encryption key — the live channel is refused, so conversations will not open", es: "Este enlace no lleva clave de cifrado: el canal en vivo se rechaza y las conversaciones no se abrirán" },
-    "换一个目标（DSH / Codex）": { en: "Switch target (DSH / Codex)", es: "Cambiar de destino (DSH / Codex)" },
     "· 内网 HTTPS：<code>https://{host}:8081/…</code>（第一次要信任一下自签证书）<br>": { en: "· Local HTTPS: <code>https://{host}:8081/…</code> (you must trust the self-signed certificate the first time)<br>", es: "· HTTPS en red local: <code>https://{host}:8081/…</code> (la primera vez hay que confiar en el certificado autofirmado)<br>" },
     "<b>这条路是明文</b><br>同一 WiFi 下别人可以抓包看到内容。<br><br><b>要加密，换下面任一条：</b><br>{lanTip}· 在外面用隧道地址：<code>https://…trycloudflare.com/…</code>": { en: "<b>This route is unencrypted</b><br>Someone on the same WiFi could read the content.<br><br><b>For encryption, use either route below:</b><br>{lanTip}· Use the tunnel address when away: <code>https://…trycloudflare.com/…</code>", es: "<b>Esta vía no va cifrada</b><br>Alguien en la misma WiFi podría leer el contenido.<br><br><b>Para tener cifrado, usa una de estas vías:</b><br>{lanTip}· Usa la dirección del túnel cuando estés fuera: <code>https://…trycloudflare.com/…</code>" },
     "<b>这条地址不完整</b><br>会这样：页面能开，但<b>对话列表是空的</b>。<br><br><b>怎么办：</b>到电脑上打开控制台 → 复制末尾带 <code>#k=</code> 的完整地址 → 在手机上打开一次。原来的书签还能用就继续用。": { en: "<b>This address is incomplete</b><br>What you get: the page opens, but <b>the conversation list stays empty</b>.<br><br><b>What to do:</b> open the console on your computer → copy the full address ending in <code>#k=</code> → open it once on your phone. If your old bookmark still works, keep using it.", es: "<b>Esta dirección está incompleta</b><br>Qué pasa: la página se abre, pero <b>la lista de conversaciones queda vacía</b>.<br><br><b>Qué hacer:</b> abre la consola en el ordenador → copia la dirección completa que termina en <code>#k=</code> → ábrela una vez en el teléfono. Si tu marcador antiguo aún funciona, sigue usándolo." },
@@ -151,29 +150,7 @@
     return el;
   }
 
-  function targetSwitch() {
-    // 切换按钮不再单独飘着 —— 它现在是角标里的一个小方块。
-    // 留着这个函数是因为 paint() 还要用它来设置显隐。
-    if (state.sw) return state.sw;
-    var el = document.createElement('span');
-    el.id = 'dsh-gw-switch';
-    el.setAttribute('role', 'button');
-    el.title = t('换一个目标（DSH / Codex）');
-    el.textContent = '⇄';
-    el.style.cssText = [
-      'display:none', 'align-items:center', 'justify-content:center',
-      'width:28px', 'height:28px', 'border-radius:8px', 'flex:none',
-      'background:rgba(255,255,255,.10)', 'color:#ddd',
-      'font:600 14px/1 -apple-system,system-ui,sans-serif',
-      'cursor:pointer', 'user-select:none', 'margin-left:3px'
-    ].join(';');
-    el.addEventListener('click', function (ev) {
-      ev.stopPropagation();          // 别触发角标自己的充值跳转
-      location.href = '/?target=pick' + location.hash;   // 带上密钥，否则切目标就变明文
-    });
-    state.sw = el;
-    return el;
-  }
+
 
   function paint() {
     var el = badge();
@@ -363,13 +340,7 @@
         paint();
 
         // 装了不止一个目标才显示切换按钮 —— 只有一个的时候它纯属添乱
-        if (Number(d.installedTargets) > 1) {
-          var sw = targetSwitch();
-          // 塞进角标里，而不是自己 fixed 飘着 —— 右下角只留一行
-          var bg = badge();
-          if (sw.parentNode !== bg) bg.appendChild(sw);
-          sw.style.display = 'flex';
-        }
+
 
         // 找一个比现在更好的备选：**先看加不加密，再看是哪条路**。
         //

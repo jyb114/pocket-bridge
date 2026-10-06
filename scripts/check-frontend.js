@@ -11,7 +11,7 @@ function check(name, src) {
   catch (e) { bad++; console.log(`  ✗ ${name}  ${e.message}`); }
 }
 
-for (const f of ['console.html', 'codex.html', 'go.html']) {
+for (const f of ['console.html', 'go.html']) {
   const html = fs.readFileSync(path.join(BASE, 'pwa', f), 'utf8');
   const m = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!m) { bad++; console.log(`  ✗ ${f} 找不到内联脚本`); continue; }

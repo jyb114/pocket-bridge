@@ -1,14 +1,7 @@
-// 进门证明脚本（pwa/prove.js）的测试 —— 补的是 2026-09-27 查出来的两个洞：
-//
-//   曾出现发送成功但页面未显示任务状态、刷新后才恢复的情况。
-//   日志实锤是那台设备**没通过证明**（403 未通过挑战应答 / WS 被拒）。而为什么它会
-//   证不了？因为证明这件事原来只有两处会做，正好漏了两页：
-//     · codex.html 只引 e2ee.js —— 手机上缓存着**旧版** e2ee.js（没有 prove()）时，
-//       这一页永远证不了 → 整页 403；
-//     · go.html 只引 i18n.js —— 从来没有人证过 → /__targets 必被 403。
-//
-//   补法：新增 pwa/prove.js，由网关注入这两页；它只用 e2ee.js 里**一直就有**的
-//   authResponse（对旧客户端也管用）。
+// Shared selector proof injection and DSH Lite proof bootstrap regressions.
+// The selector receives e2ee.js plus the compatible prove.js helper. DSH Lite
+// serves exact pinned assets and starts the maintained e2ee.js proof path
+// before its adapter/UI. Neither shell grants access to content before proof.
 //
 // 这个测试守四件事：
 //   ① 两页都真的被注入了 /prove.js（而且没被注入到不该注入的地方）
@@ -38,22 +31,34 @@ const ok = (n, c, e) => {
 };
 const skip = (n, why) => { skipped++; console.log(`  · ${n} —— 跳过（${why}）`); };
 
-console.log('\n=== 进门证明脚本（codex / go 两页）· 回归 ===\n');
+console.log('\n=== 进门证明脚本（DSH Lite / go）· 回归 ===\n');
 
 // ── ① 注入接线 ─────────────────────────────────────────────────────────────
 console.log('[1] 注入接线');
 {
   const calls = [...SRC.matchAll(/injectProofAssets\(raw\.toString\('utf8'\)\)/g)].length;
-  // 原来是 2 处（codex.html / go.html）。2026-09-26 加了第 3 处：**选目标页**
-  // —— 它才是新设备第一眼看到的那一页，而它自己要用 /__targets（要证明）。
-  ok('三处注入（codex.html / go.html / 选目标页）', calls === 2, `实际 ${calls}`);
+  ok('连接选择页的 HTML 注入保留，已退休页面不再注入', calls === 1, `实际 ${calls}`);
   ok('选目标页也注入了', /res\.end\(injectProofAssets\(launcherPage\(req, lang[,)]/.test(SRC));
   ok('/prove.js 在放行名单里（证明之前必须能取到）', /['\"]\/prove\.js['\"]/.test(SRC.slice(SRC.indexOf('const BOOTSTRAP_PATHS'), SRC.indexOf('function isBootstrapRequest'))));
   ok('/prove.js 进了指纹名单（它拿着进门凭证做 HMAC，必须钉住）',
     /const files = \[[\s\S]*?'\/prove\.js'\]/.test(SRC));
   ok('/prove.js 有独立路由', /'\/prove\.js': \{ file: 'prove\.js'/.test(SRC));
-  ok('注入时先裁剪语言（两步都在）',
-    /trimHtmlToLanguage\(req, res, path\.join\(PWA_DIR, 'codex\.html'\)\)[\s\S]{0,120}injectProofAssets/.test(SRC));
+  ok('连接选择页注入时先裁剪语言（两步都在）',
+    /trimHtmlToLanguage\(req, res, path\.join\(PWA_DIR, 'go\.html'\)\)[\s\S]{0,240}injectProofAssets/.test(SRC));
+  const lite = fs.readFileSync(path.join(BASE, 'pwa', 'dsh-lite.html'), 'utf8');
+  const liteScripts = [...lite.matchAll(/<script\s+src="([^"]+)"[^>]*>/g)].map(m => m[1]);
+  ok('DSH Lite 在适配器和界面前加载维护中的加密与证明实现',
+    liteScripts.indexOf('/e2ee.js') >= 0 &&
+    liteScripts.indexOf('/e2ee.js') < liteScripts.indexOf('/dsh-lite-adapter.js') &&
+    liteScripts.indexOf('/e2ee.js') < liteScripts.indexOf('/dsh-lite-ui.js'));
+  const actual = vm.createContext({});
+  vm.runInContext(require('./page-source.js').extractFunction(SRC, 'injectProofAssets'), actual);
+  const injected = actual.injectProofAssets('<html><head><script src="/application.js"></script></head></html>');
+  ok('实际注入函数先放钥匙实现，再证明，最后执行页面脚本',
+    injected.indexOf('/e2ee.js') < injected.indexOf('/prove.js') &&
+    injected.indexOf('/prove.js') < injected.indexOf('/application.js'));
+  ok('重复注入不会重复脚本，空内容保持不变',
+    actual.injectProofAssets(injected) === injected && actual.injectProofAssets('') === '');
 
   // ★ 这条是 2026-09-26 那个事故的回归断言：**只注入 prove.js 等于没注入**。
   //   prove.js 的 ready() 等 DshE2EE.authResponse（在 e2ee.js 身上），
@@ -236,8 +241,8 @@ const flush = () => new Promise((r) => setTimeout(r, 60));
       env.__calls.paths.join(','));
   }
 
-  // ── ⑥ 真网关：两页都带上了 /prove.js ─────────────────────────────────────
-  console.log('\n[6] 真网关：两页都带上了 /prove.js');
+  // ── ⑥ 真网关：选择页注入、DSH Lite 自带证明实现 ───────────────────────────
+  console.log('\n[6] 真网关：选择页证明注入与 DSH Lite 加密证明实现');
   if (staticOnly) {
     skip('真网关那一段', '明确使用 --static-only；没有发起真实请求');
     console.log(`\n${pass} 通过 / ${fail} 失败 / ${skipped} 跳过\n`);
@@ -272,15 +277,14 @@ const flush = () => new Promise((r) => setTimeout(r, 60));
       headers: { 'user-agent': `prove-test/${crypto.randomBytes(3).toString('hex')}` }
     });
     const cookie = (login.headers['set-cookie'] || []).map((c) => String(c).split(';')[0]).join('; ');
-    // ★ 这台设备此刻**还没通过证明** —— 而 codex 是我们的应用页，必须能打开
-    //   （日志曾出现 `403 未通过挑战应答: GET /codex（…不在开页面的窗口里，
-    //    直接拒）`，使用者的 Codex 页整页打不开，还以为是「要我重新配对」）。
-    const codex = await req({ path: '/codex', headers: { cookie } });
+    // The unproved device may obtain only the DSH application shell. Content
+    // remains behind the independent cookie/device/proof/encryption gates.
+    const lite = await req({ path: '/dsh-lite', headers: { cookie } });
     const go = await req({ path: '/go', headers: { cookie } });
-    ok('/codex 页面里注入了 /prove.js',
-      codex.status === 200 && codex.body.indexOf('src="/prove.js"') > 0, `HTTP ${codex.status}`);
-    ok('未证明的设备也能打开 codex 应用页（不该被拦成「正在验证」页）',
-      codex.status === 200 && /id="body"|class="msg/.test(codex.body), `HTTP ${codex.status}`);
+    ok('/dsh-lite 页面加载了维护中的 /e2ee.js 证明实现',
+      lite.status === 200 && lite.body.indexOf('src="/e2ee.js"') > 0, `HTTP ${lite.status}`);
+    ok('未证明的设备也能打开 DSH 应用页（不该被拦成「正在验证」页）',
+      lite.status === 200 && /id="app"/.test(lite.body), `HTTP ${lite.status}`);
     ok('/go 页面里也注入了 prove.js', go.status === 200 && go.body.indexOf('src="/prove.js"') > 0, `HTTP ${go.status}`);
     // go.html 原来**只引 i18n.js** —— 连 e2ee.js 都没有，所以「注入了 prove.js」
     // 这句话以前是空的（prove.js 没有钥匙可用）。现在两个都在。
@@ -290,8 +294,8 @@ const flush = () => new Promise((r) => setTimeout(r, 60));
     ok('选目标页也带上了两个脚本（新设备第一眼看到的就是它）',
       menu.status === 200 && menu.body.indexOf('src="/prove.js"') > 0 && menu.body.indexOf('src="/e2ee.js"') > 0,
       `HTTP ${menu.status}`);
-    ok('注入在页面自己的脚本之前（否则那些请求会先吃 403）',
-      codex.body.indexOf('/prove.js') < codex.body.indexOf('/e2ee.js'));
+    ok('DSH 加密与证明脚本在适配器之前（否则请求会先吃 403）',
+      lite.body.indexOf('/e2ee.js') < lite.body.indexOf('/dsh-lite-adapter.js'));
     const script = await req({ path: '/prove.js', headers: { cookie } });
     ok('/prove.js 本身能取到（未证明的设备也放行）',
       script.status === 200 && script.body.indexOf('DshProve') > 0, `HTTP ${script.status}`);

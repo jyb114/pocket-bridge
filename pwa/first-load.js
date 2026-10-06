@@ -36,17 +36,17 @@
     zh: {
       first: '第一次打开会比较慢（手机要下载一些东西），请等 20 秒左右 —— 别刷新，刷新只会更慢。',
       slow: '这次加载比平时慢（网络或电脑端在忙），再等一会儿 —— 别刷新。',
-      stuck: '还没出来的话：到电脑上打开控制台，看一眼 DSH / Codex 是不是还在跑。'
+      stuck: '还没出来的话：到电脑上打开控制台，看一眼 DSH 是不是还在跑。'
     },
     en: {
       first: 'The first load takes a while (your phone is downloading things). Give it about 20 seconds — do not refresh; refreshing only makes it slower.',
       slow: 'This load is slower than usual (busy network or computer). Give it a bit more time — do not refresh.',
-      stuck: 'Still nothing? Open the console on your computer and check whether DSH / Codex are still running.'
+      stuck: 'Still nothing? Open the console on your computer and check whether DSH is still running.'
     },
     es: {
       first: 'La primera vez tarda un poco (el teléfono está descargando cosas). Espera unos 20 segundos; no recargues, recargar solo lo hace más lento.',
       slow: 'Esta carga va más lenta de lo normal (red u ordenador ocupados). Espera un poco más; no recargues.',
-      stuck: '¿Sigue sin aparecer? Abre la consola en el ordenador y comprueba si DSH / Codex siguen en marcha.'
+      stuck: '¿Sigue sin aparecer? Abre la consola en el ordenador y comprueba si DSH sigue en marcha.'
     }
   };
 

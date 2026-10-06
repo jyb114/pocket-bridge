@@ -140,19 +140,43 @@ try {
     & $installedNode --version
     if ($LASTEXITCODE -ne 0) { throw 'Installed Node failed to launch' }
     foreach ($relative in @(
-      'README.md', 'THIRD-PARTY-NOTICES.md', 'scripts\pair-code.js',
-      'scripts\install-autostart.js', 'desktop\icons\app.ico',
-      'desktop\icons\green.ico', 'pwa\icon-192.png',
-      'scripts\desktop-ui-action.js', 'scripts\codex-desktop-driver.js',
-      'scripts\codex-desktop-ui.ps1', 'scripts\codex-desktop-relay.js',
-      'scripts\codex-desktop-target.js', 'scripts\codex-desktop-text.js',
-      'scripts\codex-desktop-source-guard.ps1',
-      'scripts\dot-desktop-driver.js', 'scripts\dot-desktop-ui.ps1', 'scripts\dot-desktop-service.js',
-      'scripts\dot-desktop-protocol.js', 'scripts\dot-desktop-owner.js', 'scripts\dot-desktop-journal.js',
-      'scripts\dot-desktop-private-store.js', 'scripts\dot-desktop-runtime.js',
-      'scripts\dot-desktop-send-driver.js', 'scripts\dot-desktop-send.ps1',
-      'scripts\dot-desktop-source-guard.ps1', 'scripts\dot-desktop-navigation-guard.ps1',
-      'pwa\codex.html', 'pwa\dot.html', 'pwa\e2ee.js'
+      'README.md',
+      'THIRD-PARTY-NOTICES.md',
+      'scripts\pair-code.js',
+      'scripts\install-autostart.js',
+      'desktop\icons\app.ico',
+      'desktop\icons\green.ico',
+      'pwa\icon-192.png',
+      'pwa\icon-maskable.png',
+      'pwa\pocket-bridge.svg',
+      'desktop\brand-artwork.js',
+      'scripts\gateway-daemon.js',
+      'scripts\mobile-proxy.js',
+      'scripts\first-run.js',
+      'scripts\gateway-listener.js',
+      'scripts\gateway-lifecycle.js',
+      'scripts\retired-targets.js',
+      'scripts\dsh-phone-surface.js',
+      'scripts\release-profile.js',
+      'scripts\windows-shortcut.js',
+      'scripts\dsh-runtime.js',
+      'scripts\dsh-adapter.js',
+      'scripts\dsh-lite-rpc.js',
+      'pwa\dsh-lite-adapter.js',
+      'pwa\dsh-lite-router.js',
+      'pwa\dsh-lite-legacy.js',
+      'scripts\dsh-lite-legacy-rpc.js',
+      'scripts\dsh-lite-upload.js',
+      'scripts\dsh-lite-download.js',
+      'scripts\dsh-lite-files.js',
+      'desktop\open-desktop.vbs',
+      'desktop\open-desktop-app.js',
+      'pwa\console.html',
+      'pwa\dsh-lite.html',
+      'pwa\dsh-lite-ui.js',
+      'pwa\dsh-lite-lang.js',
+      'pwa\dsh-lite.css',
+      'pwa\e2ee.js'
     )) {
       $sourceFile = Join-Path $root $relative
       $installedFile = Join-Path $testInstall $relative
@@ -163,6 +187,9 @@ try {
           (Get-FileHash -LiteralPath $installedFile -Algorithm SHA256).Hash) {
         throw "Installed payload differs from source: $relative"
       }
+    }
+    foreach ($retired in @('pwa\codex.html', 'pwa\dot.html', 'scripts\codex-desktop-relay.js', 'scripts\dot-desktop-runtime.js')) {
+      if (Test-Path -LiteralPath (Join-Path $testInstall $retired)) { throw "Retired feature unexpectedly bundled: $retired" }
     }
     foreach ($private in @('config.json', 'logs\access-key.txt', 'logs\mint-cookie.json', 'uploads', 'tls')) {
       if (Test-Path -LiteralPath (Join-Path $testInstall $private)) {
@@ -193,7 +220,7 @@ try {
           if ($status.service -eq 'pocket-bridge-gateway') { $healthy = $true; break }
         } catch { }
       }
-      if (-not $healthy) { throw 'Fresh Codex-only gateway did not become healthy' }
+      if (-not $healthy) { throw 'Fresh DSH gateway without installed DSH did not become healthy' }
     } finally {
       if ($gateway -and -not $gateway.HasExited) {
         Stop-Process -Id $gateway.Id -Force
@@ -210,19 +237,28 @@ try {
       throw 'Fresh start did not create both local secrets'
     }
     if (Test-Path -LiteralPath (Join-Path $testLog 'mint-cookie.json')) {
-      throw 'Codex-only fresh start unexpectedly minted a DSH cookie'
+      throw 'Gateway start without DSH unexpectedly minted a DSH cookie'
     }
     $originalAccess = Get-Content -LiteralPath $accessFile -Raw
     $originalE2ee = Get-Content -LiteralPath $e2eeFile -Raw
     New-Item -ItemType Directory -Path $testUploads | Out-Null
     [IO.File]::WriteAllText((Join-Path $testInstall 'config.json'), '{"test":"preserve"}')
     [IO.File]::WriteAllText((Join-Path $testUploads 'keep.txt'), 'sentinel-upload')
+    $legacySentinels = @('logs\codex-desktop-relay.json', 'logs\codex-message-queue.json', 'logs\dot-private\state.dpapi', 'logs\dot-private\requests.aes-gcm.json', 'uploads\codex\legacy\keep.txt')
+    foreach ($legacy in $legacySentinels) {
+      $legacyPath = Join-Path $testInstall $legacy
+      New-Item -ItemType Directory -Path (Split-Path $legacyPath -Parent) -Force | Out-Null
+      [IO.File]::WriteAllText($legacyPath, 'retained legacy user data')
+    }
     $upgrade = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$testInstall") -WindowStyle Hidden -Wait -PassThru
     if ($upgrade.ExitCode -ne 0) { throw "Silent upgrade failed: $($upgrade.ExitCode)" }
     if ((Get-Content -LiteralPath (Join-Path $testInstall 'config.json') -Raw) -ne '{"test":"preserve"}') { throw 'Upgrade changed config.json' }
     if ((Get-Content -LiteralPath $accessFile -Raw) -ne $originalAccess) { throw 'Upgrade changed access key' }
     if ((Get-Content -LiteralPath $e2eeFile -Raw) -ne $originalE2ee) { throw 'Upgrade changed E2EE key' }
     if ((Get-Content -LiteralPath (Join-Path $testUploads 'keep.txt') -Raw) -ne 'sentinel-upload') { throw 'Upgrade changed uploads' }
+    foreach ($legacy in $legacySentinels) {
+      if ((Get-Content -LiteralPath (Join-Path $testInstall $legacy) -Raw) -ne 'retained legacy user data') { throw "Upgrade changed legacy user data: $legacy" }
+    }
     $uninstaller = Join-Path $testInstall 'Uninstall Pocket Bridge.exe'
     $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
     if ($uninstall.ExitCode -ne 0) { throw "Silent uninstall failed: $($uninstall.ExitCode)" }
@@ -232,7 +268,10 @@ try {
         throw "Uninstall removed user data: $private"
       }
     }
-    Write-Host 'Fresh Codex-only gateway, install, upgrade, uninstall and user-data preservation tests passed'
+    foreach ($legacy in $legacySentinels) {
+      if ((Get-Content -LiteralPath (Join-Path $testInstall $legacy) -Raw) -ne 'retained legacy user data') { throw "Uninstall removed legacy user data: $legacy" }
+    }
+    Write-Host 'Fresh DSH gateway without installed DSH, install, upgrade, uninstall and user-data preservation tests passed'
   }
   Write-Host "SHA256 $((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash)"
 } finally {

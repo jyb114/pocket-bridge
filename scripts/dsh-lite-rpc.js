@@ -176,15 +176,16 @@ function validGoalPatch(value, requireObjective) {
   return true;
 }
 
-/**
- * 一条斜杠命令。只认「`/名字`」这种最简形式：
- * 单行、以 / 开头、命令名是字母数字加连字符、后面不带参数。
- *
- * 为什么这么窄：手机端只需要按一下 `/compact`。放开参数就等于把
- * "随便什么命令都能从手机发进来"，而这一层的价值恰恰是**面窄**。
- */
+/** One single-line host command; only inspected permission/plan argument forms. */
 function validCommandLine(value) {
-  return typeof value === 'string' && /^\/[A-Za-z][A-Za-z0-9-]{0,61}$/.test(value);
+  if (typeof value !== 'string' || value.length > 200 ||
+      /[\u0000-\u001f\u007f\u2028\u2029]/.test(value)) return false;
+  if (/^\/[A-Za-z][A-Za-z0-9-]{0,61}$/.test(value)) return true;
+  // The phone permission chooser and exit-plan action use these inspected
+  // host commands. Keep their arguments exact instead of forwarding arbitrary
+  // shell-like text or allowing a cached phone to invent another parameter API.
+  return /^\/permission (?:read-only|workspace-write|danger-full-access)$/.test(value) ||
+    /^\/plan (?:on|off)$/.test(value);
 }
 
 function validPromptContent(content) {
@@ -303,8 +304,8 @@ function validRequest(method, request) {
   // 这一点是从 asar 里那段 `assertExactArguments` 反推出来的（它按
   // `descriptor.parameters[].wire` 逐个核对字段名），再由上面的 schema 确认：
   //   line: string()；submittedAttachments: array(image|file-receipt)
-  // 只放行**一条单行、不带参数**的命令（`/compact` 这种），并且不允许附件 ——
-  // 手机端要的就是"按一下压缩"，没有别的东西要送进去。
+  // A single bare host command or the inspected permission/plan arguments.
+  // Never carry attachments or unknown argument forms through this command RPC.
   if (method === 'commands/list') {
     return exactKeys(request, ['agentId']) && validId(request.agentId);
   }

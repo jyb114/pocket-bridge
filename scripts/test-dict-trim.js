@@ -5,7 +5,7 @@
 //
 //   ① 三种语言都裁得对：中文（key 就是中文，整份字典都不需要）、英文、西语
 //   ② 裁完**页面还是完整的**：标签数不变、大括号收支不变、文件没被腰斩
-//   ③ **钉过指纹的 8 个 JS 一个都不许裁** —— 同一个 URL 按语言发不同内容，
+//   ③ **钉过指纹的共享与 DSH Lite JS 一个都不许裁** —— 同一个 URL 按语言发不同内容，
 //      会让「切一次语言」看起来像「代码被改过」（手机会弹红字拒绝执行）
 //   ④ 裁不了就原样发（不认识的写法、语法不过、抛异常，一律退回原文）
 //
@@ -22,8 +22,10 @@ const dictTrim = require('./dict-trim.js');
 const SRC = fs.readFileSync(path.join(BASE, 'scripts', 'mobile-proxy.js'), 'utf8');
 
 const PORT = 8080;
-const PAGES = ['pwa/codex.html', 'pwa/console.html', 'pwa/go.html'];
-const PINNED = ['polyfill.js', 'compat.js', 'e2ee.js', 'i18n.js', 'voice.js', 'route.js', 'boot.js', 'first-load.js'];
+const PAGES = ['pwa/console.html', 'pwa/go.html'];
+const PINNED = ['polyfill.js', 'compat.js', 'e2ee.js', 'i18n.js', 'voice.js', 'route.js', 'boot.js', 'first-load.js',
+  'prove.js', 'dsh-directory-picker.js', 'dsh-lite-pin.js', 'dsh-lite-adapter.js', 'dsh-lite-ui.js',
+  'dsh-lite-switch.js', 'dsh-lite-legacy.js', 'dsh-lite-router.js', 'dsh-lite-lang.js'];
 const staticOnly = process.argv.includes('--static-only');
 
 let pass = 0, fail = 0, skipped = 0;
@@ -102,19 +104,20 @@ for (const f of PAGES) {
 }
 
 // ── ③ 钉过指纹的文件一个都不许裁 ────────────────────────────────────────────
-console.log('\n[3] 钉过指纹的 8 个 JS：不许按语言改写');
+console.log('\n[3] 钉过指纹的共享与 DSH Lite JS：不许按语言改写');
 {
-  // 网关里「按语言裁剪」的调用点，只允许出现这三个页面
+  // Only the shared console and selector HTML are language-trimmed. DSH Lite
+  // scripts are fingerprinted exact assets, never rewritten per language.
   const calls = [...SRC.matchAll(/trimHtmlToLanguage\(req, res, path\.join\(PWA_DIR, '([^']+)'\)\)/g)]
     .map((m) => m[1]);
-  ok('裁剪只用在 codex.html / console.html / go.html 上',
-    calls.length === 3 && calls.every((c) => ['codex.html', 'console.html', 'go.html'].indexOf(c) >= 0),
+  ok('裁剪只用在 console.html / go.html 上',
+    calls.length === 2 && new Set(calls).size === 2 && calls.every((c) => ['console.html', 'go.html'].indexOf(c) >= 0),
     calls.join(','));
   for (const name of PINNED) {
     ok(`没有对 ${name} 做按语言裁剪`, calls.indexOf(name) < 0);
   }
   // 指纹名单本身也要在（防止有人顺手把它删了）
-  ok('网关里仍保留那 8 个文件的指纹名单',
+  ok('网关里仍保留共享与 DSH Lite 文件的指纹名单',
     PINNED.every((n) => SRC.indexOf(`'/${n}'`) >= 0 || SRC.indexOf(`'${n}'`) >= 0));
 }
 
@@ -144,7 +147,7 @@ console.log('\n[4] 认不出来 / 改坏了 / 抛异常 —— 一律原样发')
 
 // ── ⑤ 真网关：同一个 URL 按语言给不同体积 ───────────────────────────────────
 (async () => {
-  console.log('\n[5] 真网关：/codex 按 dsh-lang 给不同体积');
+  console.log('\n[5] 真网关：/go 按 dsh-lang 给不同体积');
   if (staticOnly) {
     skip('真网关那一段', '明确使用 --static-only；没有发起真实请求');
     console.log(`\n${pass} 通过 / ${fail} 失败 / ${skipped} 跳过\n`);
@@ -178,8 +181,8 @@ console.log('\n[4] 认不出来 / 改坏了 / 抛异常 —— 一律原样发')
     const login = await req({ path: `/k/${key}`, headers: { 'user-agent': `dict-trim-test/${crypto.randomBytes(3).toString('hex')}` } });
     const cookie = (login.headers['set-cookie'] || []).map((c) => String(c).split(';')[0]).join('; ');
 
-    const zh = await req({ path: '/codex', headers: { cookie: `${cookie}; dsh-lang=zh` } });
-    const en = await req({ path: '/codex', headers: { cookie: `${cookie}; dsh-lang=en` } });
+    const zh = await req({ path: '/go', headers: { cookie: `${cookie}; dsh-lang=zh` } });
+    const en = await req({ path: '/go', headers: { cookie: `${cookie}; dsh-lang=en` } });
     ok('两种语言都能拿到页面（HTTP 200）', zh.status === 200 && en.status === 200,
       `zh=${zh.status} en=${en.status}`);
     if (zh.status === 200 && en.status === 200) {

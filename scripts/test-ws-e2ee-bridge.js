@@ -15,6 +15,9 @@ const ok = (n, c, e) => {
 };
 
 const SECRET = 'bridge-test-secret-0123456789';
+const HANDSHAKE = Buffer.from('HTTP/1.1 101 Switching Protocols\r\n' +
+  'Upgrade: websocket\r\nConnection: keep-alive, Upgrade\r\n' +
+  'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n');
 
 console.log('\n=== 加密桥接：开关规则与握手处理 ===\n');
 
@@ -29,15 +32,12 @@ ok('有密钥且手机说了 e2ee=1 → 加密',
   bridge.wanted('/ws?e2ee=1', SECRET) === true);
 
 ok('参数混在别的里面也认得出来',
-  bridge.wanted('/codex/ws?foo=1&e2ee=1&bar=2', SECRET) === true);
+  bridge.wanted('/api/remote.mux?foo=1&e2ee=1&bar=2', SECRET) === true);
 
 // ── 2. 握手响应必须原样透传，不能被当帧解析 ──────────────────────
 {
   const b = bridge.attach(SECRET);
-  const handshake = Buffer.from(
-    'HTTP/1.1 101 Switching Protocols\r\n' +
-    'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
-    'Sec-WebSocket-Accept: abc123\r\n\r\n');
+  const handshake = HANDSHAKE;
 
   const out1 = b.fromUpstream(handshake);
   ok('握手响应原样返回（一个字节不改）', out1.equals(handshake),
@@ -48,7 +48,7 @@ ok('参数混在别的里面也认得出来',
 // ── 3. 握手响应分片到达 ──────────────────────────────────────────
 {
   const b = bridge.attach(SECRET);
-  const handshake = Buffer.from('HTTP/1.1 101 X\r\nA: b\r\n\r\n');
+  const handshake = HANDSHAKE;
   const half1 = b.fromUpstream(handshake.subarray(0, 10));
   const half2 = b.fromUpstream(handshake.subarray(10));
   ok('握手响应分两次到达也能拼对',
@@ -62,7 +62,7 @@ ok('参数混在别的里面也认得出来',
   const keys = e2ee.deriveKeys(SECRET, e2ee.slotAt());
   const msg = JSON.stringify({ hello: 'world' });
   const frame = wsf.buildFrame(wsf.OP_TEXT, Buffer.from(msg), false);
-  const handshake = Buffer.from('HTTP/1.1 101 X\r\n\r\n');
+  const handshake = HANDSHAKE;
 
   const out = b.fromUpstream(Buffer.concat([handshake, frame]));
   const head = out.subarray(0, handshake.length);
@@ -80,7 +80,7 @@ ok('参数混在别的里面也认得出来',
   const b = bridge.attach(SECRET);
   const keys = e2ee.deriveKeys(SECRET, e2ee.slotAt());
   // 真实顺序：先握手，再走数据
-  b.fromUpstream(Buffer.from('HTTP/1.1 101 X\r\n\r\n'));
+  b.fromUpstream(HANDSHAKE);
 
   // 手机发来：加密的
   const ask = JSON.stringify({ method: 'thread/list' });
@@ -103,20 +103,69 @@ ok('参数混在别的里面也认得出来',
   ok('手机侧能解开回复', dec && dec.toString('utf8') === reply);
 }
 
-// ── 5b. 保险阀：握手响应异常时不能把连接吞死 ─────────────────────
+// A mandatory encrypted channel must never release malformed upstream bytes.
+const marker = 'SYNTHETIC_PRIVATE_HANDSHAKE_CONTENT';
+function rejectedHandshake(name, input, expectedCode, split = 0) {
+  const b = bridge.attach(SECRET); let output = Buffer.alloc(0), caught = null;
+  try {
+    if (split) output = b.fromUpstream(input.subarray(0, split));
+    output = Buffer.concat([output, b.fromUpstream(input.subarray(split))]);
+  } catch (error) { caught = error; }
+  ok(name + ': fixed refusal and zero raw output', caught && caught.code === expectedCode &&
+    !caught.message.includes(marker) && output.length === 0 && b.isReady() === false &&
+    b.stats().handshakeRejected === 1 && b.stats().closed === true);
+  let repeated = null;
+  try { b.fromUpstream(Buffer.concat([HANDSHAKE, Buffer.from(marker)])); } catch (error) { repeated = error; }
+  ok(name + ': refusal cannot be reopened by later bytes', repeated && repeated.code === expectedCode);
+}
+rejectedHandshake('No delimiter beyond the bound', Buffer.concat([Buffer.from(marker), Buffer.alloc(8193)]), 'ws-upgrade-too-large');
+rejectedHandshake('Split oversized no-delimiter response', Buffer.concat([Buffer.from(marker), Buffer.alloc(8193)]), 'ws-upgrade-too-large', 4096);
+for (const [name, header] of [
+  ['HTTP error body', 'HTTP/1.1 500 Error\r\nContent-Type: text/plain\r\n\r\n'],
+  ['HTTP JSON success is not an upgrade', 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n'],
+  ['Nonexact upgrade status', HANDSHAKE.toString().replace('101 Switching','1010 Switching')],
+  ['Missing Upgrade header', HANDSHAKE.toString().replace('Upgrade: websocket\r\n','')],
+  ['Missing Connection upgrade token', HANDSHAKE.toString().replace('keep-alive, Upgrade','keep-alive')],
+  ['Invalid accept header', HANDSHAKE.toString().replace('s3pPLMBiTxaQ9kYGzzhZRbK+xOo=','invalid')],
+  ['Duplicate accept header', HANDSHAKE.toString().replace('\r\n\r\n','\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n')],
+  ['Malformed folded header', HANDSHAKE.toString().replace('\r\n\r\n','\r\n injected: unsafe\r\n\r\n')],
+  ['Unexpected HTTP body framing', HANDSHAKE.toString().replace('\r\n\r\n','\r\nTransfer-Encoding: chunked\r\n\r\n')]
+]) rejectedHandshake(name, Buffer.from(header + marker), 'ws-upgrade-invalid');
 {
-  const b = bridge.attach(SECRET);
-  // 对面回了一堆不是 HTTP 的东西
-  const junk = Buffer.alloc(9000, 0x41);
-  const out = b.fromUpstream(junk);
-  ok('握手响应异常时会放行，不会一直吞（保险阀）',
-    out.length > 0 && b.isReady() === true, out.length + ' 字节');
+  const head = HANDSHAKE.subarray(0, -2);
+  const padding = Buffer.from('X-Padding: ' + 'x'.repeat(8193 - head.length - 14) + '\r\n\r\n');
+  rejectedHandshake('Complete header beyond the bound', Buffer.concat([head, padding, Buffer.from(marker)]), 'ws-upgrade-too-large');
+}
+{
+  const b = bridge.attach(SECRET); let before = Buffer.alloc(0), last = null;
+  for (let i = 0; i < HANDSHAKE.length; i++) {
+    const out = b.fromUpstream(HANDSHAKE.subarray(i, i + 1));
+    if (i < HANDSHAKE.length - 1) before = Buffer.concat([before, out]); else last = out;
+  }
+  ok('Byte-fragmented valid upgrade releases no incomplete header', before.length === 0 && last.equals(HANDSHAKE));
+}
+{
+  const b = bridge.attach(SECRET), text = marker.repeat(400);
+  const frame = wsf.buildFrame(wsf.OP_TEXT, Buffer.from(text), false);
+  const result = b.fromUpstream(Buffer.concat([HANDSHAKE, frame]));
+  const encrypted = wsf.parseFrames(result.subarray(HANDSHAKE.length)).frames;
+  const decoded = encrypted.length === 1 && e2ee.decrypt(e2ee.deriveKeys(SECRET, e2ee.slotAt()).b, encrypted[0].payload);
+  ok('A large coalesced data frame is encrypted, not counted as header bytes', result.subarray(0,HANDSHAKE.length).equals(HANDSHAKE) &&
+    encrypted.length === 1 && encrypted[0].opcode === wsf.OP_BIN && decoded && decoded.toString() === text && !result.includes(Buffer.from(marker)));
+}
+{
+  const b = bridge.attach(SECRET); b.fromUpstream(HANDSHAKE.subarray(0,10)); b.close(); b.close();
+  let upError = null, downError = null;
+  try { b.fromClient(Buffer.from(marker)); } catch (error) { upError = error; }
+  try { b.fromUpstream(HANDSHAKE); } catch (error) { downError = error; }
+  ok('Explicit close is idempotent and closes both buffered directions', upError && downError &&
+    upError.code === 'ws-bridge-closed' && downError.code === 'ws-bridge-closed' && !b.isReady() && b.stats().closed);
 }
 
 // ── 6. 控制帧在加密连接上也要透传 ────────────────────────────────
 {
   const b = bridge.attach(SECRET);
-  b.fromUpstream(Buffer.from('HTTP/1.1 101 X\r\n\r\n'));   // 先过握手
+  b.fromUpstream(HANDSHAKE);   // 先过握手
   const pong = wsf.buildFrame(wsf.OP_PONG, Buffer.from('hb'), false);
   const out = b.fromUpstream(pong);
   const fr = wsf.parseFrames(out).frames;

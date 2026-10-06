@@ -5,19 +5,29 @@
   // before either can open a connection or send a command to DSH.
   global.__dshLiteDeferAutoMount = true;
 
-  function classicUrl() {
-    var url = new URL(global.location.href);
-    if (/\/dsh-lite(?:\.html)?$/.test(url.pathname)) url.pathname = '/';
-    url.searchParams.set('target', 'dsh');
-    url.searchParams.set('view', 'classic');
-    return url.toString();
+  function t(message, vars) {
+    var translated = message;
+    try {
+      if (global.DshI18n && typeof global.DshI18n.t === 'function')
+        translated = global.DshI18n.t(message, vars);
+    } catch (_) { /* Startup guidance remains available without localization. */ }
+    if (typeof translated !== 'string' || !translated) translated = message;
+    return translated.replace(/\{(\w+)\}/g, function (match, name) {
+      return vars && Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match;
+    });
+  }
+
+  function routerProblem(message, vars) {
+    var error = new Error(t(message, vars));
+    error.routerMessage = error.message;
+    return error;
   }
 
   function showProblem(message) {
     var status = global.document.getElementById('connection-status');
     var banner = global.document.getElementById('error-banner');
     var text = global.document.getElementById('error-text');
-    if (status) { status.textContent = '连接不可用'; status.dataset.state = 'disconnected'; }
+    if (status) { status.textContent = t('连接不可用'); status.dataset.state = 'disconnected'; }
     if (text) text.textContent = message;
     if (banner) banner.hidden = false;
     ['error-retry', 'reconnect', 'rail-reconnect'].forEach(function (id) {
@@ -78,36 +88,37 @@
       if (attempt === 0) await new Promise(function (resolve) { global.setTimeout(resolve, 350); });
     }
     var absent = missingComponents(profile);
-    if (absent.length) throw new Error('DSH 手机组件未加载：' + absent.map(function (item) {
-      return item.name + '（' + item.path + '）';
-    }).join('、') + '。已重试 2 次，请检查连接后刷新桥页面。');
+    if (absent.length) throw routerProblem('DSH 手机组件未加载：{components}。已重试 2 次，请检查连接后刷新桥页面。', {
+      components: absent.map(function (item) {
+        return t('{name}（{path}）', { name: t(item.name), path: item.path });
+      }).join(t('、'))
+    });
   }
 
   async function selectAdapter() {
-    var classic = classicUrl();
     ['classic-view', 'settings-classic'].forEach(function (id) {
       var link = global.document.getElementById(id);
-      if (link) link.href = classic;
+      if (link) { link.hidden = true; link.removeAttribute('href'); }
     });
     try {
       var e2ee = global.DshE2EE;
       if (!e2ee || !e2ee.available() || !global.__dshE2eeSecret ||
           !await e2ee.prove(true)) {
-        throw new Error('加密连接或设备授权尚未准备好，请用电脑控制台复制完整地址重新打开。');
+        throw routerProblem('加密连接或设备授权尚未准备好，请用电脑控制台复制完整地址重新打开。');
       }
       var response = await global.fetch('/__targets', { credentials: 'same-origin', cache: 'no-store' });
-      if (!response.ok) throw new Error('无法识别电脑上的 DSH 版本（HTTP ' + response.status + '）。');
+      if (!response.ok) throw routerProblem('无法识别电脑上的 DSH 版本（HTTP {status}）。', { status: response.status });
       var body = await response.json();
       var target = body && Array.isArray(body.targets) ? body.targets.find(function (item) {
         return item && item.id === 'dsh';
       }) : null;
       var profile = target && (target.profile || target.runtime && target.runtime.profile);
-      if (!components[profile]) throw new Error('这台电脑的 DSH 协议尚未得到验证，请使用原版界面。');
+      if (!components[profile]) throw routerProblem('这台电脑的 DSH 协议尚未得到验证。请在电脑上检查 DSH 版本后重新连接；手机不会改用未加密的原版界面。');
       await ensureComponents(profile);
       var adapter = global[components[profile].adapter];
       global.DshLiteUI.mount(adapter);
     } catch (error) {
-      showProblem(error && error.message || '连接 DSH 失败，请重试。');
+      showProblem(error && error.routerMessage || t('连接 DSH 失败，请重试。'));
     }
   }
 

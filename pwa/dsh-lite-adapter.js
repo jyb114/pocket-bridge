@@ -381,7 +381,19 @@
       var index = recordIndex(row.id);
       if (index < 0 || activeRecords[index].status !== 'settled') upsertActive(row, false);
     });
-    emit({ type: 'records', sessionId: activeSessionId, records: activeRecords.slice(), hasMore: activeHasMore });
+    var latestRunning = null;
+    activeJournal.forEach(function (entry) {
+      var event = entry && entry.type === 'event' && entry.event;
+      if (event && event.type === 'turn/start') latestRunning = true;
+      else if (event && event.type === 'turn/end') latestRunning = false;
+    });
+    // A surviving running/preparing historical row is not the current turn.
+    // Only a journal boundary or the explicit current assistant attempt proves
+    // running state; an absent boundary stays unknown for older protocols.
+    if (activeAttempt) latestRunning = true;
+    var snapshot = { type: 'records', sessionId: activeSessionId, records: activeRecords.slice(), hasMore: activeHasMore };
+    if (typeof latestRunning === 'boolean') snapshot.running = latestRunning;
+    emit(snapshot);
   }
   function beginAssistantStream(value) {
     assistantRevision = value && Number.isSafeInteger(value.revision) ? value.revision : null;
@@ -946,6 +958,34 @@
       '文件下载失败（HTTP ' + response.status + '）。');
     return { blob: await response.blob(), name: filePath.split(/[\\/]/).pop() || 'download' };
   }
+  async function downloadImageAttachment(input) {
+    var sessionId = input && input.sessionId;
+    var attachmentId = input && input.attachmentId;
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 ||
+        /[\u0000-\u0020\u007f]/.test(sessionId) || typeof attachmentId !== 'string' ||
+        !/^sha256:[a-f0-9]{64}$/.test(attachmentId)) throw error('图片附件标识无效。');
+    var e2ee = global.DshE2EE;
+    if (!e2ee || !global.__dshE2eeSecret || typeof e2ee.encryptedFetch !== 'function')
+      throw error('缺少加密连接密钥，请重新打开完整地址。');
+    var invoke = function () { return e2ee.encryptedFetch(global.__dshE2eeSecret, '/__dsh/lite-attachment', {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: input.signal,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ sessionId: sessionId, attachmentId: attachmentId })
+    }); };
+    var response = await invoke();
+    if (response.status === 403 && typeof e2ee.prove === 'function' && await e2ee.prove(true)) response = await invoke();
+    if (!response.ok) throw error(response.status === 501 ? '这个 DSH 版本尚不支持按附件标识读取图片。' :
+      response.status === 404 ? 'DSH 找不到这张图片，或它不属于当前对话。' :
+      response.status === 413 ? '图片超过安全预览限制。' : '图片读取失败，请检查连接后重试。');
+    if (!response.headers || response.headers.get('x-dsh-e2ee-decrypted') !== '1' ||
+        response.headers.get('x-dsh-e2ee') === '1') throw error('图片响应没有通过加密验证。');
+    var type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(type)) throw error('图片格式不受支持。');
+    var blob = await response.blob();
+    if (!blob || !Number.isSafeInteger(blob.size) || blob.size <= 0 || blob.size > 8 * 1024 * 1024 ||
+        String(blob.type || '').toLowerCase() !== type) throw error('图片超过安全预览限制。');
+    return { blob: blob, sessionId: sessionId, attachmentId: attachmentId };
+  }
   async function respondToInteraction(input) {
     var interaction = pendingInteractions.get(String(input.id));
     if (!interaction || !clientId) throw error('这条请求已过期，请重连以获取最新请求。');
@@ -1094,6 +1134,19 @@
       var out = await this.liteRpc('session/projections', { sessionId: selectedId });
       var summary = sessionSummaries.get(selectedId);
       return selectionState(out && out.values, summary && summary.blank);
+    },
+    // Confirmed on the current desktop protocol: permissions.currentValue is a
+    // session projection, not the acknowledgement of /permission execution.
+    readPermission: async function (sessionId) {
+      var selectedId = String(sessionId || '');
+      if (!selectedId) throw error('请先打开要查看的对话。');
+      var out = await this.liteRpc('session/projections', { sessionId: selectedId });
+      var preset = out && out.values && out.values.permissions && out.values.permissions.currentValue;
+      if (!out || !Number.isSafeInteger(out.asOfSeq) || out.asOfSeq < -1 ||
+          ['read-only', 'workspace-write', 'danger-full-access'].indexOf(preset) < 0) {
+        throw error('此版本未报告当前授权范围。');
+      }
+      return { presetId: preset, asOfSeq: out.asOfSeq };
     },
     // ── C21 「计划 / 目标」：**不是 RPC，是斜杠命令** ────────────────────────
     //
@@ -1256,6 +1309,7 @@
     listWorkspaceFiles: listWorkspaceFiles,
     createProject: createProject, createSession: createSession,
     sendMessage: sendMessage, uploadFile: uploadFile, downloadFile: downloadFile,
+    downloadImageAttachment: downloadImageAttachment,
     cancelSession: cancelSession, respondToInteraction: respondToInteraction
   };
   global.DshLiteRemoteAdapter = global.DshLiteAdapter;

@@ -1,12 +1,11 @@
 {
   "name": "pocket-bridge",
-  "version": "1.0.0-preview.8",
+  "version": "1.0.0-preview.9",
   "private": true,
-  "description": "An unofficial gateway for using DeepSeek Harness or OpenAI Codex on your own Windows PC from a phone browser.",
+  "description": "An unofficial DSH-only gateway for using DeepSeek Harness on your Windows PC from a phone browser.",
   "keywords": [
     "deepseek-harness",
     "dsh",
-    "codex",
     "remote",
     "mobile",
     "gateway",
@@ -24,9 +23,9 @@
   "scripts": {
     "start": "node scripts/gateway-daemon.js",
     "check": "node scripts/self-check.js",
-    "_comment_test": "Full local regression suite. It includes checks requiring a live gateway, browser, DSH/Codex, and network access; review each test's prerequisites and effects before running. Use npm run ci for the isolated subset, but do not treat it as real-device acceptance.",
-    "test": "node scripts/self-check.js && node scripts/browser-check.js && node scripts/test-routes.js && node scripts/test-auth-boundary.js && node scripts/test-challenge-response.js && node scripts/test-bootstrap-gate.js && node scripts/test-compression.js && node scripts/test-narrow-kill.js && node scripts/test-tunnel-pids.js && node scripts/test-tunnel-single.js && node scripts/test-daemon-operation-stop.js && node scripts/test-key-nonexportable.js && node scripts/test-code-integrity.js && node scripts/test-devices.js && node scripts/test-self-visit.js && node scripts/test-self-restart.js && node scripts/test-codex-usage.js && node scripts/test-lan-https.js && node scripts/test-tunnel-probe.js && node scripts/test-codex-paging.js && node scripts/test-codex-resilience.js && node scripts/test-codex-no-lock.js && node scripts/test-codex-observer.js --expanded --attachments --queue && node scripts/test-balance-placement.js && node scripts/test-phone-balance.js && node scripts/test-voice.js && node scripts/test-rotate-e2ee.js && node scripts/test-e2ee-live.js && node scripts/test-replay.js && node scripts/test-diagnostic.js && node scripts/test-replay-live.js && node scripts/test-e2ee-failclosed.js && node scripts/test-release-ready.js && node scripts/security-audit.js && node scripts/similarity-audit.js && node scripts/check-frontend.js && node scripts/test-pwa-install.js && node scripts/test-chain-integrity.js && node scripts/test-contrast.js && node scripts/test-i18n.js && node scripts/test-routes-i18n.js && node scripts/test-address-key.js && node scripts/test-targets-i18n.js && node scripts/test-notify-i18n.js && node scripts/secret-scan.js && node scripts/test-codex-queue.js && node scripts/test-release-lock.js && node scripts/test-first-load.js && node scripts/test-console-help.js && node scripts/test-codex-projects.js && node scripts/test-codex-echo-dup.js && node scripts/test-dsh-api-e2ee.js && node scripts/test-compat.js && node scripts/test-config.js && node scripts/test-polyfill.js && node scripts/test-ws-frame.js && node scripts/test-ws-crypt.js && node scripts/test-ws-e2ee-bridge.js && node scripts/test-e2ee-interop.js && node scripts/test-file-e2ee.js && node scripts/test-upload-handler.js && node scripts/test-balance-ui.js && node scripts/test-codex-e2ee.js",
-    "_comment_test_all": "Discover and run all available checks. Some require real devices, can affect local account state, or need manual action; review them before running.",
+    "_comment_test": "Current DSH and shared isolated regression suite. Real desktop, phone and tunnel acceptance is separate.",
+    "test": "node scripts/run-ci-tests.js",
+    "_comment_test_all": "Discover current DSH/shared checks only; archived Codex/Dot integrations are excluded. Some DSH checks require a configured real machine; inspect their prerequisites and effects first.",
     "test:all": "node scripts/run-all-tests.js",
     "audit": "node scripts/security-audit.js",
     "similarity": "node scripts/similarity-audit.js",
@@ -37,9 +36,10 @@
     "_comment_prune": "Retention cleanup for old runtime data. Run --dry-run first. The allowlist excludes keys, devices, and queues.",
     "prune:dry": "node scripts/prune-data.js --dry-run",
     "ci": "node scripts/run-ci-tests.js",
-    "_comment_ci": "Isolated checks that do not require a running local gateway or installed Codex. The full npm test suite needs a configured real machine.",
+    "_comment_ci": "Isolated DSH and shared gateway checks; no Codex or Dot runtime or tests are selected.",
     "balance": "node scripts/ds-balance.js",
-    "make-cert": "node scripts/make-cert.js"
+    "make-cert": "node scripts/make-cert.js",
+    "_comment_dependencies": "The source has no third-party npm dependencies. The Windows installer bundles Node.js and cloudflared, but not DeepSeek Harness."
   },
   "dependencies": {},
   "devDependencies": {},

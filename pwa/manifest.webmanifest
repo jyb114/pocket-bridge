@@ -2,17 +2,17 @@
   "id": "/",
   "name": "Pocket Bridge",
   "short_name": "Pocket Bridge",
-  "description": "把电脑上的 DSH 和 Codex 带到手机上",
+  "description": "Use DeepSeek Harness on your own computer from a phone browser. Independent and unofficial.",
   "_comment_start_url": "不设置 start_url：iPhone 添加到主屏幕时应保留当时打开的完整加密链接（含浏览器本地的 #k）。绝不能把密钥写入这个公开的清单文件。",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0b0b0c",
-  "theme_color": "#0b0b0c",
-  "lang": "zh",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "en",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

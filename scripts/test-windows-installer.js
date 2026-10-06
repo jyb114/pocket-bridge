@@ -165,28 +165,20 @@ check('uninstall remains payload-only and preserves private data without recursi
 function requiredPayloadFiles(source) {
   const match = source.match(/for\s*\(const required of\s*\[([\s\S]*?)\]\)/);
   assert(match, 'stager required-file boundary is required');
-  return [...match[1].matchAll(/'([^']+)'/g)].map(value => value[1]);
+  return [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map(value => value[1]);
 }
-function nativeDependencies() {
-  const pending = ['scripts/codex-desktop-driver.js', 'scripts/codex-desktop-relay.js',
-    'scripts/dot-desktop-driver.js', 'scripts/dot-desktop-service.js',
-    'scripts/dot-desktop-send-driver.js', 'scripts/dot-desktop-journal.js',
-    'scripts/dot-desktop-private-store.js', 'scripts/dot-desktop-runtime.js'];
+function runtimeDependencies() {
+  const pending = ['scripts/mobile-proxy.js', 'scripts/gateway-daemon.js', 'desktop/open-desktop-app.js'];
   const visited = new Set();
   while (pending.length) {
     const relative = pending.shift();
     if (visited.has(relative)) continue;
-    assert(relative.startsWith('scripts/') && !relative.includes('..'), 'native helper dependency must stay in scripts');
+    assert(!/^(?:scripts\/(?:codex-|dot-|desktop-ui-action)|pwa\/(?:codex|dot))/.test(relative), 'retired runtime dependency: ' + relative);
     visited.add(relative);
     const source = fs.readFileSync(path.join(root, relative), 'utf8');
     for (const match of source.matchAll(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g)) {
       const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(relative), match[1]));
       pending.push(path.posix.extname(dependency) ? dependency : dependency + '.js');
-    }
-    // Both JS helper launches and PS dot-sourcing/readback use these literal
-    // basenames. Reading the source does not execute any native helper.
-    for (const match of source.matchAll(/(?:path\.join\(__dirname,\s*|Join-Path\s+\$PSScriptRoot\s+)['"]([^'"]+\.(?:js|ps1))['"]/g)) {
-      pending.push(path.posix.join(path.posix.dirname(relative), match[1]));
     }
   }
   return visited;
@@ -198,18 +190,21 @@ check('the actual gateway loopback listener is a hard payload requirement before
   assert(requiredPayload.includes('scripts/gateway-listener.js'),
     'the gateway must never be packaged without its actual loopback listener');
 });
-check('all current native imports and dot-sourced guards are hard payload requirements and installed hash checks', () => {
-  const dependencies = nativeDependencies();
+check('DSH-only runtime closure and installed byte checks exclude retired integrations', () => {
+  const profile = require('./release-profile.js');
+  const dependencies = runtimeDependencies();
+  assert(dependencies.size >= 20, 'shared runtime closure unexpectedly empty');
+  for (const relative of dependencies) assert(profile.isPayloadPath(relative), 'required active dependency was excluded: ' + relative);
   const installed = builder.match(/foreach\s*\(\$relative\s+in\s+@\(([\s\S]*?)\)\)\s*\{/);
   assert(installed, 'installed-source hash checks are required');
   const checked = new Set([...installed[1].matchAll(/'([^']+)'/g)].map(value => value[1].replace(/\\/g, '/')));
-  assert(dependencies.size >= 19, 'guarded native closure unexpectedly lost a dependency');
-  for (const relative of dependencies) {
-    assert(requiredPayload.includes(relative), `${relative} must be a hard staging requirement`);
-    assert(checked.has(relative), `${relative} must be compared with installed source bytes`);
+  for (const relative of ['scripts/gateway-lifecycle.js', 'scripts/retired-targets.js', 'scripts/dsh-phone-surface.js', 'scripts/release-profile.js',
+    'scripts/dsh-lite-rpc.js', 'pwa/dsh-lite.html', 'pwa/dsh-lite-ui.js', 'pwa/e2ee.js']) {
+    assert(requiredPayload.includes(relative), relative + ' must be a hard staging requirement');
+    assert(checked.has(relative), relative + ' must be compared with installed source bytes');
   }
-  for (const relative of ['pwa/codex.html', 'pwa/dot.html', 'pwa/e2ee.js']) {
-    assert(checked.has(relative), `${relative} must be compared with installed source bytes`);
+  for (const relative of ['scripts/codex-desktop-relay.js', 'scripts/dot-desktop-runtime.js', 'pwa/codex.html', 'pwa/dot.html']) {
+    assert(!requiredPayload.includes(relative)); assert(!checked.has(relative)); assert(!profile.isPayloadPath(relative));
   }
 });
 check('real staging rejects each missing new required module and excludes private fixture artifacts', () => {
@@ -229,11 +224,7 @@ check('real staging rejects each missing new required module and excludes privat
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.writeFileSync(destination, 'isolated private fixture; never a real credential', 'utf8');
     }
-    const newRequired = ['scripts/gateway-listener.js', 'scripts/codex-history-transport.js', 'scripts/dot-desktop-protocol.js', 'scripts/dot-desktop-owner.js',
-      'scripts/dot-desktop-journal.js', 'scripts/dot-desktop-send-driver.js', 'scripts/dot-desktop-send.ps1',
-      'scripts/dot-desktop-source-guard.ps1', 'scripts/dot-desktop-navigation-guard.ps1',
-      'scripts/codex-desktop-source-guard.ps1', 'scripts/dot-desktop-private-store.js',
-      'scripts/dot-desktop-runtime.js'];
+    const newRequired = ['scripts/gateway-listener.js', 'scripts/gateway-lifecycle.js', 'scripts/retired-targets.js', 'scripts/dsh-phone-surface.js', 'scripts/release-profile.js', 'scripts/dsh-lite-rpc.js', 'pwa/dsh-lite.html'];
     function stage(label, tracked) {
       const output = path.join(scratch, label);
       vm.runInNewContext(stager, {
@@ -246,6 +237,7 @@ check('real staging rejects each missing new required module and excludes privat
             assert.equal(options.cwd, sourceRoot);
             return Buffer.from(tracked.join('\0') + '\0');
           } };
+          if (name === '../../scripts/release-profile.js') return require('./release-profile.js');
           return require(name);
         }
       }, { timeout: 10000 });
