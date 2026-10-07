@@ -1,8 +1,12 @@
-# Release notes - 1.0.0-preview.11
+# Release notes - 1.0.0-preview.12
 
-## List row layout fix
+## Loading and runtime performance
 
-This patch prevents project and conversation rows from shrinking inside scrollable lists, so long titles and their secondary text no longer overlap the next row. It changes only this layout rule. Preview.10 functionality, compatibility scope and security limits remain unchanged; the existing release information follows.
+- Reuse compressed representations of fixed public page assets in a bounded memory cache. Every request still reads and hashes the actual source and verifies stable file identity. Changed, missing or unreadable source cannot produce a stale cached success. Compression settings, exact decoded bytes, representation validators and page security headers are preserved. The cache holds at most 64 entries and 8 MiB; source files over 2 MiB bypass it and remain available. First-miss compression is unchanged.
+- Share only concurrent modern-session projection reads, so the foreground queue, goal and model refresh can use one encrypted request instead of three. Settled results are not cached. Join eligibility expires after one second, and mutations, reconnects and key changes fence earlier reads. Writes are still dispatched individually and are not automatically retried by this optimization.
+- Reconcile project and conversation buttons in place instead of rebuilding every row for repeated catalog snapshots. Unchanged refreshes preserve keyboard focus; names, paths, ordering, selection, search and language changes still update the visible interface.
+
+These changes preserve the existing DSH feature surface, explicit image loading, protected transport and compatibility limits. They do not certify new DSH versions, physical phones or every desktop plugin. Network and model response times remain separate from local page processing.
 
 Pocket Bridge continues as a lightweight, unofficial mobile interface for DeepSeek Harness on your own Windows computer. New installers are DSH-only. Previous combined Codex/Dot releases and installers remain available; this release does not delete target applications or historical conversations.
 

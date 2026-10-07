@@ -188,7 +188,16 @@ function browserRender(html, list) {
   });
   {
     let publicSource = Buffer.from('Public static asset content. '.repeat(40));
-    const assetBox = { Buffer, path, zlib, crypto, PWA_DIR:'/isolated-public', fs:{readFileSync:()=>Buffer.from(publicSource)} };
+    const publicStat = () => ({ isFile:()=>true, isSymbolicLink:()=>false,
+      dev:1n, ino:2n, mode:33188n, size:BigInt(publicSource.length), mtimeNs:1n, ctimeNs:1n });
+    const publicFs = { readFileSync:()=>Buffer.from(publicSource), lstatSync:publicStat,
+      openSync:()=>1, fstatSync:publicStat, closeSync:()=>{} };
+    const assetBox = { Buffer, path, zlib, crypto, PWA_DIR:path.resolve('/isolated-public'),
+      PWA_ROUTES:{'/public.js':{file:'public.js'}}, require(name) {
+        assert.equal(name,'./public-static-representation-cache.js');
+        return { createPublicStaticRepresentationCache:options =>
+          require('./public-static-representation-cache.js').createPublicStaticRepresentationCache({...options,fs:publicFs}) };
+      } };
     vm.createContext(assetBox); vm.runInContext(extractFunction(src, 'servePwa'), assetBox);
     const route = {file:'public.js',type:'text/javascript',noCache:true,swAllowed:true};
     const get = (encoding='',validator='',method='GET') => {

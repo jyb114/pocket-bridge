@@ -41,6 +41,7 @@ for (const relative of selected) {
 for (const required of [
   "scripts/gateway-daemon.js",
   "scripts/mobile-proxy.js",
+  "scripts/public-static-representation-cache.js",
   "scripts/first-run.js",
   "scripts/gateway-listener.js",
   "scripts/gateway-lifecycle.js",

@@ -1628,37 +1628,31 @@ function trimHtmlToLanguage(req, res, file) {
 }
 
 function servePwa(req, res, route) {
-  const file = path.join(PWA_DIR, route.file);
-  let body;
-  try {
-    body = fs.readFileSync(file);
-  } catch (err) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end(`missing ${route.file}`);
-    return;
-  }
-
   // 客户端支持哪种就压哪种。brotli 明显更小，优先；不行退 gzip。
   const ae = String((req && req.headers && req.headers['accept-encoding']) || '');
   let enc = null;
   if (/\bbr\b/.test(ae)) enc = 'br';
   else if (/\bgzip\b/.test(ae)) enc = 'gzip';
 
-  // 太小的文件压了反而更大（多了头和字典开销），512 字节以下不压。
-  if (enc && body.length > 512) {
-    try {
-      body = enc === 'br'
-        ? zlib.brotliCompressSync(body)
-        : zlib.gzipSync(body, { level: 6 });
-    } catch (err) {
-      // 压不了就原样发 —— **绝不能因为压缩把一个本来能用的文件发坏**。
-      enc = null;
-    }
+  let representation;
+  try {
+    // Only fixed, public PWA files enter this bounded cache. Source identity
+    // and raw bytes are checked on every request, including conditional GETs.
+    if (!servePwa.publicAssets) servePwa.publicAssets = require('./public-static-representation-cache.js')
+      .createPublicStaticRepresentationCache({ root: PWA_DIR,
+        files: Array.from(new Set(Object.values(PWA_ROUTES).map(item => item.file).concat('dsh-lite.html'))) });
+    representation = servePwa.publicAssets.read(route.file, enc);
+  } catch (err) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(`missing ${route.file}`);
+    return;
   }
+  const body = representation.body;
+  enc = representation.encoding;
 
   // Validate the exact public source representation, including compression.
   // This does not apply to authenticated history, files, or content handlers.
-  const etag = '"' + crypto.createHash('sha256').update(body).digest('hex') + '"';
+  const etag = representation.etag;
   const cacheControl = route.noCache ? 'no-cache' : 'public, max-age=86400';
   const headers = {
     'content-type': route.type,

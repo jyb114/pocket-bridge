@@ -14,6 +14,8 @@ const NODE = process.execPath;
  * 回答不了的就别放进来 —— 一个在 CI 上时红时绿的清单比没有清单更糟。
  */
 const SUITE = [
+  ['test-public-static-representation-cache.js', [], 'Bounded public asset compression cache preserves exact bytes, validators, source invalidation and private-route isolation'],
+  ['test-dsh-projection-coalescing.js', [], 'Concurrent projection reads share one encrypted request without stale post-mutation, reconnect, key-change or settled-result reuse'],
   ['test-dsh-legacy-selection.js', [], 'Exact legacy model/preset allowlist validates writes and independent current-session readback without automatic write retries (isolated upstream fixtures)'],
   ['test-dsh-compatibility-ui.js', [], 'Phone compatibility panel distinguishes interfaces from live acceptance; stale asynchronous checks cannot mutate a disposed or replaced view (DOM fixtures)'],
   ['test-dsh-feature-capabilities.js', [], 'Observed protocol/interface coverage cannot claim real model, phone or different-tree workflow acceptance'],

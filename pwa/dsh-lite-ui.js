@@ -579,13 +579,51 @@
         return state.selection;
       }).catch(function () { return state.selection; });
     }
+    var projectRows = new Map(), sessionRows = new Map();
+    mountCleanups.push(function () { projectRows.clear(); sessionRows.clear(); });
+    function clearSidebarRows(host, cache) { cache.clear(); host.replaceChildren(); }
+    // A catalog publication often repeats unchanged rows. Keep their actual
+    // buttons so updates do not discard keyboard focus or rebuild every node.
+    // Only visible rows are retained; changing project/search clears old rows.
+    function reconcileSidebarRows(host, cache, rows, selected, choose) {
+      var cursor = host.firstChild, present = new Set(), occurrences = new Map();
+      rows.forEach(function (row) {
+        if (!row.id) return;
+        var occurrence = occurrences.get(row.id) || 0;
+        occurrences.set(row.id, occurrence + 1);
+        var key = JSON.stringify([row.id, occurrence]);
+        present.add(key);
+        var entry = cache.get(key);
+        if (!entry) {
+          var button = el('button', 'list-item'), name = el('span', '');
+          button.type = 'button'; button.setAttribute('role', 'option');
+          button.append(name);
+          button.addEventListener('click', function () { choose(row.id); });
+          entry = { button: button, name: name, detail: null };
+          cache.set(key, entry);
+        }
+        if (entry.name.textContent !== row.name) entry.name.textContent = row.name;
+        if (row.detail) {
+          if (!entry.detail) entry.detail = el('small', '');
+          if (entry.detail.textContent !== row.detail) entry.detail.textContent = row.detail;
+          if (entry.detail.parentNode !== entry.button) entry.button.append(entry.detail);
+        } else if (entry.detail && entry.detail.parentNode) entry.detail.remove();
+        var isSelected = String(row.id === selected);
+        if (entry.button.getAttribute('aria-selected') !== isSelected)
+          entry.button.setAttribute('aria-selected', isSelected);
+        if (entry.button !== cursor) host.insertBefore(entry.button, cursor);
+        cursor = entry.button.nextSibling;
+      });
+      while (cursor) { var next = cursor.nextSibling; cursor.remove(); cursor = next; }
+      cache.forEach(function (_entry, key) { if (!present.has(key)) cache.delete(key); });
+    }
     function renderProjects() {
-      refs.projectList.replaceChildren();
       // ★ 先看**是不是根本没读到**（C11 的另一半）。
       //   原来不管三七二十一：列表空就显示「还没有项目。点击"添加项目"」——
       //   于是"读失败"和"你真的没有项目"长得一模一样，
       //   使用者会以为项目全没了。现在把原因说出来，并给一个重试。
       if (state.projectsError) {
+        clearSidebarRows(refs.projectList, projectRows);
         refs.projectList.append(el('div', 'list-empty', state.projectsError));
         var retry = el('button', 'text-action', t('重试读取'));
         retry.type = 'button';
@@ -598,28 +636,21 @@
         return !term || (label(project.name, '') + ' ' + label(project.path, '')).toLocaleLowerCase().indexOf(term) >= 0;
       });
       if (!projects.length) {
+        clearSidebarRows(refs.projectList, projectRows);
         refs.projectList.append(el('div', 'list-empty', state.loadingProjects ? t('正在加载项目…') : term ? t('没有匹配的项目。') : t('还没有项目。点击“添加项目”。')));
         return;
       }
-      projects.forEach(function (project) {
-        var id = safeId(project.id);
-        if (!id) return;
-        var button = el('button', 'list-item');
-        button.type = 'button';
-        button.setAttribute('role', 'option');
-        button.setAttribute('aria-selected', String(id === state.projectId));
-        button.append(el('span', '', label(project.name, label(project.path, t('未命名项目')))));
-        if (project.path) button.append(el('small', '', project.path));
-        button.addEventListener('click', function () { selectProject(id); });
-        refs.projectList.append(button);
-      });
+      reconcileSidebarRows(refs.projectList, projectRows, projects.map(function (project) {
+        return { id: safeId(project.id), name: label(project.name, label(project.path, t('未命名项目'))),
+          detail: project.path ? String(project.path) : '' };
+      }), state.projectId, selectProject);
     }
     function renderSessions() {
-      refs.sessionList.replaceChildren();
-      if (!state.projectId) { refs.sessionList.append(el('div', 'list-empty', t('先选择项目。'))); return; }
-      if (state.loadingSessions) { refs.sessionList.append(el('div', 'list-empty', t('正在加载对话列表…'))); return; }
+      if (!state.projectId) { clearSidebarRows(refs.sessionList, sessionRows); refs.sessionList.append(el('div', 'list-empty', t('先选择项目。'))); return; }
+      if (state.loadingSessions) { clearSidebarRows(refs.sessionList, sessionRows); refs.sessionList.append(el('div', 'list-empty', t('正在加载对话列表…'))); return; }
       // ★ 读失败要说出来 —— 不然下面会画成「这个项目还没有对话。」（C11 的另一半）
       if (state.sessionsError) {
+        clearSidebarRows(refs.sessionList, sessionRows);
         refs.sessionList.append(el('div', 'list-empty', state.sessionsError));
         var retry = el('button', 'text-action', t('重试读取'));
         retry.type = 'button';
@@ -633,19 +664,11 @@
       var sessions = state.sessions.filter(function (session) {
         return !term || label(session.title, '').toLocaleLowerCase().indexOf(term) >= 0;
       });
-      if (!sessions.length) { refs.sessionList.append(el('div', 'list-empty', term ? t('没有匹配的对话。') : t('这个项目还没有对话。'))); return; }
-      sessions.forEach(function (session) {
-        var id = safeId(session.id);
-        if (!id) return;
-        var button = el('button', 'list-item');
-        button.type = 'button';
-        button.setAttribute('role', 'option');
-        button.setAttribute('aria-selected', String(id === state.sessionId));
-        button.append(el('span', '', label(session.title, t('未命名对话'))));
-        if (session.updatedAt) button.append(el('small', '', String(session.updatedAt)));
-        button.addEventListener('click', function () { selectSession(id, 'user'); });
-        refs.sessionList.append(button);
-      });
+      if (!sessions.length) { clearSidebarRows(refs.sessionList, sessionRows); refs.sessionList.append(el('div', 'list-empty', term ? t('没有匹配的对话。') : t('这个项目还没有对话。'))); return; }
+      reconcileSidebarRows(refs.sessionList, sessionRows, sessions.map(function (session) {
+        return { id: safeId(session.id), name: label(session.title, t('未命名对话')),
+          detail: session.updatedAt ? String(session.updatedAt) : '' };
+      }), state.sessionId, function (id) { selectSession(id, 'user'); });
     }
     function renderTitle() {
       var project = currentProject();

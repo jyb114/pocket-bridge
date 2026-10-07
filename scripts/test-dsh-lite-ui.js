@@ -137,6 +137,43 @@ async function run() {
     assert.match(state.project, /测试项目/);
     assert.match(state.session, /昨天的对话/);
 
+    // Repeated native catalog snapshots must not replace focused navigation
+    // buttons. Renames/reordering/removal still update the visible real DOM.
+    state = await page.eval(`(() => {
+      const project = document.querySelector('#project-list button');
+      const session = document.querySelector('#session-list button');
+      project.focus();
+      const emitProjects = items => window.__fake.onEvent({type:'projects',projects:items});
+      const emitSessions = items => window.__fake.onEvent({type:'sessions',projectId:'p1',sessions:items});
+      for (let i=0;i<20;i++) {
+        emitProjects([{id:'p1',name:'测试项目',path:'D:/example'}]);
+        emitSessions([{id:'s1',title:'昨天的对话'}]);
+      }
+      const unchanged = project === document.querySelector('#project-list button') &&
+        session === document.querySelector('#session-list button');
+      const focused = document.activeElement === project;
+      emitProjects([{id:'p2',name:'另一项目',path:'D:/second'},
+        {id:'p1',name:'重命名项目',path:'D:/renamed'}]);
+      emitSessions([{id:'s2',title:'较新对话'}, {id:'s1',title:'更新的标题',updatedAt:'updated'}]);
+      const changed = { project:project.textContent,session:session.textContent,
+        projectMoved:document.querySelectorAll('#project-list button')[1]===project,
+        sessionMoved:document.querySelectorAll('#session-list button')[1]===session };
+      emitProjects([{id:'p1',name:'测试项目',path:'D:/example'}]);
+      emitSessions([{id:'s1',title:'昨天的对话'}]);
+      return {unchanged,focused,changed,projectCount:document.querySelectorAll('#project-list button').length,
+        sessionCount:document.querySelectorAll('#session-list button').length,
+        oldDetailRemoved:!session.querySelector('small')};
+    })()`);
+    assert.equal(state.unchanged, true, 'unchanged catalog publications preserve both navigation nodes');
+    assert.equal(state.focused, true, 'catalog refresh must preserve keyboard focus');
+    assert.equal(state.changed.projectMoved, true);
+    assert.equal(state.changed.sessionMoved, true);
+    assert.match(state.changed.project, /重命名项目D:\/renamed/);
+    assert.match(state.changed.session, /更新的标题updated/);
+    assert.equal(state.projectCount, 1);
+    assert.equal(state.sessionCount, 1);
+    assert.equal(state.oldDetailRemoved, true);
+
     await page.eval(`document.querySelector('#session-list button').click()`);
     state = await page.eval(`({title:document.getElementById('session-title').textContent,text:document.querySelector('.record-text')?.textContent,images:document.querySelectorAll('#record-list img').length,composerDisabled:document.getElementById('message-input').disabled})`);
     assert.equal(state.title, '昨天的对话');

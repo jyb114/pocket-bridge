@@ -37,6 +37,106 @@
   // 这次断开是不是**我们自己为了进后台而主动关的**。
   // 用来区分「人不在看，别白耗电重连」和「连接真的掉了，要重连」。
   var backgrounded = false;
+  var projectionFlights = new Map();
+  var MAX_PROJECTION_FLIGHTS = 16;
+  var MAX_PROJECTION_JOIN_MS = 1000;
+  var projectionSocketEpoch = 0;
+  var projectionKeyEpoch = 0;
+  var projectionKeyReference = null;
+  var projectionMutationToken = {};
+
+  function resetProjectionConnection() {
+    projectionSocketEpoch++;
+    projectionFlights.clear();
+  }
+  function syncProjectionKey() {
+    var current = global.__dshE2eeSecret;
+    if (projectionKeyReference !== current) {
+      // The exact key is compared only in memory. Flight keys and diagnostics
+      // never contain it; an opaque epoch fences a replacement key.
+      projectionKeyReference = current;
+      projectionKeyEpoch++;
+      projectionFlights.clear();
+    }
+  }
+  function projectionMutation(method) {
+    return ['session/selectModel', 'agentPresets/select', 'commands/execute',
+      'session/updateQueue', 'session/prompt', 'session/cancel', '$events/result',
+      'session/create', 'workspace/create'].indexOf(method) >= 0 ||
+      typeof method === 'string' && method.indexOf('goals/') === 0;
+  }
+  function invalidateProjectionFlights() {
+    // A conservative global token keeps this bounded without an ever-growing
+    // session-version map. Reads during a write cannot satisfy its readback.
+    projectionMutationToken = {};
+    projectionFlights.clear();
+  }
+  async function projectionWriteBoundary(method, dispatch) {
+    if (!projectionMutation(method)) return await dispatch();
+    invalidateProjectionFlights();
+    try { return await dispatch(); }
+    finally { invalidateProjectionFlights(); }
+  }
+  function freezeProjection(value) {
+    // Freeze once, rather than cloning the full response for every reader.
+    // Iteration also avoids recursion depth depending on upstream JSON.
+    var pending = [value], seen = new WeakSet();
+    while (pending.length) {
+      var item = pending.pop();
+      if (!item || typeof item !== 'object' || seen.has(item)) continue;
+      seen.add(item);
+      Object.keys(item).forEach(function (key) {
+        var child = item[key];
+        if (child && typeof child === 'object') pending.push(child);
+      });
+      Object.freeze(item);
+    }
+    return value;
+  }
+  function projectionTime() {
+    if (global.performance && typeof global.performance.now === 'function') {
+      try { return { clock: 'performance', value: global.performance.now() }; }
+      catch (_) { return { clock: 'performance', value: NaN }; }
+    }
+    return { clock: 'date', value: Date.now() };
+  }
+  function canJoinProjection(flight, now) {
+    var age = now.value - flight.started.value;
+    return flight.generation === generation && flight.socketEpoch === projectionSocketEpoch &&
+      flight.keyEpoch === projectionKeyEpoch && flight.mutationToken === projectionMutationToken &&
+      flight.started.clock === now.clock && Number.isFinite(now.value) &&
+      Number.isFinite(flight.started.value) && Number.isFinite(age) &&
+      age >= 0 && age <= MAX_PROJECTION_JOIN_MS;
+  }
+  function readSessionProjections(sessionId, invoke) {
+    syncProjectionKey();
+    // Leave invalid inputs and capacity overflow to the original RPC path;
+    // neither gains a cache, a new error nor a dropped request.
+    if (typeof sessionId !== 'string' || !sessionId ||
+        sessionId.length > 512) return invoke('session/projections', { sessionId: sessionId });
+    var now = projectionTime();
+    // A stalled HTTP request must not capture every later periodic read. This
+    // only expires joining; its original readers/request keep their own result.
+    projectionFlights.forEach(function (flight, key) {
+      if (!canJoinProjection(flight, now) && projectionFlights.get(key) === flight)
+        projectionFlights.delete(key);
+    });
+    var previous = projectionFlights.get(sessionId);
+    if (previous) return previous.promise;
+    if (projectionFlights.size >= MAX_PROJECTION_FLIGHTS)
+      return invoke('session/projections', { sessionId: sessionId });
+    var flight = { generation: generation, socketEpoch: projectionSocketEpoch,
+      keyEpoch: projectionKeyEpoch, mutationToken: projectionMutationToken,
+      started: now, promise: null };
+    flight.promise = Promise.resolve().then(function () {
+      return invoke('session/projections', { sessionId: sessionId });
+    }).then(freezeProjection).finally(function () {
+      // An old completion cannot remove a newer flight after mutation/reconnect.
+      if (projectionFlights.get(sessionId) === flight) projectionFlights.delete(sessionId);
+    });
+    projectionFlights.set(sessionId, flight);
+    return flight.promise;
+  }
 
   function error(message) { var e = new Error(message); e.userMessage = message; return e; }
 
@@ -611,6 +711,7 @@
    */
   function goBackground() {
     hiddenAt = Date.now();
+    resetProjectionConnection();
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (socket) {
       backgrounded = true;                 // 让 onclose 知道：这是我们主动断的
@@ -632,6 +733,7 @@
     // iOS 恢复页面时，旧连接可能一直停在 CLOSING，onclose 很晚才来（甚至不来）。
     // 先弃用它，再主动安排新连接；旧连接的回调有 socket !== ws 守卫，不会碰新连接。
     var stale = socket;
+    resetProjectionConnection();
     socket = null;
     workspaceReady = false;
     clientId = '';
@@ -657,6 +759,7 @@
     var protocol = global.location.protocol === 'https:' ? 'wss:' : 'ws:';
     var url = protocol + '//' + global.location.host + '/api/remote.mux';
     var ws;
+    resetProjectionConnection();
     try { ws = new WebSocket(url); } catch (_) { scheduleReconnect(epoch); return; }
     socket = ws;
     ws.onopen = function () {
@@ -676,6 +779,7 @@
     ws.onerror = function () { /* Browser WS errors are followed by onclose. */ };
     ws.onclose = function () {
       if (!live || epoch !== generation || socket !== ws) return;
+      resetProjectionConnection();
       socket = null;
       workspaceReady = false;
       clientId = '';
@@ -722,6 +826,7 @@
   }
   function disconnect() {
     generation++;
+    resetProjectionConnection();
     live = false;
     if (resumeHandler && global.document && typeof global.document.removeEventListener === 'function')
       global.document.removeEventListener('visibilitychange', resumeHandler);
@@ -738,7 +843,10 @@
     activeAttempt = null; assistantRevision = null; toolRows.clear();
     pendingInteractions.clear();
   }
-  async function rpc(method, request) {
+  function rpc(method, request) {
+    return projectionWriteBoundary(method, function () { return rpcTransport(method, request); });
+  }
+  async function rpcTransport(method, request) {
     var e2ee = global.DshE2EE;
     if (!e2ee || !global.__dshE2eeSecret) throw error('缺少加密连接密钥，请重新打开完整地址。');
     var invoke = function () { return e2ee.encryptedFetch(global.__dshE2eeSecret, '/__dsh/lite-rpc', {
@@ -1031,40 +1139,42 @@
     // 参数形状没能从 asar 里确认到，所以"设"这一步用候选键名逐个试：
     // DSH 参数不对只会回一个错误（安全失败、界面看得见），不会改坏会话。
     liteRpc: async function (method, request) {
-      var e2ee = global.DshE2EE;
-      if (!e2ee || !global.__dshE2eeSecret) throw error('缺少加密连接密钥，请重新打开完整地址。');
-      var payload = JSON.stringify({ method: method, request: request || {} });
-      var invoke = function () {
-        return e2ee.encryptedFetch(global.__dshE2eeSecret, '/__dsh/lite-rpc', {
-          method: 'POST', credentials: 'same-origin', cache: 'no-store',
-          headers: { 'content-type': 'application/json; charset=utf-8' },
-          body: payload
-        });
-      };
-      var response = await invoke();
-      if (response.status === 403 && await e2ee.prove(true)) response = await invoke();
-      var result = null;
-      try { result = await response.json(); } catch (_) { result = null; }
-      if (!response.ok) {
-        throw error((result && (result.error || result.message)) || ('HTTP ' + response.status));
-      }
-      var payload = (result && result.result !== undefined) ? result.result : result;
-      // ★ 领域错误也要抛出来，而且**必须把 code 带上**。
-      //   DSH 的失败分两种：网关级的（result.ok 为假、error.code 是
-      //   `gateway/...`）和领域级的（`session/queue-item-not-found`、
-      //   `session/steer-unavailable`…）。后者是**正常竞态**，调用方要按 code
-      //   去分辨"这不是坏了、是电脑端已经处理掉了"。
-      //   原来这里只看 `payload.value`，于是 ok:false 会被当成"成功且没有值"
-      //   返回出去 —— 排队消息的失败提示就永远显示不出来。
-      if (payload && payload.ok === false) {
-        var code = String((payload.error && payload.error.code) || '');
-        var message = String((payload.error && payload.error.message) || '');
-        var failure = error(code ? code + (message ? '：' + message : '') : (message || 'DSH 拒绝了请求。'));
-        failure.code = code;
-        throw failure;
-      }
-      if (payload && payload.value !== undefined && payload.ok === true) payload = payload.value;
-      return payload;
+      return await projectionWriteBoundary(method, async function () {
+        var e2ee = global.DshE2EE;
+        if (!e2ee || !global.__dshE2eeSecret) throw error('缺少加密连接密钥，请重新打开完整地址。');
+        var payload = JSON.stringify({ method: method, request: request || {} });
+        var invoke = function () {
+          return e2ee.encryptedFetch(global.__dshE2eeSecret, '/__dsh/lite-rpc', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+            body: payload
+          });
+        };
+        var response = await invoke();
+        if (response.status === 403 && await e2ee.prove(true)) response = await invoke();
+        var result = null;
+        try { result = await response.json(); } catch (_) { result = null; }
+        if (!response.ok) {
+          throw error((result && (result.error || result.message)) || ('HTTP ' + response.status));
+        }
+        var payload = (result && result.result !== undefined) ? result.result : result;
+        // ★ 领域错误也要抛出来，而且**必须把 code 带上**。
+        //   DSH 的失败分两种：网关级的（result.ok 为假、error.code 是
+        //   `gateway/...`）和领域级的（`session/queue-item-not-found`、
+        //   `session/steer-unavailable`…）。后者是**正常竞态**，调用方要按 code
+        //   去分辨"这不是坏了、是电脑端已经处理掉了"。
+        //   原来这里只看 `payload.value`，于是 ok:false 会被当成"成功且没有值"
+        //   返回出去 —— 排队消息的失败提示就永远显示不出来。
+        if (payload && payload.ok === false) {
+          var code = String((payload.error && payload.error.code) || '');
+          var message = String((payload.error && payload.error.message) || '');
+          var failure = error(code ? code + (message ? '：' + message : '') : (message || 'DSH 拒绝了请求。'));
+          failure.code = code;
+          throw failure;
+        }
+        if (payload && payload.value !== undefined && payload.ok === true) payload = payload.value;
+        return payload;
+      });
     },
     // ★ 「列模型 / 列模式」这两个方法**什么参数都不接受**。
     //
@@ -1131,7 +1241,7 @@
     readSelection: async function (sessionId) {
       var selectedId = String(sessionId || '');
       if (!selectedId) throw error('请先打开要查看的对话。');
-      var out = await this.liteRpc('session/projections', { sessionId: selectedId });
+      var out = await readSessionProjections(selectedId, this.liteRpc.bind(this));
       var summary = sessionSummaries.get(selectedId);
       return selectionState(out && out.values, summary && summary.blank);
     },
@@ -1140,7 +1250,7 @@
     readPermission: async function (sessionId) {
       var selectedId = String(sessionId || '');
       if (!selectedId) throw error('请先打开要查看的对话。');
-      var out = await this.liteRpc('session/projections', { sessionId: selectedId });
+      var out = await readSessionProjections(selectedId, this.liteRpc.bind(this));
       var preset = out && out.values && out.values.permissions && out.values.permissions.currentValue;
       if (!out || !Number.isSafeInteger(out.asOfSeq) || out.asOfSeq < -1 ||
           ['read-only', 'workspace-write', 'danger-full-access'].indexOf(preset) < 0) {
@@ -1175,7 +1285,7 @@
     //     每一项是 message（有 id / content）。
     // 改：`session/updateQueue` { sessionId, itemId, action }。
     listQueued: async function (sessionId) {
-      var out = await this.liteRpc('session/projections', { sessionId: sessionId });
+      var out = await readSessionProjections(sessionId, this.liteRpc.bind(this));
       var value = out && out.ok === true && out.value !== undefined ? out.value : out;
       var values = value && value.values ? value.values : null;
       var inbox = values && values.inbox ? values.inbox : null;
@@ -1221,7 +1331,7 @@
     //                        blockedReason?: { code, message } }
     // 改：goals/* —— args 是摊平的 { agentId, ref?, request? }。
     readGoal: async function (sessionId) {
-      var out = await this.liteRpc('session/projections', { sessionId: sessionId });
+      var out = await readSessionProjections(sessionId, this.liteRpc.bind(this));
       var value = out && out.ok === true && out.value !== undefined ? out.value : out;
       var values = value && value.values ? value.values : null;
       var entry = values && values.goal ? values.goal : null;

@@ -63,6 +63,8 @@ Pocket Bridge uses its own bridge mark and a shared set of simple controls. A co
 
 History is paged, unchanged message rows are reused, streaming updates are coalesced, and images are requested explicitly. These reduce work without removing content, authentication, or encryption. Network speed, tunnel stability, runtime discovery, and the amount of history can still affect response time.
 
+Public page assets have a bounded compression cache, with current source bytes and file identity checked on every request. This reduces repeated server work without changing compression settings or caching private conversation/file responses; first-miss compression is unchanged. Concurrent modern-session queue, goal and model reads share only an in-flight request, with a one-second join window and fresh reads after mutations or connection changes. Repeated catalog updates preserve unchanged navigation buttons instead of recreating them. These optimizations retain the existing feature and security boundaries rather than omitting content.
+
 <img src="docs/assets/dsh-mobile-preview.png" alt="Pocket Bridge mobile interface with synthetic demonstration content" width="320">
 
 *UI demonstration with synthetic content. This image is not a live account, encrypted connection, or physical-phone acceptance result.*

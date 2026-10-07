@@ -1,6 +1,6 @@
 {
   "name": "pocket-bridge",
-  "version": "1.0.0-preview.11",
+  "version": "1.0.0-preview.12",
   "private": true,
   "description": "An unofficial DSH-only gateway for using DeepSeek Harness on your Windows PC from a phone browser.",
   "keywords": [

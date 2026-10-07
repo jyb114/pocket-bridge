@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-preview.12 - DSH loading and runtime performance
+
+- Cache exact compressed public assets within 64 entries and 8 MiB, while rereading and validating actual source on every lookup. Preserve validators, compression settings and security headers; never cache private conversation or file responses.
+- Coalesce concurrent modern session projection reads with bounded join time, mutation, reconnect and key fences. Keep fresh post-write readback and individual write dispatch.
+- Reuse unchanged project and conversation navigation buttons, preserving focus during repeated catalog updates and updating changed labels, order and selection in place.
+- Keep existing features, paged history, explicit image loading, previous installers and the documented exact-version acceptance limits.
+
 ## 1.0.0-preview.11 - List row layout fix
 
 - Prevent project and conversation rows from shrinking inside scrollable lists. Long titles and their secondary text retain enough space without overlapping the next row.
