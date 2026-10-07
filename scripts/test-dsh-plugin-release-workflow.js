@@ -194,7 +194,10 @@ function refused(options, error) {
     await check('fresh RUNNER_TEMP plugin and report copies preserve exact bytes', () => {
       success = scenario(); assert.equal(success.ok, true, success.error); assert.equal(success.exitCode, 0);
       const output = fs.readFileSync(path.join(success.fixture, 'builder-output.txt'), 'utf8');
-      assert.equal(path.dirname(output), success.runnerTemp); assert.equal(fs.readdirSync(success.runnerTemp).length, 1);
+      // PowerShell may expand a Windows 8.3 TEMP alias while Node retains it.
+      // Both existing directories must resolve to the same real filesystem path.
+      assert.equal(fs.realpathSync.native(path.dirname(output)), fs.realpathSync.native(success.runnerTemp));
+      assert.equal(fs.readdirSync(success.runnerTemp).length, 1);
       assert(fs.readFileSync(path.join(success.checkout, 'dist', archiveName)).equals(archiveBytes));
       assert(fs.readFileSync(path.join(success.checkout, 'dist', sidecarName)).equals(fs.readFileSync(path.join(output, sidecarName))));
     });
