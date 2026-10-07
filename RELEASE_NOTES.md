@@ -1,39 +1,75 @@
-# Release notes - 1.0.0-preview.12
+# Release notes - 1.0.0-preview.13
 
-## Loading and runtime performance
+## Optional DSH plugin
 
-- Reuse compressed representations of fixed public page assets in a bounded memory cache. Every request still reads and hashes the actual source and verifies stable file identity. Changed, missing or unreadable source cannot produce a stale cached success. Compression settings, exact decoded bytes, representation validators and page security headers are preserved. The cache holds at most 64 entries and 8 MiB; source files over 2 MiB bypass it and remain available. First-miss compression is unchanged.
-- Share only concurrent modern-session projection reads, so the foreground queue, goal and model refresh can use one encrypted request instead of three. Settled results are not cached. Join eligibility expires after one second, and mutations, reconnects and key changes fence earlier reads. Writes are still dispatched individually and are not automatically retried by this optimization.
-- Reconcile project and conversation buttons in place instead of rebuilding every row for repeated catalog snapshots. Unchanged refreshes preserve keyboard focus; names, paths, ordering, selection, search and language changes still update the visible interface.
+Pocket Bridge now has an installable DSH plugin. Open **Settings → Pocket Bridge**
+to start or pause phone access, reveal a private connection and locally generated
+QR code, open the computer's controls, and diagnose the selected gateway.
+The plugin reuses the existing lightweight phone interface and encrypted content
+transport. It does not load the original desktop interface over the tunnel.
 
-These changes preserve the existing DSH feature surface, explicit image loading, protected transport and compatibility limits. They do not certify new DSH versions, physical phones or every desktop plugin. Network and model response times remain separate from local page processing.
+Download `pocket-bridge-1.0.0-preview.13.tgz` from this release and install it
+through the desktop plugin manager. For the tested npm Web profiles:
 
-Pocket Bridge continues as a lightweight, unofficial mobile interface for DeepSeek Harness on your own Windows computer. New installers are DSH-only. Previous combined Codex/Dot releases and installers remain available; this release does not delete target applications or historical conversations.
+```text
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.13/pocket-bridge-1.0.0-preview.13.tgz
+```
 
-## Privacy improvements
+Use the host's normal reload or restart instructions. Installing into a Web
+profile does not install into the desktop application's separate profile.
+Do not close a running DSH task merely to reload a plugin.
 
-- Persist replay receipts for protected inbound mobile HTTP and WebSocket content and one-shot device proofs before dispatch. An already consumed packet stays refused after a gateway restart. Invalid authentication does not consume a receipt. Corruption, storage failure, conflicting ownership or capacity exhaustion refuses the request rather than clearing protection.
-- Reject malformed, fragmented, oversized and unsupported WebSocket frames before forwarding. Retain legitimate control frames and bounded encrypted content.
-- Apply a restrictive same-origin policy to the bridge-owned phone page, with no third-party scripts or fonts, no referrer and no framing. This reduces unintended loading; it does not authenticate a page that an active serving provider has replaced.
-- Require an exact screenshot request schema. An encrypted ordinary RPC body cannot be redirected to this route to trigger the tested unintended screen capture.
-- Add an optional private Tailscale HTTPS entrance, disabled by default. It checks the configured local Serve mapping and keeps Bridge authentication, device proof and encryption. It does not install Tailscale, log in, change network settings or enable Funnel. See [setup and limits](docs/TAILSCALE-PRIVATE-HTTPS.md).
+## Connection and lifecycle
 
-Passive tunnel relays receive ciphertext for protected content, but still see metadata. The initial web application remains a separate trust boundary. Encryption is not forward-secret and does not bind HTTP method/path, device cookie or packet order. This is not an exactly-once execution guarantee. Model providers receive the instructions DSH submits to them, and local files/drafts have separate storage boundaries. See [SECURITY.md](SECURITY.md).
+- Manage only an identified Pocket Bridge installation. Foreign listeners and
+  a gateway serving another DSH instance are rejected rather than adopted.
+- Pin a plugin-started gateway to its DSH host. Pausing phone access stops the
+  bridge; it does not terminate DSH or its tasks.
+- Keep managed gateway configuration, connection keys and uploads under DSH_HOME,
+  outside the replaceable plugin package. Verify public source hashes before an
+  installation or upgrade, and retain private state when removing the plugin.
+- Keep connection secrets hidden until requested, then hide them after two
+  minutes, loss of authorization, or connection changes. Hiding a displayed
+  connection does not revoke it; rotate the connection through local controls
+  when revocation is needed.
+- Clear old diagnostics when gateway identity, target or connection state changes.
+  Show the check time and require another check for the current state.
 
-## Compatibility and usability
+## Requirements and tested hosts
 
-- Show the observed distribution, exact runtime version and adapter in Settings → Connection and compatibility. Separate implemented interfaces from workflows accepted by real operation. Unknown future versions remain unverified.
-- Make unsupported legacy permission, plan, goal, queue and generic-file interfaces explicit. Keep available model and tool controls usable instead of disabling the whole conversation.
-- Implement legacy model and blank-session tool-preset selection through the old runtime's actual methods, with independent readback before claiming success. Selection writes trigger fresh runtime verification.
-- Repair legacy history refresh markers: record a revision only after its matching history has been read successfully. A failed initial read or periodic read can therefore be fetched again even when the upstream revision is unchanged.
-- Preserve history and drafts during a specifically recognized temporary legacy background-read failure. Continue read retries, show a scoped warning, and clear only that warning after recovery. Authorization, protocol and operation errors remain visible. Messages and other writes are never automatically resent.
+The plugin requires genuine **Node.js 24+**. Temporary internet tunnels also
+require **cloudflared**. The Windows installer supplies both; the source plugin
+tarball does not bundle their binaries or run install hooks. DSH and model
+credentials remain separate requirements.
 
-The existing compact phone layout, explicit image loading, local artwork, 44-pixel primary touch targets and Chinese/English/Spanish interface remain. Public product documentation and release notes are in English. Private notification scripts, access links, credentials and user files are excluded from published source and installers.
+Actual plugin operations covered **native Windows DSH 0.1.7-rc.2**,
+**npm DSH Web 0.1.7-rc.2**, and **npm DSH Web 0.2.0-rc.2** in isolated profiles.
+Real encrypted HTTPS sessions returned model replies. The newer npm host also
+completed an actual workspace-file download and an upload read by the model.
+Native plugin removal and reinstallation retained configuration and both keys.
+Read the [plugin acceptance record](docs/DSH-PLUGIN-ACCEPTANCE.md) for the exact
+operations, lifecycle results and limitations.
 
-## Actual operation and limits
+These tests used a desktop browser with a 390 x 844 phone viewport. They do not
+certify physical iPhone/Android, cellular networks, every plugin, arbitrary old
+versions or future releases. Historical standalone gateway tests are recorded
+separately in the [compatibility matrix](docs/DSH-COMPATIBILITY.md).
 
-The current desktop baseline is **DSH 0.1.7-rc.2**. Four real published npm packages were also run locally in separate D-drive homes: **0.1.0-rc.8, 0.1.1-rc.2, 0.1.7-rc.2 and 0.2.0-rc.2**. Project/session, file, model, preset and image flows have different acceptance scopes. Modern npm sessions returned real replies and completed actual question/answer and approval allow/reject operations. Old npm project/session, file preview, staged image and model/preset readback were operated; successful model replies and model-triggered interactions remain blocked by unavailable valid legacy credentials.
+## Privacy and distribution
 
-Prepared historical dependency graphs are not certification of today's default fresh `npx` installation. A fresh unmodified old npm installation timed out before startup; that result does not establish either success or a dependency-resolution defect. The lost laptop's desktop executable, arbitrary plugins, future releases, physical iPhone/Android and cellular workflows remain unverified. Current in-app-browser Save operations did not confirm a completed download. Historical successful downloads and controlled byte-exact fixtures are recorded separately.
+Plugin control routes require DSH authentication and direct loopback admission.
+Origin-less native requests additionally use an in-memory host control token.
+Conflicting Origins and relay headers remain rejected. No central telemetry,
+external QR service, remote fonts or private notification helper is added.
 
-Publication is gated on independent CI for the exact commit, compiled installer acceptance and source/payload/privacy checks. These are separate from actual runtime operation and device acceptance. See the [compatibility matrix](docs/DSH-COMPATIBILITY.md) and [acceptance record](docs/DSH-MOBILE-ACCEPTANCE.md).
+Protected message and file routes use application-layer encryption. Tunnel
+providers still see metadata and serve the initial page; an actively replaced
+page is a separate trust boundary. This is not a claim that every byte is
+end-to-end encrypted. See [SECURITY.md](SECURITY.md).
+
+This release includes the Windows installer, source archive, verified plugin
+tarball, package verification record and SHA256SUMS. Public packages exclude
+personal reminders, connection links, credentials, configuration, logs and
+uploads. New installers remain **DSH-only**; earlier combined Codex/Dot releases
+remain available. Independent CI for the exact published commit remains required
+before packaging and again before release publication.

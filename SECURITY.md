@@ -14,6 +14,12 @@ The desktop console is restricted to the local computer. Device revocation and k
 
 The phone content interface requires WebCrypto in a browser secure context: the HTTPS tunnel or a trusted local HTTPS entry. A plain LAN HTTP URL cannot provide that browser capability and must not silently downgrade protected content to plaintext. HTTPS certificate trust is a separate device configuration step.
 
+## Local DSH plugin controls
+
+The optional plugin's connection and control routes require a direct loopback request, the host's own request authentication, and a literal local Host on the actual DSH port. Browser writes require matching Origin. The native `dsh-app://app` carrier removes Origin when forwarding authenticated requests; writes through that carrier additionally require an unpredictable per-host control token obtained from an authenticated local status read. A token cannot override a mismatching Origin. It stays in client memory, is excluded from the visible status and connection link, and changes when the host reloads. Forwarded and Cloudflare-marked requests are refused, and no CORS exception is provided. The panel fetches the private connection only after an explicit action, clears its displayed QR after two minutes or a connection identity change, and pauses polling while hidden. Clearing the displayed QR does not revoke a link already copied; revoke or rotate it through the local console.
+
+Start and pause verify the selected gateway installation and current boot identity. Gateways started by the plugin are pinned to that host's DSH port and cannot silently select another listener. Reusing an already running standalone gateway verifies its current target; its prior runtime-selection policy is unchanged. The plugin does not read model credentials, contact a telemetry service, terminate DSH tasks, or delete retained gateway data on uninstall. Local keys and configuration remain an at-rest boundary, and third-party DSH plugins execute within the host's trust boundary.
+
 ## Encryption boundary
 
 Bridge-owned message RPC, supported WebSocket content, legacy helper operations, and protected file transfers use the authenticated encryption protocol between the phone browser and the local gateway. Successful file decryption must come from that protocol, not a caller-supplied response header. A changed key, invalid authentication tag, missing encryption support, or malformed protected payload fails closed.

@@ -14,6 +14,13 @@ const NODE = process.execPath;
  * 回答不了的就别放进来 —— 一个在 CI 上时红时绿的清单比没有清单更糟。
  */
 const SUITE = [
+  ['test-dsh-plugin-host.js', [], 'Plugin HTTP entry is direct-loopback only, authenticates through its DSH host and aborts on disposal (owned HTTP fixtures; no live DSH)'],
+  ['test-dsh-plugin-controller.js', [], 'Plugin controls only its selected gateway identity and DSH target; startup and stop admission fail closed (owned servers and synthetic children)'],
+  ['test-dsh-plugin-client.js', [], 'Plugin panel keeps pairing secrets behind an explicit local action, clears stale links and confirms gateway-only pause (isolated UI fixtures)'],
+  ['test-dsh-plugin-installation.js', [], 'Managed gateway source hashes, atomic ownership and private state survive isolated installation and upgrade (owned directories)'],
+  ['test-dsh-plugin-node.js', [], 'Bounded genuine Node resolution excludes Electron, links, module injection and unsupported binaries (isolated probes)'],
+  ['test-dsh-plugin-package.js', [], 'Real npm pack and independent tar validation keep public runtime dependencies closed and exclude private or archived files'],
+  ['test-dsh-plugin-release-workflow.js', [], 'Windows publication includes a verified plugin bundle and keeps both independent CI gates (isolated PowerShell fixtures)', { platform: 'win32' }],
   ['test-public-static-representation-cache.js', [], 'Bounded public asset compression cache preserves exact bytes, validators, source invalidation and private-route isolation'],
   ['test-dsh-projection-coalescing.js', [], 'Concurrent projection reads share one encrypted request without stale post-mutation, reconnect, key-change or settled-result reuse'],
   ['test-dsh-legacy-selection.js', [], 'Exact legacy model/preset allowlist validates writes and independent current-session readback without automatic write retries (isolated upstream fixtures)'],

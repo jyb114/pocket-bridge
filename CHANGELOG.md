@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-preview.13 - Optional DSH connection plugin
+
+- Add a host-integrated Settings panel for explicit gateway start and pause, private QR pairing, local status, and redacted diagnostics. Reuse the lightweight phone interface and an explicitly identified existing installation.
+- Keep managed gateway data outside the replaceable plugin package. Verify source inventory hashes and owned files before installation or upgrade; retain configuration, keys and uploads on plugin removal.
+- Resolve a genuine Node.js 24+ runtime without launching Electron as a daemon. Bind gateways started by the plugin to the current DSH host; retain gateway-only stop and exact boot identity checks.
+- Restrict plugin control routes to authenticated direct-loopback requests. Reveal pairing secrets only on request, hide them after two minutes or a target/address change, and pause hidden-panel polling.
+- Support the tested native desktop carrier with an authenticated, in-memory control token, without relaxing conflicting-Origin or relay rejection. Clear obsolete diagnostics after gateway, target or connection changes.
+- Build a verified source `.tgz` without install hooks, private runtime data, test files, bundled runtimes or retired integrations. Plugin host acceptance is recorded separately from standalone gateway compatibility.
+
 ## 1.0.0-preview.12 - DSH loading and runtime performance
 
 - Cache exact compressed public assets within 64 entries and 8 MiB, while rereading and validating actual source on every lookup. Preserve validators, compression settings and security headers; never cache private conversation or file responses.

@@ -1,0 +1,10 @@
+# Submission template only. Replace the pinned tag with the actually tested release.
+# Submit as data/plugins/jyb114__pocket-bridge.yml to awesome-dsh-plugin.
+# Do not submit this placeholder or edit its generated READMEs.
+url: https://github.com/jyb114/pocket-bridge
+name: jyb114/pocket-bridge
+category: remote
+description:
+  en: 'Adds a phone connection and diagnostic panel for the Pocket Bridge DSH gateway.'
+# Optional: a prebuilt, verified package/* tarball hosted by GitHub Releases.
+tarball: https://github.com/jyb114/pocket-bridge/releases/download/REPLACE_WITH_TESTED_RELEASE/pocket-bridge-REPLACE_WITH_VERSION.tgz

@@ -18,7 +18,7 @@ const allowedRoots = new Set([
   'LICENSE', 'README.md', 'SECURITY.md', 'THIRD-PARTY-NOTICES.md',
   'package.json', 'CHANGELOG.md', 'RELEASE_NOTES.md'
 ]);
-const allowedDirs = ['scripts/', 'pwa/', 'desktop/', 'docs/'];
+const allowedDirs = ['scripts/', 'pwa/', 'desktop/', 'docs/', 'dsh-plugin/'];
 const excludedFiles = new Set([
   'desktop/setup.cmd', 'desktop/双击安装.vbs',
   'desktop/dsh-gateway.bat', 'desktop/fix-firewall.cmd'
@@ -46,6 +46,13 @@ for (const required of [
   "scripts/gateway-listener.js",
   "scripts/gateway-lifecycle.js",
   "scripts/retired-targets.js",
+  "dsh-plugin/index.js",
+  "dsh-plugin/client.js",
+  "dsh-plugin/package.json",
+  "dsh-plugin/cordis.patch.yml",
+  "scripts/dsh-plugin-controller.js",
+  "scripts/dsh-plugin-installation.js",
+  "scripts/dsh-plugin-node.js",
   "scripts/dsh-phone-surface.js",
   "scripts/release-profile.js",
   "scripts/windows-shortcut.js",

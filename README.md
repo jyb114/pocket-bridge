@@ -8,7 +8,7 @@ A lightweight, unofficial phone interface for **DeepSeek Harness (DSH) running o
 
 Pocket Bridge is independent and unofficial. It is not affiliated with or endorsed by DeepSeek, OpenAI, or Cloudflare. DSH, model access, and any provider fees are separate. See [third-party notices](THIRD-PARTY-NOTICES.md).
 
-Other community phone clients and plugins exist, including [DSH Mobile Remote](https://github.com/april-jk/dsh-mobile-plugin). Pocket Bridge is an independent option focused on a small browser interface, a Windows installer, explicit image loading, protected content transport and exact-version compatibility reporting. It does not claim to be an official or exclusive DSH mobile product. Consult each project's own platform, protocol and security requirements before choosing it.
+Other community phone clients and plugins exist, including [DSH Mobile Remote](https://github.com/april-jk/dsh-mobile-plugin), [dsh-mobile](https://github.com/saya-ch/dsh-mobile), and [dsh-Remote](https://github.com/Blank-not-black/dsh-Remote). Pocket Bridge focuses on a small browser interface, a Windows installer, explicit image loading, protected content transport and exact-version compatibility reporting. Its optional plugin reuses an identified gateway and exposes actionable local diagnostics. Consult each project's own platform, protocol and security requirements before choosing it.
 
 ## What it does
 
@@ -34,6 +34,16 @@ Capabilities depend on the installed DSH runtime, its plugins, and the connected
 The Windows installer bundles Node.js and cloudflared with their license texts. It does not bundle DSH. Temporary tunnel addresses can change after a restart; use the newly copied link when that happens. A tunnel that is unavailable or disconnected does not mean a message was accepted. Do not repeatedly send an instruction with an uncertain delivery result.
 
 Phone content requires browser WebCrypto in a secure context. Use the HTTPS tunnel, or a local HTTPS entry whose certificate your phone trusts. Ordinary LAN HTTP does not provide this context and is not a supported plaintext fallback. The local console provides HTTPS setup guidance; certificate trust must be configured separately.
+
+## Optional DSH plugin
+
+The plugin adds **Pocket Bridge** to DSH Settings, with explicit gateway start and pause, private QR pairing, and connection diagnostics. It uses the existing lightweight phone interface. A running local listener, an available encrypted connection, and successful phone delivery are reported separately.
+
+Install the tested `.tgz` from a release through the appropriate DSH plugin manager. The plugin requires a genuine Node.js 24+ runtime; internet tunnels require cloudflared separately. The Windows installer includes both. The plugin retains gateway data outside the replaceable package and does not close DSH when phone access is paused. See the [plugin guide and exact acceptance scope](docs/DSH-PLUGIN.md).
+
+<img src="docs/assets/dsh-plugin-panel.png" alt="The actual Pocket Bridge settings panel in an isolated npm DSH host, with private connection details hidden" width="480">
+
+*Actual plugin operation on npm DSH Web 0.2.0-rc.2. Connection details are hidden; this is separate from physical-phone acceptance.*
 
 ## Source setup
 

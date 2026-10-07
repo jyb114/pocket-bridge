@@ -129,6 +129,29 @@ jobs:
         shell: pwsh
         run: ./packaging/windows/build.ps1
 
+      - name: Build and verify DSH plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { throw 'Runner temporary directory is unavailable' }
+          $package = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          $version = $package.version
+          if ($package.name -ne 'pocket-bridge' -or $version -notmatch '^\d+\.\d+\.\d+(?:-preview\.\d+)?$') { throw 'Unexpected plugin package identity' }
+          $pluginOutput = Join-Path ([IO.Path]::GetFullPath($env:RUNNER_TEMP)) ("pocket-bridge-plugin-{0}" -f [guid]::NewGuid().ToString('N'))
+          node scripts/build-dsh-plugin.js $pluginOutput
+          if ($LASTEXITCODE -ne 0) { throw 'DSH plugin build or verification failed; publication is blocked' }
+          $artifactName = "pocket-bridge-$version.tgz"
+          $artifact = Join-Path $pluginOutput $artifactName
+          $verification = Join-Path $pluginOutput "$artifactName.verification.json"
+          if (-not (Test-Path -LiteralPath $artifact -PathType Leaf) -or -not (Test-Path -LiteralPath $verification -PathType Leaf)) { throw 'Verified plugin artifacts are missing' }
+          $report = Get-Content -LiteralPath $verification -Raw | ConvertFrom-Json
+          $artifactHash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash
+          if ($report.schemaVersion -ne 1 -or $report.artifact -cne $artifactName -or $report.package.name -cne 'pocket-bridge' -or $report.package.version -cne $version -or $report.bytes -ne (Get-Item -LiteralPath $artifact).Length -or $report.sha256 -notmatch '^[0-9a-f]{64}$' -or $report.sha256 -ne $artifactHash -or $report.installHooks -ne $false -or $report.privateDataIncluded -ne $false -or $report.archivedTargetsIncluded -ne $false -or $report.sourceModified -ne $false) { throw 'Plugin verification report differs from the release artifact' }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item -LiteralPath $artifact -Destination (Join-Path dist $artifactName)
+          Copy-Item -LiteralPath $verification -Destination (Join-Path dist "$artifactName.verification.json")
+          if ((Get-FileHash -LiteralPath (Join-Path dist $artifactName) -Algorithm SHA256).Hash -ne $artifactHash -or (Get-FileHash -LiteralPath (Join-Path dist "$artifactName.verification.json") -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $verification -Algorithm SHA256).Hash) { throw 'Plugin release copies differ from the verified artifacts' }
+
       - name: Package source and checksums
         shell: pwsh
         run: |
@@ -136,10 +159,12 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $installer = "dist/PocketBridge-$version-win-x64-Setup.exe"
           $source = "dist/PocketBridge-v$version-source.zip"
+          $plugin = "dist/pocket-bridge-$version.tgz"
+          $pluginVerification = "$plugin.verification.json"
           if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Missing $installer" }
           git archive --format=zip --output=$source HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Source archive failed' }
-          $lines = @($installer, $source) | ForEach-Object {
+          $lines = @($installer, $source, $plugin, $pluginVerification) | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash
             "$hash  $(Split-Path -Leaf $_)"
           }
@@ -165,6 +190,8 @@ jobs:
           gh release create $tag `
             "dist/PocketBridge-$version-win-x64-Setup.exe" `
             "dist/PocketBridge-v$version-source.zip" `
+            "dist/pocket-bridge-$version.tgz" `
+            "dist/pocket-bridge-$version.tgz.verification.json" `
             'dist/SHA256SUMS.txt' `
             --target $env:GITHUB_SHA `
             --title "Pocket Bridge $version (Windows preview)" `
