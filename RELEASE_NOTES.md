@@ -1,4 +1,8 @@
-# Release notes - 1.0.0-preview.10
+# Release notes - 1.0.0-preview.11
+
+## List row layout fix
+
+This patch prevents project and conversation rows from shrinking inside scrollable lists, so long titles and their secondary text no longer overlap the next row. It changes only this layout rule. Preview.10 functionality, compatibility scope and security limits remain unchanged; the existing release information follows.
 
 Pocket Bridge continues as a lightweight, unofficial mobile interface for DeepSeek Harness on your own Windows computer. New installers are DSH-only. Previous combined Codex/Dot releases and installers remain available; this release does not delete target applications or historical conversations.
 

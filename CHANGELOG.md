@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-preview.11 - List row layout fix
+
+- Prevent project and conversation rows from shrinking inside scrollable lists. Long titles and their secondary text retain enough space without overlapping the next row.
+- Keep Preview.10 behavior, compatibility scope and security limits unchanged.
+
 ## 1.0.0-preview.10 - DSH compatibility and protected transport
 
 - Persist protected inbound content and device-proof replay receipts before dispatch, retaining rejection across gateway restarts and failing closed on storage/ownership/capacity faults.

@@ -51,7 +51,7 @@ body.sidebar-hidden .sidebar { display: none; }
 .sessions-heading { margin-top: 18px; }
 .item-list { display: flex; flex-direction: column; gap: 3px; min-height: 18px; max-height: 34%; overflow-y: auto; }
 #session-list { flex: 1; max-height: none; }
-.list-item { width: 100%; min-height: 45px; padding: .48rem .6rem; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--ink); text-align: left; overflow-wrap: anywhere; }
+.list-item { flex-shrink: 0; width: 100%; min-height: 45px; padding: .48rem .6rem; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--ink); text-align: left; overflow-wrap: anywhere; }
 .list-item:hover, .list-item[aria-selected="true"] { background: var(--surface); }
 .list-item[aria-selected="true"] { border-color: #d7e4f9; color: #255cba; }
 .list-item small { display: block; color: var(--muted); font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
