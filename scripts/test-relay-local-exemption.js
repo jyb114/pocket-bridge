@@ -4,7 +4,9 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'mobile-proxy.js'),'utf8');
 const {extractFunction}=require('./page-source.js'),requestOrigin=require('./request-origin.js'),cfg=require('./config.js');
-const context={requestOrigin,isOwnAddress:req=>cfg.isOwnAddress(null,req)};vm.createContext(context);
+const context={requestOrigin,privateHttpsAdmission:require('./private-https-admission.js'),
+ cfg:{loadConfig:()=>({privateHttps:{enabled:false,origin:''}})},
+ isOwnAddress:req=>cfg.isOwnAddress(null,req)};vm.createContext(context);
 vm.runInContext(extractFunction(source,'isLocalRequest')+'\n'+extractFunction(source,'isSelfCheck'),context);
 const server=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({local:context.isLocalRequest(req),selfCheck:context.isSelfCheck(req)}));});
 let checks=0;

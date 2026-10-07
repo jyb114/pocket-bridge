@@ -72,17 +72,23 @@ ok('改写载荷后仍是一帧合法数据',
 
 // ── 6. 乱码输入不能把进程搞崩 ─────────────────────────────────────
 let crashed = false;
-try {
-  for (let i = 0; i < 200; i++) {
+for (let i = 0; i < 200; i++) {
+  try {
     const junk = require('crypto').randomBytes(Math.floor(Math.random() * 40));
     wsf.parseFrames(junk);
-  }
-} catch (err) {
+  } catch (err) {
   // 数据错位时抛异常是可以接受的（调用方会断开连接），
   // 但不能是「无声地解析出错误的帧」——那个更危险
-  if (!/帧长度异常/.test(err.message)) crashed = true;
+    if (err.code !== 'ws-frame-too-large' || err.message !== 'WebSocket frame refused.') crashed = true;
+  }
 }
 ok('随机字节不会导致异常崩溃', !crashed);
+
+let oversizedError;
+try { wsf.parseFrames(Buffer.from([0x82,0x7f,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff])); }
+catch (err) { oversizedError = err; }
+ok('无法表示的 64 位帧长度明确拒绝', oversizedError &&
+  oversizedError.code === 'ws-frame-too-large' && oversizedError.message === 'WebSocket frame refused.');
 
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===\n`);
 process.exitCode = fail ? 1 : 0;

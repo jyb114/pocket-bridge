@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-preview.10 - DSH compatibility and protected transport
+
+- Persist protected inbound content and device-proof replay receipts before dispatch, retaining rejection across gateway restarts and failing closed on storage/ownership/capacity faults.
+- Harden WebSocket framing and the screenshot request schema. Restrict the bridge-owned phone page to same-origin resources and document the initial-page, active-relay and forward-secrecy limits.
+- Add a disabled-by-default private Tailscale HTTPS entrance with read-only mapping checks and retained Bridge authentication. No automatic VPN installation, enrollment, Serve or Funnel changes.
+- Show exact runtime/adapter and per-interface compatibility in phone settings; distinguish implementation from real workflow acceptance and disable only explicitly unavailable legacy controls.
+- Add verified legacy model and blank-session preset selection. Refresh legacy history markers only after successful reads; retain content and retry specifically classified background read failures without resending writes.
+- Repeat actual local operations with four published npm versions. Record modern replies/questions/allow/reject, legacy selection/project/file/image subsets, credential gaps, fresh-install timeout and device/download limits separately.
+- Continue the DSH-only release direction and preserve all previous installers and local user data. Keep public product/release documentation in English and personal notification material private.
+
 ## 1.0.0-preview.9 - DSH-only mobile interface
 
 - Focus current gateway and Windows installers exclusively on DSH. Retire Codex and Dot target discovery, startup, actions and package dependencies. Keep all older GitHub installers and existing local user data.

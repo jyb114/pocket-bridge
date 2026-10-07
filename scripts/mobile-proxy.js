@@ -36,10 +36,14 @@ const routes = require('./routes.js');
 const sessions = require('./sessions.js');
 const e2eeBridge = require('./ws-e2ee-bridge.js');
 const e2ee = require('./e2ee.js');
+const replayAdmission = require('./replay-store.js');
 const dshRuntime = require('./dsh-runtime.js');
 const dshLazyImages = require('./dsh-lazy-images.js');
 const dshLazyImageStore = require('./dsh-lazy-image-store.js');
 const dictTrim = require('./dict-trim.js');   // 按语言裁剪页面（省语言包体积）
+const phonePagePolicy = require('./phone-page-policy.js');
+const privateHttpsAdmission = require('./private-https-admission.js');
+const privateHttpsStatus = require('./tailscale-private-https.js');
 
 const BASE = path.resolve(__dirname, '..');
 // 实际监听端口要到启动时才定：配置/环境变量给个偏好，被占用就自动往后找
@@ -168,7 +172,7 @@ const serveDshLiteLegacyRpcE2ee = e2eeWrap(require('./dsh-lite-legacy-rpc.js')
       return { ...dshLegacyAttachments.resolveForPrompt(sessionId, receipts, state.ready ? state.runtime : null), runtime: state.runtime };
     },
     runtimeProfile: async (method) => {
-      const mutates = ['workspace.create', 'session.create', 'session.prompt', 'session.cancel'].includes(method);
+      const mutates = ['workspace.create', 'session.create', 'session.prompt', 'session.cancel', 'session.selectModel', 'agentPreset.select'].includes(method);
       const state = await refreshDshRuntimeState(mutates);
       return state.ready && state.runtime ? state.runtime.profile : null;
     } }));
@@ -1664,6 +1668,7 @@ function servePwa(req, res, route) {
     // Every representation varies by encoding, including an identity response.
     vary: 'Accept-Encoding'
   };
+  if (route.file === 'dsh-lite.html') Object.assign(headers, phonePagePolicy.headersFor(req));
   if (enc) {
     headers['content-encoding'] = enc;
     // 告诉中间层和浏览器：这个响应随 accept-encoding 变。
@@ -1818,6 +1823,7 @@ function isOwnAddress(req) {
  * 和设备列表那边共用一份，免得两处各判各的。
  */
 function isSelfClientRequest(req) {
+  if (privateHttpsAdmission.isForceRemote(req)) return false;
   const real = routes.clientIpOf(req);
   const sock = String((req.socket && req.socket.remoteAddress) || '').replace(/^::ffff:/, '');
 
@@ -1850,6 +1856,7 @@ function notifyRateOk() {
 }
 
 function isLocalRequest(req) {
+  if (privateHttpsAdmission.isForceRemote(req)) return false;
   // A relay can forward to loopback with a local Host. Forwarding evidence
   // must never grant the direct-computer device/proof exemption.
   if (requestOrigin.viaRelay(req)) return false;
@@ -2411,6 +2418,7 @@ function dshStartingPage(req, lang) {
 // 回环来源 —— 手机和外网拿不到，避免把管理面暴露出去。
 
 function isLoopback(req) {
+  if (privateHttpsAdmission.isForceRemote(req)) return false;
   // ★ 只看来路地址是不够的 —— **隧道流量也是从 127.0.0.1 进来的**。
   //
   //   cloudflared 就跑在这台机器上，它把公网请求转发到 127.0.0.1:8080，
@@ -2651,8 +2659,6 @@ function verifyAuthResponse(nonce, response) {
 //     老路 —— 也就是说最坏情况是「不快」，不是「进不去」。
 const AUTH_TS_SKEW_MS = 5 * 60 * 1000;      // 时间戳窗口：±5 分钟
 const AUTH_USED_NONCE_TTL_MS = 15 * 60 * 1000;  // 用过的 nonce 记这么久（> 窗口）
-const AUTH_USED_NONCE_MAX = 4000;           // 上限，免得被人刷爆内存
-const authUsedNonces = new Map();           // nonce -> 过期时间
 
 /**
  * 核一次「一次往返」的证明。
@@ -2660,8 +2666,8 @@ const authUsedNonces = new Map();           // nonce -> 过期时间
  */
 function verifyOneShotProof(ts, nonce, response) {
   const t = Number(ts);
-  if (!Number.isFinite(t) || t <= 0) return { ok: false, code: 'no-ts', reason: '没给时间戳' };
-  if (!nonce || String(nonce).length < 16) {
+  if (!Number.isSafeInteger(t) || t <= 0) return { ok: false, code: 'no-ts', reason: '没给时间戳' };
+  if (typeof nonce !== 'string' || nonce.length < 16 || nonce.length > 256 || /[\u0000-\u0020\u007f]/.test(nonce)) {
     return { ok: false, code: 'bad-nonce', reason: 'nonce 太短' };
   }
   const skew = Math.abs(Date.now() - t);
@@ -2671,11 +2677,6 @@ function verifyOneShotProof(ts, nonce, response) {
       reason: `时间戳差了 ${Math.round(skew / 1000)} 秒（手机的时间对不对？）`
     };
   }
-  // 用过的 nonce 不许再来（这里就是防重放那一步）
-  const now = Date.now();
-  const used = authUsedNonces.get(nonce);
-  if (used && now < used) return { ok: false, code: 'replayed', reason: '这个 nonce 用过了（重放）' };
-
   let secret = null;
   try { secret = e2eeBridge.readSecret(); } catch (err) { }
   if (!secret) return { ok: false, code: 'no-secret', reason: '这台电脑上没配加密密钥' };
@@ -2686,19 +2687,15 @@ function verifyOneShotProof(ts, nonce, response) {
   if (got.length !== want.length) return { ok: false, code: 'bad-length', reason: '应答长度不对' };
   if (!crypto.timingSafeEqual(got, want)) return { ok: false, code: 'bad-hmac', reason: '应答对不上' };
 
-  // 核过了才记进黑名单（没核过的包不留痕迹，免得被人用垃圾灌满）
-  authUsedNonces.set(nonce, now + AUTH_USED_NONCE_TTL_MS);
-  if (authUsedNonces.size > AUTH_USED_NONCE_MAX) {
-    for (const [k, exp] of authUsedNonces) {
-      if (now > exp) authUsedNonces.delete(k);
-      if (authUsedNonces.size <= AUTH_USED_NONCE_MAX) break;
-    }
-    // 清完还超（说明是被人灌的）就按插入顺序丢最老的
-    while (authUsedNonces.size > AUTH_USED_NONCE_MAX) {
-      const oldest = authUsedNonces.keys().next().value;
-      authUsedNonces.delete(oldest);
-    }
-  }
+  // Persist only an authenticated nonce, before granting proof. A storage or
+  // capacity failure is refusal, never an in-memory or eviction fallback.
+  let admitted;
+  try { admitted = replayAdmission.defaultStore.consume(replayAdmission.scopeOf(secret),
+    'proof:' + crypto.createHash('sha256').update(nonce).digest('hex'), Date.now() + AUTH_USED_NONCE_TTL_MS); }
+  catch (_) { admitted = { ok: false, code: 'replay-store-unavailable' }; }
+  if (!admitted || admitted.ok !== true) return { ok: false,
+    code: admitted && admitted.code === 'replayed-request' ? 'replayed' : admitted && admitted.code || 'replay-store-unavailable',
+    reason: '这次证明未获准；重复证明或防重放存储不可用。请检查电脑上的桥。' };
   return { ok: true };
 }
 
@@ -3154,6 +3151,30 @@ function serveDshLiteAddresses(req, res) {
 }
 
 function handleConsole(req, res, u) {
+  if (u.pathname === '/__private-https') {
+    if (!isLoopback(req)) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('loopback only');
+      return true;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('method not allowed');
+      return true;
+    }
+    var privateOptions = cfg.loadConfig().privateHttps || {};
+    privateHttpsStatus.readStatus({ enabled: privateOptions.enabled, origin: privateOptions.origin, gatewayPort: PORT })
+      .then(function (status) {
+        if (res.destroyed || res.writableEnded) return;
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ...status, gatewayAdmissionImplemented: true }));
+      }).catch(function () {
+        if (res.destroyed || res.writableEnded) return;
+        res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ok: false, code: 'private-https-status-unavailable' }));
+      });
+    return true;
+  }
   // 控制台资源
   if (u.pathname === '/console' || u.pathname === '/console/') {
     if (!isLoopback(req)) {
@@ -4326,13 +4347,20 @@ function e2eeWrap(handler, options) {
     if (!secret || !wants) return handler(req, res);
 
     let finished = false;
-    const bail = (why) => {
+    const bail = (why, code) => {
       if (finished) return; finished = true;
       log(`加密通道没能解开请求（${req.url}）：${why}`);
       try {
         if (!res.headersSent) {
-          res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-          res.end('这次请求没能解密，所以没有处理（明文不会走中继）。请刷新页面重试。');
+          const refusalCode = typeof code === 'string' && /^(?:replayed-request|replay-[a-z-]+|encrypted-body-required)$/.test(code) ? code : 'decryption-failed';
+          const replayed = refusalCode === 'replayed-request';
+          res.writeHead(replayed ? 409 : refusalCode.startsWith('replay-') ? 503 : 400,
+            { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, code: refusalCode, attemptDispatched: false,
+            // Unavailable storage cannot prove that a prior copy was unsent.
+            originalOutcomeUnknown: replayed || refusalCode.startsWith('replay-'),
+            message: replayed ? 'This encrypted request was already received and was not forwarded again. Check the current task before sending a new command.' :
+              'This request was not forwarded. Encrypted admission is unavailable; check the computer bridge before retrying.' }));
         } else { res.destroy(); }
       } catch (err) { try { res.destroy(); } catch (e) { } }
     };
@@ -4355,13 +4383,12 @@ function e2eeWrap(handler, options) {
         // 而客户端仍然要表明「这次响应请加密」。这时候只需要加密响应，
         // 没有东西要解 —— 当成解不开回 400 的话，只读的几条通道就全废了。
         if (raw.length === 0) {
+          if (req.method !== 'GET' && req.method !== 'HEAD') return bail('缺少加密请求体', 'encrypted-body-required');
           plain = Buffer.alloc(0);
         } else {
-          // 当前和上一个时间段都试 —— 正好跨过 30 分钟边界时必然一边用一个
-          for (const k of e2ee.candidateKeys(secret)) {
-            plain = e2ee.decrypt(k.a, raw);
-            if (plain) break;
-          }
+          const admitted = e2ee.openIncoming(secret, raw);
+          if (!admitted.ok) return bail('加密请求未获准', admitted.code);
+          plain = admitted.plain;
         }
       } catch (err) { plain = null; }
       if (!plain) return bail('解不开（密钥不匹配或密文损坏）');
@@ -4383,6 +4410,7 @@ function e2eeWrap(handler, options) {
       shim.__dshE2eeDecrypted = true;
       shim.__dshRequireE2ee = req.__dshRequireE2ee === true;
       shim.socket = req.socket;
+      privateHttpsAdmission.inheritRemote(req, shim);
       shim.setTimeout = function () { return shim; };
       if (!options.responseEncryptedByHandler) wrapEncryptedResponse(res, secret);
       handler(shim, res);
@@ -4440,6 +4468,7 @@ function handleRequest(req, res) {
 }
 
 function handleRequestInner(req, res, proofDeadline) {
+  if (privateHttpsAdmission.enforceHttp(req, res, cfg.loadConfig().privateHttps)) return;
   // 先把 cookie 合并器装上，之后无论哪个分支调用 writeHead 都不会丢掉要种的 cookie
   installCookieMerger(res);
   migrateLegacyRequestCookies(req, res);
@@ -5537,6 +5566,7 @@ function handleRequestInner(req, res, proofDeadline) {
 // ── WebSocket 升级转发 ────────────────────────────────────────────────────────
 function handleUpgrade(req, socket, head, runtimeChecked = false) {
   if (socket.destroyed) return;                 // 等证明的时候对端可能已经走了
+  if (privateHttpsAdmission.enforceUpgrade(req, socket, cfg.loadConfig().privateHttps)) return;
   if (retiredTargets.isRetiredRequest(req.url)) return retiredTargets.replyUpgrade(socket);
   const url = String(req.url || '');
   // 等证明会重入这个函数 —— 日志只在第一遍记，否则刷屏
@@ -5688,12 +5718,23 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
     const useE2ee = e2eeBridge.wanted(req.url, secret);
     let bridge = null;
     let encryptedStreamClosed = false;
-    const refuseEncryptedStream = () => {
+    const encryptedFailureCodes = new Set([
+      'ws-frame-invalid', 'ws-frame-too-large', 'ws-frame-count-limit',
+      'ws-control-invalid', 'ws-fragmentation-unsupported', 'ws-buffer-too-large',
+      'ws-data-unsupported', 'ws-upgrade-too-large', 'ws-upgrade-invalid', 'ws-bridge-closed',
+      'invalid-ciphertext', 'replayed-request', 'replay-invalid', 'replay-clock-rollback',
+      'replay-capacity', 'replay-store-linked', 'replay-store-write', 'replay-store-incomplete',
+      'replay-store-changed', 'replay-store-corrupt', 'replay-store-busy',
+      'replay-store-unavailable', 'replay-store-lock-changed', 'replay-store-lock-unavailable'
+    ]);
+    const refuseEncryptedStream = (error) => {
       if (encryptedStreamClosed) return;
       encryptedStreamClosed = true;
       // Neither raw upstream bytes nor an exception's possibly sensitive
       // message may become a response or a diagnostic fallback.
-      log('WS encrypted channel refused an invalid stream; owned sockets closed');
+      let code = 'ws-encrypted-stream-refused';
+      try { const candidate = error && error.code; if (encryptedFailureCodes.has(candidate)) code = candidate; } catch (_) { }
+      log('WS encrypted channel refused an invalid stream; owned sockets closed (' + code + ')');
       try { if (bridge && typeof bridge.close === 'function') bridge.close(); } catch (_) { }
       upstream.destroy();
       socket.destroy();
@@ -5704,10 +5745,10 @@ function handleUpgrade(req, socket, head, runtimeChecked = false) {
         const output = bridge ? bridge[direction](chunk) : chunk;
         if (!Buffer.isBuffer(output)) throw new Error('invalid-encrypted-transform');
         return output;
-      } catch (_) { refuseEncryptedStream(); return null; }
+      } catch (error) { refuseEncryptedStream(error); return null; }
     };
     try { if (useE2ee) bridge = e2eeBridge.attach(secret); }
-    catch (_) { refuseEncryptedStream(); return; }
+    catch (error) { refuseEncryptedStream(error); return; }
     upstream.once('close', () => {
       try { if (bridge && typeof bridge.close === 'function') bridge.close(); } catch (_) { }
     });

@@ -32,7 +32,9 @@ function verifyRemoteContentBoundary() {
   const gateEnd = sliceBalanced(gateway, gateOpen, '{', '}'); assert(gateAt>=0 && gateEnd>gateOpen);
   const KEY='isolated-tunnel-fixture-secret-0123456789';
   let secret=KEY, authenticated=true, deviceOk=true, proof=true, connections=0, discoveries=0;
-  const box=vm.createContext({ Buffer, URL, Date, requestOrigin:origin, cfg:{isOwnAddress:ownAddress},
+  const box=vm.createContext({ Buffer, URL, Date, requestOrigin:origin,
+    privateHttpsAdmission:require('./private-https-admission.js'),
+    cfg:{isOwnAddress:ownAddress,loadConfig:()=>({privateHttps:{enabled:false,origin:''}})},
     E2EE_CONTENT_PATHS:paths, dshPhoneSurface, retiredTargets,
     e2eeSecretOrNull:()=>secret,
     refuseEncryptionUnavailable(res){res.writeHead(503);res.end('encryption-unavailable');},

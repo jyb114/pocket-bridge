@@ -22,7 +22,19 @@ async function check(name, run) {
   await check('unsupported downstream binary never leaks plaintext', () => {
     const crypt = new WsCrypto('fixture-secret-not-a-real-key', 'encrypt');
     const out = frames.parseFrames(crypt.push(frames.buildFrame(frames.OP_BIN, Buffer.from('fixture-private-file'), false))).frames;
-    assert.equal(out.length, 1); assert.equal(out[0].opcode, frames.OP_CLOSE);
+    assert.equal(out.length, 0); assert.equal(crypt.invalidStream, true);
+    assert.equal(crypt.lastFailureCode, 'ws-data-unsupported');
+    assert.equal(crypt.push(frames.buildFrame(frames.OP_TEXT, Buffer.from('fixture-private-file'), false)).length, 0);
+    const bridge = require('./ws-e2ee-bridge.js').attach('fixture-secret-not-a-real-key');
+    const handshake = Buffer.from('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n');
+    assert.throws(() => bridge.fromUpstream(Buffer.concat([handshake,
+      frames.buildFrame(frames.OP_BIN, Buffer.from('fixture-private-file'), false)])),
+      error => error.code === 'ws-data-unsupported');
+    assert.equal(bridge.stats().closed, true); assert.equal(bridge.stats().failureCode, 'ws-data-unsupported');
+    assert.equal(bridge.isReady(), false);
+    assert.throws(() => bridge.fromUpstream(frames.buildFrame(frames.OP_TEXT, Buffer.from('fixture-private-file'), false)),
+      error => error.code === 'ws-data-unsupported');
+    assert.throws(() => bridge.fromClient(Buffer.alloc(0)), error => error.code === 'ws-data-unsupported');
   });
   await check('malformed frame cannot bypass encryption transform', () => {
     const crypt = new WsCrypto('fixture-secret-not-a-real-key', 'decrypt');

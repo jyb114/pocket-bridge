@@ -32,7 +32,9 @@ function environment(options = {}) {
   let starts = 0, codexReads = 0, refreshes = 0, upstreamRequests = 0;
   const box = {
     Buffer, path, zlib, URL, Date, requestOrigin, dshPhoneSurface,
-    cfg: { isOwnAddress: (_address, req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket && req.socket.remoteAddress) },
+    privateHttpsAdmission: require('./private-https-admission.js'),
+    cfg: { loadConfig: () => ({ privateHttps: { enabled: false, origin: '' } }),
+      isOwnAddress: (_address, req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket && req.socket.remoteAddress) },
     require(name) {
       assert.equal(name, './targets.js');
       return { codex: {

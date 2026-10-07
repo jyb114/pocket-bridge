@@ -14,6 +14,13 @@ const NODE = process.execPath;
  * 回答不了的就别放进来 —— 一个在 CI 上时红时绿的清单比没有清单更糟。
  */
 const SUITE = [
+  ['test-dsh-legacy-selection.js', [], 'Exact legacy model/preset allowlist validates writes and independent current-session readback without automatic write retries (isolated upstream fixtures)'],
+  ['test-dsh-compatibility-ui.js', [], 'Phone compatibility panel distinguishes interfaces from live acceptance; stale asynchronous checks cannot mutate a disposed or replaced view (DOM fixtures)'],
+  ['test-dsh-feature-capabilities.js', [], 'Observed protocol/interface coverage cannot claim real model, phone or different-tree workflow acceptance'],
+  ['test-replay-persistence.js', [], 'Verified inbound command/proof receipts survive actual owned process restart; durable admission refuses duplicates, concurrent writers and storage failures before dispatch'],
+  ['test-private-https-admission.js', [], 'Optional private HTTPS remains remote, rejects Funnel/management/host conflicts and still requires existing device, proof and encrypted HTTP/WS gates (owned servers)'],
+  ['test-phone-page-policy.js', [], 'Owned phone document restricts executable sources, outbound connections, framing, referrers and browser permissions; actual isolated HTTP headers'],
+  ['test-tailscale-private-https.js', [], 'Optional private HTTPS status is disabled by default and never installs, logs in, exposes public Funnel or changes Serve (isolated command/status fixtures)'],
   ['test-dsh-only-retirement.js', [], 'Actual isolated HTTP/upgrade retirement gates refuse every old action without native adapters or private-data mutations'],
   ['test-dsh-phone-surface.js', [], 'Actual HTTP/upgrade entrypoints refuse raw remote upstream content while preserving encrypted Lite and direct computer access'],
   ['test-dsh-ws-failclosed.js', [], 'Actual isolated gateway TCP refuses malformed upstream handshake/transform bytes without plaintext fallback or application actions'],

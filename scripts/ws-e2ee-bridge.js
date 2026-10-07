@@ -14,7 +14,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { WsCrypto } = require('./ws-crypt.js');
+const { WsCrypto, MAX_FRAME_BYTES } = require('./ws-crypt.js');
 
 const SECRET_FILE = path.join(__dirname, '..', 'logs', 'e2ee-secret.txt');
 
@@ -63,8 +63,8 @@ function wanted(reqUrl, secret) {
  * 那一段必须原样发给手机，从它之后才是 WebSocket 帧。
  * 不区分的话，解析器会拿 HTTP 头去当帧解析，整个连接当场乱掉。
  */
-function attach(secret) {
-  const up = new WsCrypto(secret, 'decrypt');     // 手机发来的：解
+function attach(secret, options = {}) {
+  const up = new WsCrypto(secret, 'decrypt', options);     // 手机发来的：解
   const down = new WsCrypto(secret, 'encrypt');   // 发给手机的：加
   let downHandshakeDone = false;
   let pendingDown = Buffer.alloc(0);
@@ -91,6 +91,11 @@ function attach(secret) {
     if (closed) throw Object.assign(new Error('Encrypted WebSocket bridge is closed.'),
       { code: failureCode || 'ws-bridge-closed' });
   }
+  function fromDownstream(chunk) {
+    const output = down.push(chunk);
+    if (down.invalidStream || down.lastFailureCode) failure(down.lastFailureCode || 'ws-frame-invalid');
+    return output;
+  }
   function validHandshake(head) {
     const lines = head.toString('latin1').slice(0, -4).split('\r\n');
     if (!/^HTTP\/1\.1 101(?: [\x20-\x7e]*)?$/.test(lines.shift() || '')) return false;
@@ -114,7 +119,9 @@ function attach(secret) {
     /** 处理手机发来的字节（已经跳过了 HTTP 请求头，全是帧） */
     fromClient(chunk) {
       checkOpen();
-      return up.push(chunk);
+      const output = up.push(chunk);
+      if (up.invalidStream || up.lastFailureCode) failure(up.lastFailureCode || 'ws-frame-invalid');
+      return output;
     },
 
     /**
@@ -124,8 +131,9 @@ function attach(secret) {
      */
     fromUpstream(chunk) {
       checkOpen();
-      if (downHandshakeDone) return down.push(chunk);
+      if (downHandshakeDone) return fromDownstream(chunk);
 
+      if (!Buffer.isBuffer(chunk) || pendingDown.length + chunk.length > MAX_FRAME_BYTES + MAX_HANDSHAKE_BYTES + 14) failure('ws-buffer-too-large');
       pendingDown = Buffer.concat([pendingDown, chunk]);
       const idx = pendingDown.indexOf('\r\n\r\n');
 
@@ -145,7 +153,7 @@ function attach(secret) {
       pendingDown = Buffer.alloc(0);
 
       if (!body.length) return head;
-      return Buffer.concat([head, down.push(body)]);
+      return Buffer.concat([head, fromDownstream(body)]);
     },
 
     /** 握手响应收全了吗（用来决定日志怎么写） */
@@ -160,7 +168,7 @@ function attach(secret) {
      */
     stats() {
       return { replayed: up.replayed, rejected: up.rejected, undecryptable: up.undecryptable,
-        handshakeRejected: failureCode ? 1 : 0, closed };
+        handshakeRejected: /^ws-upgrade-/.test(failureCode || '') ? 1 : 0, failureCode: failureCode || up.lastFailureCode || down.lastFailureCode || null, closed };
     }
   };
 }

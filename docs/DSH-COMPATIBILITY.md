@@ -1,6 +1,6 @@
 # DSH compatibility and actual test coverage
 
-Updated 2026-10-05. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime.
+Updated 2026-10-06 (UTC), preview.10. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime.
 
 Version detection selects an adapter after checking the local runtime and its observed protocol. A recognized version, a running service, or a successful automated fixture is not proof that every feature works. The exact distribution and the operated workflow matter.
 
@@ -10,7 +10,22 @@ The current Windows desktop baseline is **DSH 0.1.7-rc.2**, detected from its in
 
 The original desktop application on the lost laptop has not been identified or tested. Old npm web packages do not establish compatibility with that executable, another desktop wrapper or an Electron IPC-only build.
 
-## Real npm web tests
+## Current actual npm operation
+
+Four published npm packages were started on this Windows computer in separate D-drive homes and workspaces. The bridge and the DSH processes were real; model responses and interactions below were not mocked. Prepared package trees retained the official package files. The successful account provider was selected explicitly in the two modern versions.
+
+| Exact npm version | Operations observed during preview.10 work | Limit |
+| --- | --- | --- |
+| 0.1.0-rc.8 | Actual project and conversation creation, model selection/readback, blank-session preset selection/readback, text-file preview and staged image receipt. These were also operated at a measured 390-by-844 viewport without horizontal overflow. | No valid legacy model credential. Staging an image is not model reading. Current Save operation did not confirm download completion. |
+| 0.1.1-rc.2 | Actual project and conversation creation, model/preset selection and independent readback, text-file preview and staged image receipt. Project/session, preset, file and image-staging controls were also operated at a measured 390-by-844 viewport. A real send was recorded and returned the native missing-API-key error. | Successful replies, reasoning, model-triggered choices and approvals remain unverified. |
+| 0.1.7-rc.2 | Real assistant reply, a real question answered Blue, and separate harmless tool requests allowed and rejected through the visible approval cards. The confirmed reply/tool result and rejection were observed. These operations used a measured 390-by-844 viewport. | A separate workspace-write tool attempt failed in the upstream Windows sandbox and remains a failure. No physical-phone or cellular acceptance. |
+| 0.2.0-rc.2 | Real replies, question/answer and separate approval allow/reject operations; an uploaded screenshot was actually read by the model. A later 390-by-844 view loaded the historical official image explicitly. | Initial operations in this round used a desktop-sized viewport; only independently measured later operations count as mobile-sized. Current Save completion remains unconfirmed. |
+
+A transient legacy background read failure was observed while selecting a model. Retry restored reads; its upstream cause was not established. The revision-marker and scoped read-warning fixes are covered separately by deterministic regressions. They do not turn every network failure into a passed recovery workflow.
+
+The phone's Connection and compatibility panel reports implemented interfaces, not a certificate that each workflow has passed for that device/account. Legacy models and presets use the legacy runtime methods; unsupported modern controls remain unavailable. Unknown protocols and future versions remain unverified.
+
+## Historical real npm web tests
 
 These are **historical actual operations from 2026-10-01**, using published `@deepseek-ai/dsh` packages in separate D-drive homes and workspaces. The tester used real Edge/Chrome pointer and keyboard interaction at a 390-pixel mobile viewport, through Bridge authentication and encryption. The DSH RPCs and successful model replies were not mocked. These tests have not all been repeated against the current DSH-only candidate.
 
@@ -29,7 +44,7 @@ An upstream authentication failure remains a failure. A later successful run doe
 
 The older prepared npm installations used matching DSH peer packages and compatible Cordis dependency pins. Official package files were not patched. The old test setup used `--legacy-peer-deps` and pinned these Cordis packages to the lower-bound versions declared by the old manifests: `cordis@4.0.1`, `cordis-plugin-group@1.0.1`, `cordis-plugin-hmr@1.0.16`, `cordis-plugin-include@1.0.6`, `cordis-plugin-loader@1.0.2`, and `cordis-plugin-timer@1.1.3`, all under the `@deepseek-ai` scope.
 
-This is not acceptance of today's fresh, unmodified `npx @deepseek-ai/dsh@<old-version> web` installation. Successful installation and full model compatibility remain separate questions. New-format account grants are not a substitute for the legacy API-key credential format. Generic text-file upload is unsupported by the inspected legacy image wire.
+This is not acceptance of today's fresh, unmodified `npx @deepseek-ai/dsh@<old-version> web` installation. A new default npm installation of 0.1.0-rc.8, without overrides or legacy-peer-deps, reached its 210-second limit before native startup. No dependency-resolution error was established, so the timeout is neither an installation pass nor proof of a dependency defect. Successful installation and full model compatibility remain separate questions. New-format account grants are not a substitute for the legacy API-key credential format. Generic text-file upload is unsupported by the inspected legacy image wire.
 
 The four npm runs used local mobile-sized desktop browsers. They did **not** test physical iPhone Safari, Android, mobile 5G or Cloudflare tunnels. Current desktop public-route acceptance does not fill those old-version device/network gaps. Permissions, slash commands, goals, cancellation and newer UI fixes require their own actual-version acceptance; schema inspection or isolated fixtures alone do not certify them across all versions.
 

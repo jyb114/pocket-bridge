@@ -82,15 +82,15 @@ $out.Dispose()
 Write-Output ("RESULT=OK {0}x{1}" -f $w, $h)
 `;
 
-/** 请求体的形状：全可选，越界一律夹到合法范围，不报错（抓屏不该因为参数挑剔而失败）。 */
+// A screenshot is an explicit operation. Do not accept another route's
+// authenticated JSON merely because it lacks screenshot options.
 function normalizeOptions(input) {
-  const raw = input && typeof input === 'object' ? input : {};
-  let maxWidth = Number(raw.maxWidth);
-  if (!Number.isFinite(maxWidth)) maxWidth = DEFAULT_MAX_WIDTH;
-  maxWidth = Math.round(maxWidth);
-  if (maxWidth < MIN_MAX_WIDTH) maxWidth = MIN_MAX_WIDTH;
-  if (maxWidth > MAX_MAX_WIDTH) maxWidth = MAX_MAX_WIDTH;
-  return { maxWidth };
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const keys = Object.keys(input);
+  if (keys.length !== 1 || keys[0] !== 'maxWidth' ||
+      !Number.isSafeInteger(input.maxWidth) || input.maxWidth < MIN_MAX_WIDTH ||
+      input.maxWidth > MAX_MAX_WIDTH) return null;
+  return { maxWidth: input.maxWidth };
 }
 
 async function readBody(req, limit = 4096) {
@@ -130,17 +130,21 @@ function createDshLiteScreen(options = {}) {
     if (!req.__dshE2eeDecrypted || !req.headers || req.headers['x-dsh-e2ee'] !== '1') {
       reply(403, { error: 'encrypted-request-required' }); return;
     }
+    if (!/^application\/json(?:\s*;|\s*$)/i.test(String(req.headers['content-type'] || ''))) {
+      reply(415, { error: 'json-required' }); return;
+    }
 
-    let asked = {};
+    let asked;
     try {
       const text = await readBody(req);
-      asked = text ? JSON.parse(text) : {};
+      asked = JSON.parse(text);
     } catch (error) {
       reply(error && error.status === 413 ? 413 : 400,
         { error: error && error.status === 413 ? 'request-too-large' : 'invalid-json' });
       return;
     }
     const opts = normalizeOptions(asked);
+    if (!opts) { reply(400, { error: 'invalid-screen-request' }); return; }
 
     const file = path.join(os.tmpdir(), `pb-screen-${process.pid}-${Date.now()}.jpg`);
     const script = path.join(os.tmpdir(), `pb-screen-${process.pid}-${Date.now()}.ps1`);

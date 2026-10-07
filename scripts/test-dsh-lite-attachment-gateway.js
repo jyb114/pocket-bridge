@@ -1,4 +1,5 @@
 'use strict';
+require('./replay-isolated-fixture.js').install();
 
 // Run the actual gateway collector against owned HTTP sockets and join it to
 // the real attachment/AES handlers. No DSH, installation, credentials or UI.
@@ -86,6 +87,7 @@ const SECRET = 'isolated-gateway-attachment-secret-0123456789';
     return http.request({ ...options, timeout: mode?.shortTimeout ? 30 : options.timeout }, callback);
   } };
   const context = vm.createContext({ Buffer, URL, Error, http: ownedHttp, Readable, e2ee, dshLiteAttachment: attachment,
+    privateHttpsAdmission: require('./private-https-admission.js'),
     TARGET_HOST: '127.0.0.1', TARGET_PORT: runtime.port, INTERNAL_HOST: 'owned-upstream.fixture',
     DSH_UPSTREAM_AUTH_OK: true, UPSTREAM_COOKIE: { name: 'synthetic-cookie', value: 'synthetic-value' },
     refreshDshRuntimeState: async () => state, dshRuntimeIdentity, legacyRuntimeIdentity,

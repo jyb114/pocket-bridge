@@ -5,6 +5,7 @@
 //
 // 这一段错了的表现是「连不上」或「消息乱掉」，很难查，所以要测透。
 'use strict';
+require('./replay-isolated-fixture.js').install();
 const { WsCrypto } = require('./ws-crypt.js');
 const wsf = require('./ws-frame.js');
 const e2ee = require('./e2ee.js');

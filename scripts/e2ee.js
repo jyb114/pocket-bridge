@@ -10,6 +10,7 @@
 //   · 两个方向用不同的密钥（A: 手机→电脑，B: 电脑→手机）
 'use strict';
 const crypto = require('crypto');
+const replay = require('./replay-store.js');
 
 /** 换密钥的周期：30 分钟 */
 const SLOT_MS = 30 * 60 * 1000;
@@ -89,6 +90,27 @@ function decrypt(key, buf) {
   }
 }
 
+/** Authenticate an inbound body, then durably consume its existing GCM IV.
+ * HTTP and WS share this admission scope. No network-envelope change is made.
+ * This is a receipt of admission, never proof that a command executed.
+ */
+function openIncoming(longTermSecret, buf, options = {}) {
+  const now = options.now === undefined ? Date.now() : options.now;
+  const store = options.store || replay.defaultStore;
+  if (!Number.isSafeInteger(now) || now < 0 || typeof longTermSecret !== 'string' || longTermSecret.length < 16) return { ok: false, code: 'invalid-ciphertext' };
+  for (const slot of [slotAt(now), slotAt(now) - 1]) {
+    const plain = decrypt(deriveKeys(longTermSecret, slot).a, buf);
+    if (!plain) continue;
+    const token = 'body:' + slot + ':' + buf.subarray(0, 12).toString('hex');
+    let admitted;
+    try { admitted = store.consume(replay.scopeOf(longTermSecret), token, (slot + 2) * SLOT_MS); }
+    catch (_) { admitted = { ok: false, code: 'replay-store-unavailable' }; }
+    if (!admitted || admitted.ok !== true) return { ok: false, code: admitted && admitted.code || 'replay-store-unavailable' };
+    return { ok: true, plain, slot };
+  }
+  return { ok: false, code: 'invalid-ciphertext' };
+}
+
 /** 生成一把新的长期密钥（给「更换密钥」按钮用） */
 function newLongTermSecret() {
   return crypto.randomBytes(24).toString('base64url');   // 192 位
@@ -96,5 +118,5 @@ function newLongTermSecret() {
 
 module.exports = {
   SLOT_MS, slotAt, hkdf, deriveKeys, candidateKeys,
-  encrypt, decrypt, newLongTermSecret
+  encrypt, decrypt, openIncoming, newLongTermSecret
 };

@@ -4,7 +4,7 @@ const {extractFunction,sliceBalanced}=require('./page-source.js');
 const retiredTargets=require('./retired-targets.js');
 const source=fs.readFileSync(path.join(__dirname,'mobile-proxy.js'),'utf8');
 let dispatched=0,auth=0,native=0,passed=0;
-const context=vm.createContext({retiredTargets,URL,Buffer,handleRequestInner(req,res){dispatched++;res.writeHead(204);res.end();},hasAuthCookie(){auth++;return false;},log(){},require(name){if(/codex|dot|desktop-ui-action/.test(name))native++;throw Error('no adapter may be loaded');},isLoopback:()=>true});
+const context=vm.createContext({retiredTargets,URL,Buffer,privateHttpsAdmission:require('./private-https-admission.js'),cfg:{loadConfig:()=>({privateHttps:{enabled:false,origin:''}})},handleRequestInner(req,res){dispatched++;res.writeHead(204);res.end();},hasAuthCookie(){auth++;return false;},log(){},require(name){if(/codex|dot|desktop-ui-action/.test(name))native++;throw Error('no adapter may be loaded');},isLoopback:()=>true});
 for(const name of ['handleRequest','handleUpgrade','handleConsole'])vm.runInContext(extractFunction(source,name),context);
 async function request(port,url,method='GET',body){return await new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port,path:url,method,headers:body?{'content-type':'application/json'}:{}},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks).toString()}));});req.on('error',reject);req.end(body&&JSON.stringify(body));});}
 async function check(name,fn){await fn();passed++;console.log('OK '+name);}

@@ -8,6 +8,8 @@ A lightweight, unofficial phone interface for **DeepSeek Harness (DSH) running o
 
 Pocket Bridge is independent and unofficial. It is not affiliated with or endorsed by DeepSeek, OpenAI, or Cloudflare. DSH, model access, and any provider fees are separate. See [third-party notices](THIRD-PARTY-NOTICES.md).
 
+Other community phone clients and plugins exist, including [DSH Mobile Remote](https://github.com/april-jk/dsh-mobile-plugin). Pocket Bridge is an independent option focused on a small browser interface, a Windows installer, explicit image loading, protected content transport and exact-version compatibility reporting. It does not claim to be an official or exclusive DSH mobile product. Consult each project's own platform, protocol and security requirements before choosing it.
+
 ## What it does
 
 - Browse projects on the computer, add an existing directory, and create conversations.
@@ -50,6 +52,8 @@ DSH's official npm entry point is `npx @deepseek-ai/dsh web`. Historical npm tes
 The supported phone content channels use authenticated encrypted requests and responses, including messages and protected workspace transfers. A passive tunnel relay receives ciphertext for those channels. It still sees traffic metadata and serves the initial web application; a relay that actively substitutes that application is outside this protection. The model provider necessarily receives the instructions submitted to it by DSH.
 
 The raw original DSH web interface is not exposed as a remote alternative in new releases. Open the original interface locally on the computer when needed. Encryption failures, missing keys, expired authorization, and unsupported capabilities must be reported without falling back to plaintext remote content.
+
+An optional [private Tailscale HTTPS entrance](docs/TAILSCALE-PRIVATE-HTTPS.md) can avoid serving the initial application through Cloudflare. It is disabled by default, preserves the bridge's device and encryption checks, and does not install or configure a VPN. Real phone enrollment and connectivity must be verified after the owner sets it up. The phone's Settings → Connection and compatibility panel shows the observed runtime and implemented interface coverage separately from release acceptance.
 
 Local DSH history, uploads, configuration, and browser drafts have separate storage boundaries. Do not assume that every file on the computer or phone is encrypted at rest. Optional notification services are separate external recipients. No personal notification script or account is included. See [SECURITY.md](SECURITY.md) for the precise scope.
 

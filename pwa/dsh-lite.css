@@ -490,3 +490,6 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
   .queue-head { color: #d8c88a; }
   .queue-action[data-kind="remove"] { color: #ffb8b1; border-color: #8d5c57; }
 }
+/* Runtime coverage is advisory and separate from live acceptance evidence. */
+.compatibility-row { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+.compatibility-row span:last-child { text-align:right; color:var(--muted); }

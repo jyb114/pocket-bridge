@@ -1,4 +1,5 @@
 'use strict';
+require('./replay-isolated-fixture.js').install();
 
 // Production gateway gates/wrappers and DSH Lite handlers over owned HTTP/WS,
 // synthetic authentication, key storage, upstream results and workspace bytes.
@@ -41,6 +42,7 @@ const keyContext = vm.createContext({ URL, process: { env: keyEnv }, SECRET_FILE
 vm.runInContext(extractFunction(secretSource, 'readSecret') + '\n' + extractFunction(secretSource, 'wanted') +
   '; this.readSecret = readSecret; this.wanted = wanted;', keyContext);
 const context = {
+  privateHttpsAdmission: require('./private-https-admission.js'), cfg: { loadConfig: () => ({ privateHttps: { enabled: false, origin: '' } }) },
   Buffer, URL, Readable, e2ee, path, crypto, net, setTimeout, setImmediate, process: { env: {} },
   MAX_E2EE_BODY: 64 * 1024 * 1024, retiredTargets: require('./retired-targets.js'),
   dshPhoneSurface: require('./dsh-phone-surface.js'),

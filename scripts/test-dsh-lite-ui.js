@@ -1618,12 +1618,14 @@ async function run() {
     await pointer('#voice-button');
     await merged.eval(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copiedTurn=text}}});
       window.__fake.onEvent({type:'records',sessionId:'s1',records:[{id:'u-merge',role:'user',text:'Question'},
-      {id:'a-merge-one',role:'assistant',text:'First reply part.'},{id:'t-merge',role:'thought',text:'Private thought.'},
+      {id:'a-merge-one',role:'assistant',text:'First reply part.'},{id:'t-merge',role:'thought',title:'思考过程',text:'Private thought.'},
       {id:'a-merge-two',role:'assistant',text:'Second reply part.'},{id:'u-next',role:'user',text:'Next question'},
       {id:'a-next',role:'assistant',text:'A different turn.'}],hasMore:false})`);
     await pointer('#record-list .record[data-role="assistant"] .record-copy');
     assert.equal(await merged.eval(`window.__copiedTurn`),'First reply part.\n\nSecond reply part.','whole-reply copy must exclude thoughts and later turns');
     assert.equal(await merged.eval(`document.querySelector('.record[data-role="user"] .record-role').textContent`),'Me','generated self-message labels must follow the chosen interface language');
+    assert.equal(await merged.eval(`document.querySelector('.record[data-role="thought"] .record-role').textContent`),'Reasoning','the fixed adapter thought title follows the interface language');
+    assert.equal(await merged.eval(`document.querySelector('.record[data-role="thought"] .record-text').textContent`),'Private thought.','localizing a fixed author label must preserve model content');
     await merged.send('Browser.setDownloadBehavior',{behavior:'deny'});
     await merged.eval(`window.DshLiteAdapter.screenShot=async()=>({mime:'image/png',image:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0WQAAAAASUVORK5CYII='})`);
     await pointer('#rail-screen'); await new Promise(resolve=>setTimeout(resolve,50));

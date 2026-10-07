@@ -1,4 +1,5 @@
 'use strict';
+require('./replay-isolated-fixture.js').install();
 
 // Exact production entry/AES/attachment handler with a synthetic Session-aware
 // official transport. No installed DSH, user store, native UI or model writes.
@@ -24,6 +25,7 @@ let currentRuntime = runtime, proved = true, revision = 1, fault = null, calls =
 const success = () => ({ attachment: { attachmentId: id, mediaType: 'image/png',
   bytes: png.length, width: png.readUInt32BE(16), height: png.readUInt32BE(20), name: 'Synthetic public icon.png' }, data: png.toString('base64') });
 const box = vm.createContext({ Buffer, URL, Readable, crypto, path, e2ee, setTimeout,
+  privateHttpsAdmission: require('./private-https-admission.js'), cfg: { loadConfig: () => ({ privateHttps: { enabled: false, origin: '' } }) },
   retiredTargets: require('./retired-targets'), MAX_E2EE_BODY: 64 * 1024 * 1024,
   e2eeBridge: { readSecret: () => SECRET }, isLocalRequest: origin.isLoopback, viaRelay: origin.viaRelay,
   isSelfCheck: () => false, isSelfClientRequest: () => false, COOKIE_NAME: 'fixture-legacy-login', COOKIE_VALUE: LOGIN,

@@ -10,7 +10,8 @@ const path = require('node:path');
 const MAX_REQUEST_BYTES = 128 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const METHODS = new Set(['host.describe', 'workspace.list', 'workspace.create',
-  'session.list', 'session.create', 'session.history', 'session.prompt', 'session.cancel']);
+  'session.list', 'session.create', 'session.history', 'session.prompt', 'session.cancel',
+  'llm.models', 'session.models', 'session.selectModel', 'agentPreset.list', 'agentPreset.select']);
 
 function record(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) &&
@@ -30,9 +31,19 @@ function directory(value) {
       ? /^[A-Za-z]:[\\/]/.test(value) && path.win32.isAbsolute(value)
       : path.posix.isAbsolute(value));
 }
+function selectionId(value) {
+  return id(value) && value.length <= 256 && value.trim().length > 0;
+}
 function validRequest(method, value) {
-  if (method === 'host.describe' || method === 'workspace.list' || method === 'session.list')
+  if (method === 'host.describe' || method === 'workspace.list' || method === 'session.list' ||
+      method === 'llm.models' || method === 'agentPreset.list')
     return keys(value, []);
+  if (method === 'session.models') return keys(value, ['sessionId']) && id(value.sessionId);
+  if (method === 'session.selectModel') return keys(value, ['sessionId', 'provider', 'model'], ['reasoningEffort']) &&
+    id(value.sessionId) && selectionId(value.provider) && selectionId(value.model) &&
+    (!Object.hasOwn(value, 'reasoningEffort') || selectionId(value.reasoningEffort));
+  if (method === 'agentPreset.select') return keys(value, ['sessionId', 'agentPreset']) &&
+    id(value.sessionId) && selectionId(value.agentPreset);
   if (method === 'workspace.create') return keys(value, ['path']) && directory(value.path);
   if (method === 'session.create') return keys(value, ['workspaceId']) && id(value.workspaceId);
   if (method === 'session.history') return keys(value, ['sessionId'], ['beforeSeq', 'maxMessages']) &&

@@ -318,5 +318,6 @@ module.exports = {
   PROFILES, VERIFIED_VERSIONS, normalizeVersion, readAsarVersion,
   readPackageVersion, readDesktopVersion, readCliVersion, tokenizeCommandLine,
   parseDshProcess, fingerprintDshHttp, detectProfile, createRuntimeRecord,
-  probeDshRuntime, validPort
+  probeDshRuntime, validPort,
+  buildFeatureCapabilities: require('./dsh-feature-capabilities.js').buildFeatureCapabilities
 };

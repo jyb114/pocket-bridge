@@ -1,4 +1,5 @@
 'use strict';
+require('./replay-isolated-fixture.js').install();
 
 // Isolated address-route regression: no running gateway, credentials, or
 // project data. Address paths are sensitive because they contain the access key.
@@ -63,6 +64,7 @@ function invoke(method, decrypted, header) {
   // A plain JSON body from this route would expose the access-key URL to the relay.
   const secret = 'isolated-address-test-secret';
   const context = { Buffer, URL, Readable, e2ee, MAX_E2EE_BODY: 64 * 1024 * 1024, log: () => {},
+    privateHttpsAdmission: require('./private-https-admission.js'),
     e2eeSecretOrNull: () => secret, buildConsoleStatus: async () => ({ entries: {
       lan: ['http://local.test/k/access-token#k=secret-key'], encrypted: true } }),
     pickLang: () => 'zh' };

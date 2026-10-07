@@ -20,6 +20,10 @@ Bridge-owned message RPC, supported WebSocket content, legacy helper operations,
 
 For these protected content channels, a passive TLS-terminating tunnel relay sees ciphertext rather than the message or file body. TLS alone would not provide that protection through a terminating relay. The relay can still see request timing, sizes, connection metadata, and public bootstrap assets. It also serves the initial page. An active relay or compromised origin that replaces that page or its scripts is outside the guarantee; content encryption is not protection against malicious code in the browser. Code pinning is an additional integrity check, not an independently trusted first installation.
 
+The bridge-owned phone document restricts executable sources, outgoing connections, framing and browser permissions through response headers. This reduces unintended script and resource exposure; a serving endpoint able to replace the document can also replace its headers. It is not an independent trust anchor. Optional [private HTTPS](docs/TAILSCALE-PRIVATE-HTTPS.md) can deliver that first page without Cloudflare. It still depends on the serving computer, browser, TLS and tailnet trust model; its setup and physical-phone acceptance are separate from isolated gateway tests.
+
+The current key schedule rotates derived keys but is not forward secrecy. Someone who later obtains the long-lived application secret can derive retained historical slots and decrypt recorded protected ciphertext. Protect the complete link and local key files, and rotate a compromised pairing secret; rotation does not make previously recorded ciphertext unrecoverable to a holder of the old secret.
+
 DSH sends prompts and files to its configured model provider as part of ordinary model use. That provider is an intended recipient, independent of the tunnel protection. Optional notification and balance services have their own recipients and data boundaries.
 
 ## Files and local storage
@@ -36,7 +40,11 @@ Existing Codex/Dot journals and uploads are retained during a DSH-only upgrade. 
 
 Temporary tunnels can disconnect or change address. A transport error is not proof that an instruction was rejected. Preserve drafts and ambiguous delivery outcomes; never automatically resend a possibly accepted operation. Queued-message edits require readback before reporting success, and a failed or unknown acknowledgement must not discard the user's edited text.
 
-Runtime identity, authorization, replay defenses, and file scope remain in place during performance optimization. Replay checks are best-effort across gateway restarts and are not a complete persistent sequence protocol. A successful isolated test is not proof of every physical-device, runtime-version, or internet condition.
+Runtime identity, authorization, replay defenses, and file scope remain in place during performance optimization. Verified inbound protected mobile/Lite HTTP bodies and WebSocket content, together with one-shot proof nonces, now have bounded server-side durable admission receipts committed before dispatch. They survive an ordinary gateway restart; invalid cryptographic input cannot reserve a receipt. Active receipts are not evicted to make room, and journal/checkpoint disagreement, capacity, storage, concurrent-lock or clock rollback errors refuse admission. The ledger contains receipt metadata, not messages or keys, and must be retained with installation data. Do not delete it to work around an error. Downstream streamed replies are not synchronously journaled per token.
+
+Admission receipts are not an execution journal or an exactly-once application protocol. A request may have been admitted when its reply is lost, and a newly encrypted repeat with a different nonce is not the same cryptographic replay. The current envelope does not authenticate HTTP method/path, device cookie, or message order; the device-cookie check is a separate authorization gate. The browser's received-message replay cache is not made durable across page reloads, and the first ledger deployment cannot recognize packets accepted by older unjournaled gateways. A local administrator who can replace the application and its entire state is outside this defense. A successful isolated test is not proof of every physical-device, runtime-version, or internet condition.
+
+The screenshot route accepts only its exact bounded width request. Unknown fields, malformed types and unrelated RPC bodies are refused before temporary-file creation or capture. This closes the tested cross-route screenshot trigger; strict request schemas do not replace cryptographic binding of the requested operation and do not establish protection against every active relay.
 
 ## Reporting
 

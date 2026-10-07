@@ -41,6 +41,9 @@ const DEFAULTS = {
   tunnelProvider: 'auto',   // auto | cloudflare | none
   enableLanAccess: true,    // 是否提供内网直连入口
   dshPort: 0,               // 0 = 自动发现；显式指定则优先
+  // Optional private tailnet HTTPS. Provision Serve explicitly outside Bridge;
+  // this only restricts ingress and never substitutes for pairing/encryption.
+  privateHttps: { enabled: false, origin: '' },
 
   // ── 域名策略 ────────────────────────────────────────────────────────────────
   // dynamic —— 每次重启换一个新地址。

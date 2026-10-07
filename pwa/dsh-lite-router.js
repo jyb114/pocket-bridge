@@ -116,7 +116,8 @@
       if (!components[profile]) throw routerProblem('这台电脑的 DSH 协议尚未得到验证。请在电脑上检查 DSH 版本后重新连接；手机不会改用未加密的原版界面。');
       await ensureComponents(profile);
       var adapter = global[components[profile].adapter];
-      global.DshLiteUI.mount(adapter);
+      global.DshLiteUI.mount(adapter, { profile: profile, runtime: target.runtime || {},
+        version: target.version || null, kind: target.kind || null });
     } catch (error) {
       showProblem(error && error.routerMessage || t('连接 DSH 失败，请重试。'));
     }

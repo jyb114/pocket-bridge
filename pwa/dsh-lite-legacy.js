@@ -19,6 +19,7 @@
   var connected = false;
   var generation = 0;
   var timer = null;
+  var backgroundReadWarning = null;
 
   function problem(message) { var out = new Error(message); out.userMessage = message; return out; }
   function emit(item) { try { onEvent(item); } catch (_) {} }
@@ -116,7 +117,20 @@
         throw problem('图片附件已过期，请重新上传后发送。');
       throw problem('DSH 已切换到不同协议，请刷新页面重新检测版本。');
     }
-    if (!response.ok) throw problem('旧版 DSH 请求失败（HTTP ' + response.status + '），请重连。');
+    if (!response.ok) {
+      var failure = problem('旧版 DSH 请求失败（HTTP ' + response.status + '），请重连。');
+      // Only the gateway's exact, bounded runtime-unavailable read response
+      // is eligible for the periodic warning. Authentication, encryption,
+      // replay storage, protocol changes and every mutation stay hard errors.
+      if (response.status === 503 && ['workspace.list', 'session.list', 'session.history'].indexOf(method) >= 0) {
+        var unavailable = null;
+        try { unavailable = await response.json(); } catch (_) {}
+        if (unavailable && typeof unavailable === 'object' && !Array.isArray(unavailable) &&
+            Object.keys(unavailable).length === 1 && unavailable.error === 'dsh-runtime-unavailable')
+          failure.code = 'legacy-background-read-unavailable';
+      }
+      throw failure;
+    }
     var payload;
     try { payload = await response.json(); } catch (_) { throw problem('电脑返回的 DSH 数据无法读取。'); }
     if (!payload || !payload.result || payload.result.ok !== true)
@@ -178,7 +192,9 @@
       var summary = summaries.get(sessionId) || {};
       var title = summary.projections && summary.projections.values && summary.projections.values.title;
       return { id: sessionId, title: typeof title === 'string' && title.trim() ? title :
-        '对话 ' + (project.sessionIds.length - index), updatedAt: summary.updatedAt };
+        '对话 ' + (project.sessionIds.length - index), updatedAt: summary.updatedAt,
+        agentPreset: typeof summary.agentPreset === 'string' ? summary.agentPreset : null,
+        blank: typeof summary.blank === 'boolean' ? summary.blank : null };
     });
   }
   function publishCatalog() {
@@ -188,8 +204,9 @@
     });
   }
   async function refreshCatalog(epoch) {
+    var selected = activeSessionId;
     var values = await Promise.all([rpc('workspace.list', {}), rpc('session.list', {})]);
-    if (epoch !== generation || !connected) return;
+    if (epoch !== generation || !connected || selected !== activeSessionId) return false;
     if (!values[0] || !Array.isArray(values[0].items) ||
         !values[1] || !Array.isArray(values[1].items)) throw problem('电脑返回的项目列表无效。');
     projects = values[0].items.filter(function (item) {
@@ -199,32 +216,40 @@
       return item && validId(item.sessionId);
     }).map(function (item) { return [item.sessionId, item]; }));
     publishCatalog();
-    if (activeSessionId) {
-      var summary = summaries.get(activeSessionId);
+    if (selected) {
+      var summary = summaries.get(selected);
       if (summary) {
-        emit({ type: 'session-status', sessionId: activeSessionId, running: summary.running === true });
-        if (summary.updatedAt !== activeUpdatedAt || summary.running === true) {
+        emit({ type: 'session-status', sessionId: selected, running: summary.running === true });
+        if (summary.updatedAt !== activeUpdatedAt || summary.running === true ||
+            backgroundReadWarning && backgroundReadWarning.epoch === epoch &&
+            backgroundReadWarning.sessionId === selected) {
+          // Commit this marker only after the matching history actually
+          // arrived. Otherwise a failed tail read can be skipped forever
+          // when the next catalog reports the same settled updatedAt.
+          if (!await refreshActive(epoch) || epoch !== generation || !connected || selected !== activeSessionId)
+            return false;
           activeUpdatedAt = summary.updatedAt;
-          await refreshActive(epoch);
         }
       }
       await refreshInteractions(epoch);
+      if (!summary) return false;
     }
+    return epoch === generation && connected && selected === activeSessionId;
   }
   async function refreshActive(epoch) {
     var selected = activeSessionId;
-    if (!selected) return;
+    if (!selected) return false;
     var hadOlder = activeHasMore;
     // Poll the recent tail. Walk back only if more than one page arrived since
     // the last check; never silently skip a burst of committed events.
     var page = await rpc('session.history', { sessionId: selected, maxMessages: 20 });
-    if (epoch !== generation || selected !== activeSessionId) return;
+    if (epoch !== generation || selected !== activeSessionId || !connected) return false;
     var pages = [page], prior = activeLastSeq, steps = 0;
     while (page.hasMore === true && Array.isArray(page.events) && page.events.length &&
            page.events[0].event && page.events[0].event.seq > prior + 1 && steps++ < 20) {
       page = await rpc('session.history', { sessionId: selected,
         beforeSeq: page.events[0].event.seq, maxMessages: 20 });
-      if (epoch !== generation || selected !== activeSessionId) return;
+      if (epoch !== generation || selected !== activeSessionId || !connected) return false;
       pages.unshift(page);
     }
     if (page.hasMore === true && page.events.length && page.events[0].event.seq > prior + 1)
@@ -234,14 +259,30 @@
     // data, even when those rows are already held from an earlier page load.
     activeHasMore = hadOlder;
     emit({ type: 'records', sessionId: selected, records: records(), hasMore: activeHasMore });
+    return true;
   }
   function schedule(epoch) {
     if (!connected || epoch !== generation) return;
     timer = global.setTimeout(async function () {
       timer = null;
-      try { await refreshCatalog(epoch); }
-      catch (error) { if (epoch === generation) emit({ type: 'error',
-        userMessage: error && error.userMessage || '同步旧版 DSH 内容失败，请重连。' }); }
+      var selected = activeSessionId;
+      try {
+        var refreshed = await refreshCatalog(epoch);
+        if (refreshed === true && epoch === generation && connected && selected === activeSessionId &&
+            backgroundReadWarning && backgroundReadWarning.epoch === epoch &&
+            backgroundReadWarning.sessionId === selected) {
+          backgroundReadWarning = null;
+          emit({ type: 'background-read-recovered', tag: 'legacy-poll', sessionId: selected });
+        }
+      } catch (error) {
+        if (epoch === generation && connected && selected === activeSessionId) {
+          if (error && error.code === 'legacy-background-read-unavailable') {
+            backgroundReadWarning = { epoch: epoch, sessionId: selected };
+            emit({ type: 'background-read-warning', tag: 'legacy-poll', sessionId: selected });
+          } else emit({ type: 'error',
+            userMessage: error && error.userMessage || '同步旧版 DSH 内容失败，请重连。' });
+        }
+      }
       schedule(epoch);
     }, 5000);
   }
@@ -269,6 +310,7 @@
   function disconnect() {
     generation++;
     connected = false;
+    backgroundReadWarning = null;
     if (timer) { global.clearTimeout(timer); timer = null; }
     pendingInteractions.forEach(function (_item, id) { emit({ type: 'interaction-resolved', id: id }); });
     pendingInteractions.clear();
@@ -277,16 +319,19 @@
   async function loadSession(sessionId) {
     if (!connected || !validId(sessionId)) throw problem('请先连接并选择对话。');
     var epoch = generation;
+    backgroundReadWarning = null;
     pendingInteractions.forEach(function (_item, id) { emit({ type: 'interaction-resolved', id: id }); });
     pendingInteractions.clear();
     activeSessionId = sessionId;
     activeEntries = new Map(); activeHasMore = false;
     activeFirstSeq = Number.MAX_SAFE_INTEGER; activeLastSeq = -1;
     var summary = summaries.get(sessionId);
-    activeUpdatedAt = summary && summary.updatedAt;
+    activeUpdatedAt = null;
     var page = await rpc('session.history', { sessionId: sessionId, maxMessages: 20 });
     if (epoch !== generation || activeSessionId !== sessionId) throw problem('对话已切换，请重新打开。');
     mergePage(page);
+    if (epoch !== generation || activeSessionId !== sessionId) throw problem('对话已切换，请重新打开。');
+    activeUpdatedAt = summary && summary.updatedAt;
     try { await refreshInteractions(epoch); }
     catch (error) { if (epoch === generation && activeSessionId === sessionId)
       emit({ type: 'error', userMessage: error && error.userMessage || '同步旧版 DSH 授权或询问失败，请重连。' }); }
@@ -381,6 +426,134 @@
     if (!value || value.accepted !== true) throw problem('DSH 没有接受停止请求。');
     return { accepted: true };
   }
+  // The two inspected HTTP releases share these exact dotted methods. They
+  // use sessionId (not remote-mux's agentId). Catalog reads do not run a model;
+  // writes are sent once, then confirmed by an independent authoritative read.
+  function selectionId(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 256 &&
+      value.trim().length > 0 && !/[\u0000-\u001f\u007f]/.test(value);
+  }
+  function selectionTarget(sessionId, epoch) {
+    if (!connected || !validId(sessionId) || sessionId.length > 512 ||
+        /[\u0000-\u001f\u007f]/.test(sessionId) || activeSessionId !== sessionId ||
+        epoch !== undefined && generation !== epoch)
+      throw problem('对话已切换或连接已断开，请重新打开要选择的对话。');
+  }
+  function modelSelection(value) {
+    if (!value || !selectionId(value.provider) || !selectionId(value.model) ||
+        value.reasoningEffort !== undefined && !selectionId(value.reasoningEffort))
+      throw problem('电脑返回的旧版模型选择无效。');
+    return { provider: value.provider, model: value.model,
+      reasoningEffort: value.reasoningEffort || '' };
+  }
+  function modelCatalog(value) {
+    if (!value || !Array.isArray(value.groups) || value.groups.length > 128 ||
+        !Array.isArray(value.failures)) throw problem('电脑返回的旧版模型列表无效。');
+    var list = [];
+    value.groups.forEach(function (group) {
+      if (!group || !selectionId(group.id) || typeof group.name !== 'string' ||
+          !Array.isArray(group.models)) throw problem('电脑返回的旧版模型列表无效。');
+      group.models.forEach(function (model) {
+        if (!model || !selectionId(model.id) || typeof model.name !== 'string' || list.length >= 1024)
+          throw problem('电脑返回的旧版模型列表无效。');
+        var reasoning = model.reasoning;
+        if (reasoning && (!Array.isArray(reasoning.efforts) || !reasoning.efforts.length ||
+            reasoning.efforts.length > 64 || reasoning.defaultEffort !== undefined && !selectionId(reasoning.defaultEffort)))
+          throw problem('电脑返回的旧版模型思考选项无效。');
+        var efforts = reasoning ? reasoning.efforts.map(function (item) {
+          if (!item || !selectionId(item.id) || typeof item.name !== 'string')
+            throw problem('电脑返回的旧版模型思考选项无效。');
+          return { id: item.id, name: item.name, description: bounded(item.description, 4096) };
+        }) : [];
+        list.push({ id: model.id, name: model.name + (group.name ? '（' + group.name + '）' : ''),
+          provider: group.id, description: bounded(model.description, 4096),
+          defaultEffort: reasoning && reasoning.defaultEffort || '', efforts: efforts });
+      });
+    });
+    if (!list.length && value.failures.length) throw problem('旧版 DSH 的模型目录暂时不可用，请在电脑端检查模型配置。');
+    return list;
+  }
+  async function listModels(sessionId) {
+    if (!connected) throw problem('请先连接电脑上的 DSH。');
+    var epoch = generation;
+    if (sessionId) selectionTarget(sessionId, epoch);
+    var value = await rpc(sessionId ? 'session.models' : 'llm.models', sessionId ? { sessionId: sessionId } : {});
+    if (!connected || epoch !== generation) throw problem('连接已变化，请重新读取模型列表。');
+    if (sessionId) selectionTarget(sessionId, epoch);
+    return modelCatalog(value);
+  }
+  async function selectionSummary(sessionId, epoch) {
+    var value = await rpc('session.list', {});
+    selectionTarget(sessionId, epoch);
+    if (!value || !Array.isArray(value.items)) throw problem('电脑返回的旧版对话选择无效。');
+    var row = value.items.find(function (item) { return item && item.sessionId === sessionId; });
+    if (!row || typeof row.blank !== 'boolean' || row.agentPreset !== undefined && !selectionId(row.agentPreset))
+      throw problem('电脑尚未报告这条对话的工具配置。');
+    summaries.set(sessionId, row);
+    return row;
+  }
+  async function readSelection(sessionId) {
+    var epoch = generation;
+    selectionTarget(sessionId, epoch);
+    var values = await Promise.all([rpc('session.models', { sessionId: sessionId }), selectionSummary(sessionId, epoch)]);
+    selectionTarget(sessionId, epoch);
+    return { agentPreset: values[1].agentPreset || null, blank: values[1].blank,
+      modelSelection: modelSelection(values[0] && values[0].current), lastUsedModel: null, plan: null };
+  }
+  function unconfirmedSelection() {
+    var out = problem('选择请求已发送，但尚未确认电脑的实际选择；请重新读取当前选择，勿重复提交。');
+    out.code = 'selection-unconfirmed'; return out;
+  }
+  async function selectModel(sessionId, modelId, effort, provider) {
+    var epoch = generation;
+    selectionTarget(sessionId, epoch);
+    if (!selectionId(modelId) || !selectionId(provider) ||
+        effort !== undefined && effort !== null && effort !== '' && !selectionId(effort))
+      throw problem('请从电脑返回的模型列表选择完整的模型与提供方。');
+    var request = { sessionId: sessionId, provider: provider, model: modelId };
+    if (effort) request.reasoningEffort = effort;
+    var result = await rpc('session.selectModel', request);
+    selectionTarget(sessionId, epoch);
+    // No second write on transport failure, refusal or readback failure.
+    try {
+      var confirmed = await rpc('session.models', { sessionId: sessionId });
+      selectionTarget(sessionId, epoch);
+      var actual = modelSelection(confirmed && confirmed.current);
+      var acknowledged = modelSelection(result && result.selected);
+      if (acknowledged.provider !== provider || acknowledged.model !== modelId ||
+          actual.provider !== provider || actual.model !== modelId ||
+          effort && actual.reasoningEffort !== effort) throw unconfirmedSelection();
+      return { selected: actual };
+    } catch (_) { throw unconfirmedSelection(); }
+  }
+  async function listModes() {
+    if (!connected) throw problem('请先连接电脑上的 DSH。');
+    var epoch = generation, value = await rpc('agentPreset.list', {});
+    if (!connected || epoch !== generation) throw problem('连接已变化，请重新读取工具配置。');
+    if (!value || !Array.isArray(value.presets) || value.presets.length > 1024)
+      throw problem('电脑返回的旧版工具配置列表无效。');
+    return value.presets.map(function (item) {
+      if (!item || !selectionId(item.id) || typeof item.isDefault !== 'boolean')
+        throw problem('电脑返回的旧版工具配置列表无效。');
+      return { id: item.id, name: bounded(item.name, 512) || item.id,
+        description: bounded(item.description, 4096), isDefault: item.isDefault,
+        broken: bounded(item.broken, 4096) };
+    });
+  }
+  async function selectMode(sessionId, presetId) {
+    var epoch = generation;
+    selectionTarget(sessionId, epoch);
+    if (!selectionId(presetId)) throw problem('请选择电脑返回的工具配置。');
+    var known = summaries.get(sessionId);
+    if (known && known.blank === false) throw problem('对话开始后不能更换工具配置，请新建对话。');
+    var result = await rpc('agentPreset.select', { sessionId: sessionId, agentPreset: presetId });
+    selectionTarget(sessionId, epoch);
+    try {
+      var row = await selectionSummary(sessionId, epoch);
+      if (!result || result.agentPreset !== presetId || row.agentPreset !== presetId) throw unconfirmedSelection();
+      return { agentPreset: row.agentPreset };
+    } catch (_) { throw unconfirmedSelection(); }
+  }
   async function listDirectories(path) {
     var e2ee = global.DshE2EE;
     if (!e2ee || !global.__dshE2eeSecret) throw problem('缺少加密连接密钥。');
@@ -451,6 +624,7 @@
     loadSession: loadSession, loadOlder: loadOlder, listDirectories: listDirectories,
     listWorkspaceFiles: listWorkspaceFiles, downloadFile: downloadFile,
     createProject: createProject, createSession: createSession,
-    sendMessage: sendMessage, cancelSession: cancelSession, respondToInteraction: respondToInteraction, uploadFile: uploadFile
+    sendMessage: sendMessage, cancelSession: cancelSession, respondToInteraction: respondToInteraction, uploadFile: uploadFile,
+    listModels: listModels, selectModel: selectModel, listModes: listModes, selectMode: selectMode, readSelection: readSelection
   };
 })(window);

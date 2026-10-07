@@ -174,9 +174,15 @@
     return node;
   }
 
-  function mount(adapter) {
+  function mount(adapter, connectionInfo) {
     if (active) active.dispose();
     if (!adapter || typeof adapter.connect !== 'function') throw new Error('DSH lite adapter is unavailable');
+    connectionInfo = connectionInfo || {};
+    function interfaceState(name) {
+      var coverage = connectionInfo.runtime && connectionInfo.runtime.featureCapabilities;
+      var item = coverage && coverage.schemaVersion === 1 && coverage.features && coverage.features[name];
+      return item && ['supported', 'unsupported', 'unverified'].indexOf(item.state) >= 0 ? item.state : 'unverified';
+    }
     var refs = {
       status: $('connection-status'), reconnect: $('reconnect'), railReconnect: $('rail-reconnect'), retry: $('error-retry'),
       error: $('error-banner'), errorText: $('error-text'), projectsToggle: $('projects-toggle'),
@@ -470,9 +476,16 @@
     function showError(error, fallback, kind) {
       refs.errorText.textContent = safeError(error, fallback);
       refs.error.dataset.kind = kind || 'operation';
+        delete refs.error.dataset.backgroundReadTag;
+        delete refs.error.dataset.backgroundReadSession;
       refs.error.hidden = false;
     }
-    function clearError() { refs.error.hidden = true; refs.errorText.textContent = ''; delete refs.error.dataset.kind; }
+      function clearError() {
+        refs.error.hidden = true; refs.errorText.textContent = '';
+        delete refs.error.dataset.kind;
+        delete refs.error.dataset.backgroundReadTag;
+        delete refs.error.dataset.backgroundReadSession;
+      }
     function setSidebar(open) {
       document.body.classList.toggle('sidebar-hidden', !open);
       refs.projectsToggle.setAttribute('aria-expanded', String(!!open));
@@ -678,7 +691,8 @@
         item.dataset.recordId = safeId(record.id);
         item.dataset.role = role;
         var meta = el('div', 'record-meta');
-        meta.append(el('span', 'record-role', label(record.title,
+        var recordTitle = role === 'thought' && record.title === '思考过程' ? t('思考过程') : record.title;
+        meta.append(el('span', 'record-role', label(recordTitle,
           role === 'user' ? t('我') : role === 'assistant' ? 'DSH' : role === 'thought' ? t('思考') : role === 'tool' ? t('工具') : role)));
         item.append(meta);
         var recordText = typeof record.text === 'string' ? record.text : '';
@@ -1480,7 +1494,20 @@
     }
     function handleEvent(event) {
       if (state.disposed || !event || typeof event.type !== 'string') return;
-      if (event.type === 'status') {
+      if (event.type === 'background-read-warning' || event.type === 'background-read-recovered') {
+        if (event.tag !== 'legacy-poll' || typeof event.sessionId !== 'string' ||
+            safeId(event.sessionId) !== state.sessionId || state.connection !== 'connected') return;
+        var sameWarning = refs.error.dataset.kind === 'background-read' &&
+          refs.error.dataset.backgroundReadTag === event.tag &&
+          refs.error.dataset.backgroundReadSession === event.sessionId;
+        if (event.type === 'background-read-recovered') {
+          if (sameWarning) clearError();
+        } else if (refs.error.hidden || sameWarning) {
+          showError(null, t('暂时无法刷新旧版内容，已保留当前内容并继续重试。'), 'background-read');
+          refs.error.dataset.backgroundReadTag = event.tag;
+          refs.error.dataset.backgroundReadSession = event.sessionId;
+        }
+      } else if (event.type === 'status') {
         if (event.state === 'connected' || event.state === 'connecting' || event.state === 'disconnected') setStatus(event.state);
         if (event.state === 'disconnected') showError(event, '与电脑的连接已断开，请重连。', 'connection');
         else if (event.state === 'connected' && refs.error.dataset.kind === 'connection') clearError();
@@ -3402,6 +3429,12 @@
           button.setAttribute('aria-label', t(pair[2]) + (selected && selected.model ? '：' + selected.model : ''));
           button.title = pair[0] === 'mode' && state.selection.agentPreset ?
             t('当前工具配置') + '：' + state.selection.agentPreset : button.getAttribute('aria-label');
+          var feature = { model: 'modelSelection', mode: 'toolPresets', perm: 'permissions', goal: 'goals' }[pair[0]];
+          button.disabled = interfaceState(feature) === 'unsupported';
+          if (button.disabled) {
+            button.title = t('当前连接未提供这个手机接口；详情见设置中的连接与兼容性。');
+            button.setAttribute('aria-label', t(pair[2]) + ' · ' + t('当前连接未提供'));
+          }
         });
         if (refs.composerBalance) refs.composerBalance.title = t('看余额');
       };
@@ -3451,7 +3484,10 @@
       var addr = el('button', 'menu-extra', t('连接地址（内网/外网）'));
       addr.type = 'button';
       addr.addEventListener('click', showAddresses);
-      menu.append(bal, addr);
+      var compatibility = el('button', 'menu-extra', t('连接与兼容性'));
+      compatibility.type = 'button';
+      compatibility.addEventListener('click', showCompatibility);
+      menu.append(bal, addr, compatibility);
       // C8 三种语言的切换入口。放在设置里：它不是每天要用的东西，
       // 但"猜错了还改不回来"比"猜错"更让人恼火，所以必须有个地方能改。
       if (window.DshI18n && typeof window.DshI18n.makeSwitcher === 'function') {
@@ -3488,6 +3524,78 @@
         voiceRow.append(voiceSelect);
         menu.append(voiceRow);
       }
+    }
+    function showCompatibility() {
+      closeSettingsMenu();
+      overlay(t('连接与兼容性'), function (body) {
+        var details = el('div', 'compatibility-details');
+        var feedback = el('p', 'panel-line');
+        feedback.setAttribute('role', 'status');
+        var refresh = el('button', 'panel-action', t('重新检测'));
+        refresh.type = 'button';
+        var featureLabels = [
+          ['projects', '项目'], ['sessions', '新建对话'], ['history', '对话内容'],
+          ['sendMessage', '发送消息'], ['cancelSession', '停止任务'],
+          ['workspaceFiles', '电脑文件'], ['fileDownload', '下载文件'],
+          ['imageUpload', '上传图片'], ['fileUpload', '上传文件'],
+          ['questions', '提问与选择'], ['approvals', '操作授权'],
+          ['modelSelection', '模型'], ['toolPresets', '工具配置'], ['reasoning', '思考过程'],
+          ['permissions', '授权范围'], ['planMode', '计划模式'], ['goals', '目标'],
+          ['queue', '排队中的消息'], ['officialImageRead', '原版历史图片']
+        ];
+        function versionOf(info) {
+          var value = info.runtime && info.runtime.version || info.version;
+          return typeof value === 'string' && value.length <= 100 && /^[0-9A-Za-z.+-]+$/.test(value) ? value : t('版本未确认');
+        }
+        function render() {
+          details.replaceChildren();
+          var runtime = connectionInfo.runtime || {};
+          var edition = (runtime.kind || connectionInfo.kind) === 'desktop' ? t('桌面版') :
+            (runtime.kind || connectionInfo.kind) === 'cli' ? t('npm Web 版') : t('来源未确认');
+          details.append(el('p', 'panel-line', edition + ' · ' + versionOf(connectionInfo)));
+          details.append(el('p', 'panel-line', (connectionInfo.profile || adapter.profile) === 'legacy-events' ?
+            t('已自动选择旧版连接方式。') : t('已自动选择新版连接方式。')));
+          details.append(el('p', 'panel-line', t('“接口已实现”表示桥已提供此功能，不等于这个版本、模型和手机已经通过完整实测。实测范围见版本说明。')));
+          featureLabels.forEach(function (pair) {
+            var status = interfaceState(pair[0]);
+            var row = el('p', 'panel-line compatibility-row');
+            row.append(el('span', '', t(pair[1])), el('span', '', t(status === 'supported' ? '接口已实现' :
+              status === 'unsupported' ? '当前连接未提供' : '尚未验证')));
+            details.append(row);
+          });
+        }
+        refresh.addEventListener('click', async function () {
+          if (refresh.disabled || state.disposed || !body.isConnected) return;
+          refresh.disabled = true;
+          feedback.textContent = t('正在检测连接…');
+          var controller = typeof AbortController === 'function' ? new AbortController() : null;
+          var timer = controller && setTimeout(function () { controller.abort(); }, 6000);
+          try {
+            var response = await window.fetch('/__targets', { credentials: 'same-origin', cache: 'no-store',
+              signal: controller && controller.signal });
+            if (!response.ok) throw new Error('status');
+            var result = await response.json();
+            if (state.disposed || !body.isConnected) return;
+            var target = result && Array.isArray(result.targets) && result.targets.find(function (item) { return item && item.id === 'dsh'; });
+            if (!target || !target.runtime || !target.runtime.running) throw new Error('runtime');
+            var next = { profile: target.profile || target.runtime.profile, runtime: target.runtime,
+              version: target.version || null, kind: target.kind || null };
+            if (next.profile !== (connectionInfo.profile || adapter.profile) || versionOf(next) !== versionOf(connectionInfo)) {
+              feedback.textContent = t('电脑上的 DSH 版本已变化，请刷新页面后重新连接。');
+              return;
+            }
+            connectionInfo = next;
+            render();
+            if (composerPicksRelabel) composerPicksRelabel();
+            feedback.textContent = t('已重新检测当前连接。');
+          } catch (_) {
+            if (!state.disposed && body.isConnected) feedback.textContent = t('检测失败，保留上次结果；请检查电脑连接后重试。');
+          }
+          finally { if (timer) clearTimeout(timer); if (!state.disposed && refresh.isConnected) refresh.disabled = false; }
+        });
+        body.append(details, refresh, feedback);
+        render();
+      }, refs.railSettings);
     }
     installSettingsExtras();
 

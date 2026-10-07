@@ -1,8 +1,16 @@
-# DSH mobile acceptance - preview.9
+# DSH mobile acceptance - preview.10
 
-Updated 2026-10-05. New installers are DSH-only. This record separates actual current-desktop operations, controlled tests and outstanding checks. It does not certify every feature, version or physical device.
+Updated 2026-10-06 (UTC). New installers are DSH-only. This record separates actual runtime operations, controlled tests and outstanding checks. It does not certify every feature, version or physical device.
 
-## Current desktop: actual public browser operation
+## Preview.10 actual npm operation
+
+Four published npm versions were run locally in separate D-drive environments: 0.1.0-rc.8, 0.1.1-rc.2, 0.1.7-rc.2 and 0.2.0-rc.2. Actual pointer/keyboard operations covered different subsets; see the [current compatibility table](DSH-COMPATIBILITY.md). Successful modern replies, question answers and approval allow/reject results came from the real DSH/model processes. The old versions' model and tool selections were confirmed through independent readback; their missing valid API-key errors remain credential failures.
+
+The measured mobile layouts were 390-by-844 with no horizontal overflow. Earlier operations in tabs that retained a desktop-sized viewport are not relabelled as mobile-sized acceptance. Desktop-browser viewport emulation does not operate a physical iPhone or Android keyboard/network. Actual Save links in the current in-app browser did not produce a confirmed completed download; historical downloads and controlled download fixtures remain separate evidence.
+
+The new durable replay, WebSocket, screenshot-schema, private-HTTPS admission, capability panel and legacy refresh regressions use owned isolated fixtures. They do not establish real Tailscale enrollment, a production replay attack, physical-phone recovery or all-feature compatibility. Publication requires fresh whole-suite CI and compiled installer/payload/privacy gates for the final source.
+
+## Historical preview.9 desktop: actual public browser operation
 
 The host runtime was desktop **DSH 0.1.7-rc.2**. The updated installed interface was operated through its authenticated, encrypted public quick-tunnel route in Chromium at 390-by-844 and 320-pixel-wide viewports. Tests used disposable computer projects and conversations. These are actual runtime and internet-route operations, not a mocked model; they are not physical iPhone, Android or 5G acceptance.
 

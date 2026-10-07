@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { Readable } = require('node:stream');
 const { createDshLiteLegacyRpc } = require('./dsh-lite-legacy-rpc');
 
@@ -98,5 +99,77 @@ async function invoke(body, overrides, handler = handle) {
   transportFailure = true;
   assert.equal((await invoke(imagePrompt, undefined, imageHandler)).status, 502);
   assert.equal(releases, 1, 'ambiguous network failure must not allow duplicate image submission');
+  // Exercise the actual gateway initializer and actual legacy HTTP dispatcher,
+  // rather than duplicating the production mutating-method list in a fake.
+  const gatewaySource = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
+  const initializerStart = gatewaySource.indexOf('const serveDshLiteLegacyRpcE2ee = e2eeWrap(');
+  const initializerEnd = gatewaySource.indexOf('\nconst legacyRuntimeIdentity', initializerStart);
+  assert(initializerStart >= 0 && initializerEnd > initializerStart);
+  const refreshes = [], dispatched = [];
+  let runtimeReady = true, runtimeProfile = 'legacy-events', discoveryThrows = false;
+  const context = {
+    // Encryption admission is covered above and by real AES fixtures. This
+    // isolated initializer check retains the actual downstream decrypted flag.
+    e2eeWrap: handler => handler,
+    require(name) {
+      assert.equal(name, './dsh-lite-legacy-rpc.js');
+      return require('./dsh-lite-legacy-rpc.js');
+    },
+    async refreshDshRuntimeState(force) {
+      refreshes.push(force);
+      if (discoveryThrows) throw Error('synthetic-discovery-refusal');
+      return { ready: runtimeReady, runtime: { profile: runtimeProfile } };
+    },
+    dshLegacyAttachments: { resolveForPrompt() { throw Error('No image fixture may stage an attachment'); } },
+    async callDshLiteUpstream(call) {
+      const input = JSON.parse(call.body.toString('utf8')); dispatched.push(input);
+      return { statusCode: 200, body: JSON.stringify({ type: 'server-response',
+        rpcId: input.rpcId, result: { ok: true, value: { accepted: true } } }) };
+    }
+  };
+  const actualGatewayHandler = vm.runInNewContext(gatewaySource.slice(initializerStart, initializerEnd) +
+    '\nserveDshLiteLegacyRpcE2ee;', context);
+  const selection = { method: 'session.selectModel', request: { sessionId: 'fresh-session',
+    provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'low' } };
+  const preset = { method: 'agentPreset.select', request: { sessionId: 'fresh-session', agentPreset: 'minimal' } };
+  let freshnessCases = 0;
+  for (const [method, payload, force] of [
+    ['host.describe', {}, false], ['workspace.list', {}, false], ['session.list', {}, false],
+    ['session.history', { sessionId: 'fresh-session', maxMessages: 20 }, false],
+    ['llm.models', {}, false], ['session.models', { sessionId: 'fresh-session' }, false],
+    ['agentPreset.list', {}, false],
+    ['workspace.create', { path: process.platform === 'win32' ? 'D:\\fixture' : '/fixture' }, true],
+    ['session.create', { workspaceId: 'fresh-workspace' }, true],
+    ['session.prompt', { sessionId: 'fresh-session', mode: 'queue', content: [{ type: 'text', text: 'fixture' }] }, true],
+    ['session.cancel', { sessionId: 'fresh-session' }, true],
+    [selection.method, selection.request, true], [preset.method, preset.request, true]
+  ]) {
+    refreshes.length = 0; const previous = dispatched.length;
+    const output = await invoke({ method, request: payload }, undefined, actualGatewayHandler);
+    assert.equal(output.status, 200, method + ' traverses the actual gateway dispatcher');
+    assert.deepEqual(refreshes, [force], method + ' applies the correct discovery freshness');
+    assert.equal(dispatched.length, previous + 1, 'Exactly one official call, with no write retry');
+    assert.equal(dispatched.at(-1).method, method);
+    assert.deepEqual(dispatched.at(-1).payload, payload);
+    freshnessCases++;
+  }
+  const admittedBefore = dispatched.length;
+  runtimeReady = false; refreshes.length = 0;
+  assert.equal((await invoke(selection, undefined, actualGatewayHandler)).status, 503);
+  assert.deepEqual(refreshes, [true]);
+  assert.equal(dispatched.length, admittedBefore, 'Unavailable new selection cannot reach upstream');
+  runtimeReady = true; runtimeProfile = 'remote-mux'; refreshes.length = 0;
+  assert.equal((await invoke(preset, undefined, actualGatewayHandler)).status, 409);
+  assert.deepEqual(refreshes, [true]);
+  assert.equal(dispatched.length, admittedBefore, 'An upgraded protocol cannot receive a cached preset selection');
+  runtimeProfile = 'legacy-events'; discoveryThrows = true; refreshes.length = 0;
+  assert.equal((await invoke(selection, undefined, actualGatewayHandler)).status, 503);
+  assert.deepEqual(refreshes, [true]);
+  assert.equal(dispatched.length, admittedBefore, 'Discovery refusal never forwards or retries a selection');
+  discoveryThrows = false; refreshes.length = 0;
+  assert.equal((await invoke(preset, { decrypted: false }, actualGatewayHandler)).status, 403);
+  assert.deepEqual(refreshes, []);
+  assert.equal(dispatched.length, admittedBefore, 'A forged encryption marker cannot even request discovery');
+  console.log('actual gateway legacy initializer: ' + freshnessCases + ' method freshness cases and 4 fail-closed boundaries passed');
   console.log('legacy-rpc: inspected envelope, method fence, E2EE proof, profile switch passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

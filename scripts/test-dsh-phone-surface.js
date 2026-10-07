@@ -59,7 +59,8 @@ function upgrade(port, url, extra = '') {
   });
   const targetPort = await listen(upstream);
   const context = vm.createContext({ Buffer, URL, http, retiredTargets, dshPhoneSurface,
-    requestOrigin, cfg: { isOwnAddress: ownAddress },
+    requestOrigin, privateHttpsAdmission: require('./private-https-admission.js'),
+    cfg: { isOwnAddress: ownAddress, loadConfig: () => ({ privateHttps: { enabled: false, origin: '' } }) },
     EXPLICIT_TARGET_PORT: targetPort, TARGET_PORT: targetPort, TARGET_HOST: '127.0.0.1',
     refreshDshRuntime() { discoveries++; return Promise.resolve(true); },
     dshLazyImageStore: { originalModuleUrl: () => null },

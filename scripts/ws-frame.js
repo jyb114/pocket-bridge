@@ -16,6 +16,7 @@
 // 这个模块只做「拆帧 / 拼帧 / 改写文本载荷」，不做任何密码学 ——
 // 加解密交给 e2ee.js。分开的好处是两边都能单独测。
 'use strict';
+const { isUtf8 } = require('node:buffer');
 
 const OP_CONT = 0x0, OP_TEXT = 0x1, OP_BIN = 0x2;
 const OP_CLOSE = 0x8, OP_PING = 0x9, OP_PONG = 0xa;
@@ -25,9 +26,14 @@ const OP_CLOSE = 0x8, OP_PING = 0x9, OP_PONG = 0xa;
  * @param {Buffer} buf
  * @returns {{frames: Array, rest: Buffer}} rest 是还没凑齐一个完整帧的尾巴
  */
-function parseFrames(buf) {
+function parseFrames(buf, options = {}) {
   const frames = [];
   let off = 0;
+  const strict = options.strict === true;
+  const maximum = options.maxPayloadBytes;
+  const maxFrames = options.maxFrames;
+  const refuse = code => { throw Object.assign(new Error('WebSocket frame refused.'), { code }); };
+  if (strict && (!Number.isSafeInteger(maximum) || maximum < 1 || !Number.isSafeInteger(maxFrames) || maxFrames < 1)) refuse('ws-frame-invalid');
 
   while (off + 2 <= buf.length) {
     const b0 = buf[off];
@@ -37,17 +43,28 @@ function parseFrames(buf) {
     const masked = (b1 & 0x80) !== 0;
     let len = b1 & 0x7f;
     let p = off + 2;
+    if (strict) {
+      if ((b0 & 0x70) !== 0 || ![OP_TEXT, OP_BIN, OP_CLOSE, OP_PING, OP_PONG, OP_CONT].includes(opcode)) refuse('ws-frame-invalid');
+      // The current encrypted wire protocol carries a complete authenticated
+      // envelope in one data frame. Never normalize a fragment into FIN=1.
+      if (!fin || opcode === OP_CONT) refuse('ws-fragmentation-unsupported');
+      if (frames.length >= maxFrames) refuse('ws-frame-count-limit');
+    }
 
     if (len === 126) {
       if (p + 2 > buf.length) break;
       len = buf.readUInt16BE(p); p += 2;
+      if (strict && len < 126) refuse('ws-frame-invalid');
     } else if (len === 127) {
       if (p + 8 > buf.length) break;
       const big = buf.readBigUInt64BE(p); p += 8;
       // 一个帧超过 2GB 是不可能出现的；出现就说明流已经错位了
-      if (big > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('帧长度异常');
+      if (strict && (big < 65536n || big > BigInt(maximum))) refuse(big < 65536n ? 'ws-frame-invalid' : 'ws-frame-too-large');
+      if (big > BigInt(Number.MAX_SAFE_INTEGER)) refuse('ws-frame-too-large');
       len = Number(big);
     }
+    if (strict && len > maximum) refuse('ws-frame-too-large');
+    if (strict && (opcode === OP_CLOSE || opcode === OP_PING || opcode === OP_PONG) && (len > 125 || (opcode === OP_CLOSE && len === 1))) refuse('ws-control-invalid');
 
     let maskKey = null;
     if (masked) {
@@ -60,6 +77,10 @@ function parseFrames(buf) {
     let payload = Buffer.from(buf.subarray(p, p + len));
     if (masked) {
       for (let i = 0; i < payload.length; i++) payload[i] ^= maskKey[i & 3];
+    }
+    if (strict && opcode === OP_CLOSE && payload.length >= 2) {
+      const code = payload.readUInt16BE(0);
+      if (!((code >= 1000 && code <= 1014 && ![1004,1005,1006].includes(code)) || (code >= 3000 && code <= 4999)) || !isUtf8(payload.subarray(2))) refuse('ws-control-invalid');
     }
 
     frames.push({ fin, opcode, masked, maskKey, payload });

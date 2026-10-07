@@ -13,6 +13,7 @@
 // 使用者连发两次「继续」是完全正常的，两帧明文一样、IV 不同。
 // 如果判据写成「明文一样就算重放」，那是在惩罚正常使用。
 'use strict';
+require('./replay-isolated-fixture.js').install();
 
 const e2ee = require('./e2ee.js');
 const wsf = require('./ws-frame.js');

@@ -305,14 +305,15 @@ function publicCandidate(candidate) {
     httpEvidence: candidate.httpEvidence || null };
 }
 
-function serializeRuntime(runtime) {
+function serializeRuntime(runtime, capabilityContext = {}) {
   if (!runtime) return null;
   return { running: Boolean(runtime.running), installed: Boolean(runtime.installed),
     kind: runtime.kind || null, port: runtime.port || null, pid: runtime.pid || null,
     version: runtime.version || null, versionSource: runtime.versionSource || null,
     profile: runtime.profile || 'unsupported', supported: Boolean(runtime.supported),
     confidence: runtime.confidence || 'low', httpEvidence: runtime.httpEvidence || null,
-    capabilities: { ...(runtime.capabilities || {}) }, source: runtime.source || null,
+    capabilities: { ...(runtime.capabilities || {}) },
+    featureCapabilities: require('./dsh-feature-capabilities.js').buildFeatureCapabilities(runtime, capabilityContext), source: runtime.source || null,
     reason: runtime.reason || null, candidates: (runtime.candidates || []).map(publicCandidate) };
 }
 

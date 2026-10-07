@@ -1,4 +1,5 @@
 'use strict';
+require('./replay-isolated-fixture.js').install();
 
 // Current DSH upload contract through real gateway entry/AES functions and an
 // owned HTTP server. Upstream receipts/bytes are synthetic; no app or disk I/O.
@@ -10,6 +11,7 @@ const source=fs.readFileSync(path.join(__dirname,'mobile-proxy.js'),'utf8');
 const SECRET='isolated-upload-secret-0123456789',LOGIN='isolated-upload-login';
 let checks=0,proved=true;const calls=[];
 const box=vm.createContext({Buffer,URL,Readable,crypto,path,e2ee,setTimeout,
+ privateHttpsAdmission:require('./private-https-admission.js'),cfg:{loadConfig:()=>({privateHttps:{enabled:false,origin:''}})},
  retiredTargets:require('./retired-targets.js'),MAX_E2EE_BODY:64*1024*1024,
  e2eeBridge:{readSecret:()=>SECRET},isLocalRequest:origin.isLoopback,viaRelay:origin.viaRelay,
  isSelfCheck:()=>false,isSelfClientRequest:()=>false,COOKIE_NAME:'fixture-legacy-login',COOKIE_VALUE:LOGIN,
@@ -44,7 +46,7 @@ function packet(name,bytes,sessionId='synthetic-session'){
 }
 async function send(name,bytes,options={}){
  const body=options.body===undefined?packet(name,bytes,options.sessionId):options.body;
- const wire=options.plain?body:e2ee.encrypt(e2ee.deriveKeys(SECRET,e2ee.slotAt()).a,body);
+ const wire=options.wire|| (options.plain?body:e2ee.encrypt(e2ee.deriveKeys(SECRET,e2ee.slotAt()).a,body));
  return new Promise((resolve,reject)=>{
   const req=http.request({host:'127.0.0.1',port:server.address().port,path:options.url||'/__dsh/lite-upload',method:options.method||'POST',headers:{
    host:'public.fixture.invalid',cookie:`fixture-login=${LOGIN}; fixture-device=valid-device`,accept:'application/json',
@@ -109,6 +111,14 @@ async function check(name,fn){await fn();checks++;console.log('PASS '+name);}
    const before=calls.length;assert.equal((await send('a.txt','x',{headers:{cookie:''}})).status,403);
    assert.equal((await send('a.txt','x',{headers:{cookie:`fixture-login=${LOGIN}; fixture-device=revoked`}})).status,403);
    proved=false;const r=await send('a.txt','x');proved=true;assert.equal(r.status,403);assert.equal(r.headers['x-dsh-need-proof'],'1');assert.equal(calls.length,before);
+  });
+  await check('Proof refusal does not consume the untouched encrypted body, but post-admission replay cannot dispatch it twice',async()=>{
+   const before=calls.length,wire=e2ee.encrypt(e2ee.deriveKeys(SECRET,e2ee.slotAt()).a,packet('after-proof.txt',Buffer.from('verified once')));
+   proved=false;let refusal;try{refusal=await send('','',{wire});}finally{proved=true;}
+   assert.equal(refusal.status,403);assert.equal(refusal.headers['x-dsh-need-proof'],'1');assert.equal(calls.length,before);
+   const accepted=await send('','',{wire});assert.equal(accepted.status,200);assert.equal(calls.length,before+1);
+   const repeat=await send('','',{wire});assert.equal(repeat.status,409);assert.equal(repeat.body.code,'replayed-request');
+   assert.equal(repeat.body.attemptDispatched,false);assert.equal(repeat.body.originalOutcomeUnknown,true);assert.equal(calls.length,before+1);
   });
   await check('Session/name/upstream URL query parameters cannot bypass the encrypted metadata envelope',async()=>{
    const before=calls.length;for(const url of ['/__dsh/lite-upload?name=secret.txt','/__dsh/lite-upload?sessionId=other','/__dsh/lite-upload?url=https://unrelated.fixture.invalid'])

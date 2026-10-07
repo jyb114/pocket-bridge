@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const { extractFunction, sliceBalanced } = require('./page-source.js');
 const requestOrigin = require('./request-origin.js');
 const dshPhoneSurface = require('./dsh-phone-surface.js');
+const privateHttpsAdmission = require('./private-https-admission.js');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-router.js'), 'utf8');
 const gateway = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
@@ -27,7 +28,7 @@ function verifyGatewayShell() {
   const open = gateway.indexOf('{', at), end = sliceBalanced(gateway, open, '{', '}');
   assert.ok(at >= 0 && end > open);
   let localDecisions = 0;
-  const box = vm.createContext({ Buffer, URL, requestOrigin, dshPhoneSurface,
+  const box = vm.createContext({ Buffer, URL, requestOrigin, dshPhoneSurface, privateHttpsAdmission,
     cfg: { isOwnAddress: (_address, req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) },
     TARGET_COOKIE: 'fixture-target', targetCookie: () => 'fixture-target=dsh; Path=/',
     shouldShowLauncher: () => { localDecisions++; return false; },

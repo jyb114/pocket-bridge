@@ -2,6 +2,7 @@
 //
 // 这几条任何一条错了，表现都是「突然连不上」——所以要说清楚、测清楚。
 'use strict';
+require('./replay-isolated-fixture.js').install();
 const fs = require('fs');
 const path = require('path');
 const bridge = require('./ws-e2ee-bridge.js');

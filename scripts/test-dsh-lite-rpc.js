@@ -1,8 +1,14 @@
 'use strict';
 
-// Isolated adapter tests: no real DSH process, project, prompt, or network.
+// Isolated adapter tests and owned loopback HTTP: no real DSH process,
+// desktop capture, project, prompt, account or production network.
+require('./replay-isolated-fixture.js').install();
 const assert = require('node:assert/strict');
+const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+const http = require('node:http');
 const { Readable } = require('node:stream');
+const { extractFunction, sliceBalanced } = require('./page-source');
+const e2ee = require('./e2ee');
 const { createDshLiteRpc, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES } = require('./dsh-lite-rpc');
 const { createDshLiteScreen } = require('./dsh-lite-screen');
 
@@ -23,6 +29,80 @@ async function invoke(handler, payload, options = {}) {
 }
 
 async function check(name, test) { await test(); checks++; console.log('PASS ' + name); }
+
+function isolatedScreen() {
+  const captures = [], writes = [], files = new Map();
+  const module = { exports: {} };
+  const source = fs.readFileSync(path.join(__dirname, 'dsh-lite-screen.js'), 'utf8');
+  const fixtureRequire = name => {
+    if (name === 'node:path') return path;
+    if (name === 'node:os') return { tmpdir: () => 'D:\\isolated-screen-fixture' };
+    if (name === 'node:fs') return {
+      writeFileSync(file, body) { writes.push(file); files.set(file, Buffer.from(body)); },
+      statSync(file) { assert(files.has(file)); return { size: files.get(file).length }; },
+      readFileSync(file) { assert(files.has(file)); return files.get(file); },
+      unlinkSync(file) { assert(files.delete(file)); }
+    };
+    if (name === 'node:child_process') return { execFileSync(command, args, options) {
+      assert.equal(command, 'powershell');
+      assert.equal(options.windowsHide, true); assert.equal(options.timeout, 20000);
+      assert.equal(args[5], '-File');
+      assert(files.get(args[6]).toString().startsWith('\uFEFF'));
+      captures.push({ width: Number(args[7]), command, args: args.slice() });
+      files.set(args[8], Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+      return 'RESULT=OK ' + args[7] + 'x720';
+    } };
+    throw Error('Unexpected isolated screen dependency: ' + name);
+  };
+  vm.runInNewContext('(function(require,module,exports){' + source + '\n})',
+    { Buffer, process: { pid: 12345 } })(fixtureRequire, module, module.exports);
+  return { handler: module.exports.createDshLiteScreen(), captures, writes, files };
+}
+
+async function encryptedScreenHttp(test) {
+  const screen = isolatedScreen();
+  const secret = 'isolated-screen-schema-key-0123456789';
+  const source = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
+  const context = vm.createContext({ Buffer, URL, Readable, e2ee, log() {},
+    privateHttpsAdmission: require('./private-https-admission'),
+    MAX_E2EE_BODY: 64 * 1024 * 1024, e2eeSecretOrNull: () => secret,
+    clientWantsE2ee: req => req.headers['x-dsh-e2ee'] === '1',
+    refuseEncryptionUnavailable() { throw Error('Fixture unexpectedly lost its key'); }
+  });
+  vm.runInContext(extractFunction(source, 'wrapEncryptedResponse') + '\n' + extractFunction(source, 'e2eeWrap'), context);
+  const wrapped = context.e2eeWrap(screen.handler);
+  const sockets = new Set();
+  const server = http.createServer((req, res) => {
+    req.__dshRequireE2ee = true;
+    if (req.url !== '/__dsh/screen-shot') { res.writeHead(404); res.end(); return; }
+    wrapped(req, res);
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  async function sendWire(wire) {
+    return new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.address().port,
+        path: '/__dsh/screen-shot', method: 'POST', headers: {
+          'content-type': 'application/octet-stream', 'x-dsh-e2ee': '1',
+          'x-dsh-e2ee-type': 'application/json; charset=utf-8', 'content-length': wire.length
+        } }, res => {
+          const chunks = []; res.on('data', chunk => chunks.push(chunk));
+          res.on('end', () => {
+            const bytes = Buffer.concat(chunks);
+            const plain = res.headers['x-dsh-e2ee'] === '1'
+              ? e2ee.candidateKeys(secret).map(keys => e2ee.decrypt(keys.b, bytes)).find(Boolean) : bytes;
+            if (!plain) { reject(Error('Fixture response did not decrypt')); return; }
+            resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(plain.toString()) });
+          }); res.on('error', reject);
+        });
+      req.setTimeout(3000, () => req.destroy(Error('Owned screen HTTP timeout')));
+      req.on('error', reject); req.end(wire);
+    });
+  }
+  function encrypt(payload) { return e2ee.encrypt(e2ee.deriveKeys(secret, e2ee.slotAt()).a, Buffer.from(JSON.stringify(payload))); }
+  try { await test({ screen, secret, sendWire, encrypt }); }
+  finally { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); }
+}
 
 (async () => {
   const calls = [];
@@ -161,6 +241,113 @@ async function check(name, test) { await test(); checks++; console.log('PASS ' +
     const response = await invoke(screen, { maxWidth: 1280 }, { decrypted: false });
     assert.equal(response.status, 403);
     assert.equal(response.body.error, 'encrypted-request-required');
+  });
+
+  await check('another protected route JSON cannot invoke the native screen operation', async () => {
+    const screen = isolatedScreen();
+    for (const payload of [
+      { method: 'session/list', request: {} },
+      { method: 'session/prompt', request: { requestId: 'r', sessionId: 's', mode: 'queue',
+        content: [{ type: 'text', text: 'isolated instruction' }] } },
+      { method: 'sessions.list', request: {} },
+      { sessionId: 's', attachmentId: 'sha256:' + '0'.repeat(64) },
+      { sessionId: 's', path: 'fixture.txt' },
+      { maxWidth: 1280, method: 'session/list' },
+      { maxWidth: 1280, request: {} },
+      { maxWidth: 1280, __proto__: null, constructor: {} },
+      { maxWidth: 1280, ignored: true }
+    ]) {
+      const response = await invoke(screen.handler, payload);
+      assert.equal(response.status, 400);
+      assert.deepEqual(response.body, { error: 'invalid-screen-request' });
+    }
+    assert.equal(screen.captures.length, 0);
+    assert.equal(screen.writes.length, 0, 'rejected schemas create no script or image');
+  });
+
+  await check('screen options have exact required keys and bounded numeric integer width', async () => {
+    const screen = isolatedScreen();
+    for (const payload of [{}, null, [], 1280, '1280', true,
+      { maxWidth: '1280' }, { maxWidth: null }, { maxWidth: false },
+      { maxWidth: [1280] }, { maxWidth: {} }, { maxWidth: 479 },
+      { maxWidth: 3841 }, { maxWidth: 1280.5 }, { maxWidth: -1280 },
+      { maxWidth: 0 }, { maxWidth: Number.MAX_SAFE_INTEGER + 1 }]) {
+      const response = await invoke(screen.handler, null, { raw: JSON.stringify(payload) });
+      assert.equal(response.status, 400);
+      assert.equal(response.body.error, 'invalid-screen-request');
+    }
+    assert.equal(screen.captures.length, 0); assert.equal(screen.writes.length, 0);
+  });
+
+  await check('screen body parse, size and media-type refusals occur before capture', async () => {
+    const screen = isolatedScreen();
+    for (const raw of ['', '{', '{"maxWidth":NaN}']) {
+      const response = await invoke(screen.handler, null, { raw });
+      assert.equal(response.status, 400); assert.equal(response.body.error, 'invalid-json');
+    }
+    assert.equal((await invoke(screen.handler, { maxWidth: 1280 }, { contentType: 'text/plain' })).status, 415);
+    assert.equal((await invoke(screen.handler, null, { raw: ' '.repeat(4097) })).status, 413);
+    assert.equal((await invoke(screen.handler, { maxWidth: 1280 }, { method: 'GET' })).status, 405);
+    assert.equal((await invoke(screen.handler, { maxWidth: 1280 }, { encrypted: false })).status, 403);
+    assert.equal((await invoke(screen.handler, { maxWidth: 1280 }, { decrypted: false })).status, 403);
+    assert.equal(screen.captures.length, 0); assert.equal(screen.writes.length, 0);
+  });
+
+  await check('phone screen schema and both width bounds preserve one explicit capture', async () => {
+    const screen = isolatedScreen();
+    for (const maxWidth of [480, 1280, 3840]) {
+      const response = await invoke(screen.handler, { maxWidth }, { contentType: 'application/json; charset=utf-8' });
+      assert.equal(response.status, 200); assert.equal(response.body.ok, true);
+      assert.equal(response.body.width, maxWidth); assert.equal(response.body.mime, 'image/jpeg');
+      assert.equal(screen.captures.at(-1).width, maxWidth);
+      assert.equal(screen.files.size, 0, 'owned synthetic script and image were both removed');
+    }
+    assert.equal(screen.captures.length, 3);
+    assert.equal(screen.writes.length, 3);
+  });
+
+  await check('authentic RPC ciphertext redirected first to screen is rejected with zero captures', async () => {
+    await encryptedScreenHttp(async ({ screen, sendWire, encrypt }) => {
+      const wire = encrypt({ method: 'session/list', request: {} });
+      const refused = await sendWire(wire);
+      assert.equal(refused.status, 400);
+      assert.equal(refused.headers['x-dsh-e2ee'], '1', 'schema refusal remains encrypted');
+      assert.deepEqual(refused.body, { error: 'invalid-screen-request' });
+      assert.equal(screen.captures.length, 0); assert.equal(screen.writes.length, 0);
+      const replayed = await sendWire(wire);
+      assert.equal(replayed.status, 409); assert.equal(replayed.body.code, 'replayed-request');
+      assert.equal(replayed.body.attemptDispatched, false);
+      assert.equal(screen.captures.length, 0); assert.equal(screen.writes.length, 0);
+      const allowed = await sendWire(encrypt({ maxWidth: 1280 }));
+      assert.equal(allowed.status, 200); assert.equal(allowed.body.ok, true);
+      assert.equal(allowed.headers['x-dsh-e2ee'], '1'); assert.equal(screen.captures.length, 1);
+    });
+  });
+
+  await check('actual phone adapter default and explicit screenshot calls pass the strict schema', async () => {
+    await encryptedScreenHttp(async ({ screen, secret, sendWire, encrypt }) => {
+      const source = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-adapter.js'), 'utf8');
+      const start = source.indexOf('screenShot: async function (options)'); assert(start >= 0);
+      const open = source.indexOf('{', start), end = sliceBalanced(source, open, '{', '}'); assert(end > open);
+      let requests = 0;
+      const context = { global: { __dshE2eeSecret: secret, DshE2EE: {
+        async encryptedFetch(key, url, options) {
+          assert.equal(key, secret); assert.equal(url, '/__dsh/screen-shot');
+          assert.equal(options.method, 'POST');
+          assert.equal(options.headers['content-type'], 'application/json; charset=utf-8');
+          const payload = JSON.parse(options.body);
+          assert.deepEqual(Object.keys(payload), ['maxWidth']);
+          requests++;
+          const response = await sendWire(encrypt(payload));
+          return { ok: response.status === 200, status: response.status, json: async () => response.body };
+        }, prove() { throw Error('Valid fixture screen must not re-prove'); }
+      } }, error: text => Error(text) };
+      const screenShot = vm.runInNewContext('(' + source.slice(start + 'screenShot: '.length, end + 1) + ')', context);
+      assert.equal((await screenShot()).width, 1280);
+      assert.equal((await screenShot({ maxWidth: 3840 })).width, 3840);
+      assert.equal(requests, 2); assert.deepEqual(screen.captures.map(call => call.width), [1280, 3840]);
+      assert.equal(screen.files.size, 0);
+    });
   });
 
   await check('model selection accepts the optional reasoning effort field', async () => {
