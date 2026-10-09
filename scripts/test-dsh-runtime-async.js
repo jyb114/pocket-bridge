@@ -149,6 +149,14 @@ async function inventoryAndCache() {
   equal(resolver.peekRuntime(), null, 'invalidation clears remembered runtime');
   equal((await resolver.resolveRuntime({})).pid, 9124, 'fresh discovery after invalidation retains exact identity');
 
+  const timeoutCalls = [];
+  const timedOut = await runtime.scanProcessesAsync({ platform: 'win32', execFile(file, args, options, callback) {
+    timeoutCalls.push({ file, args, options });
+    callback(Object.assign(Error('synthetic inventory timeout'), { code: 'ETIMEDOUT' }));
+  } });
+  equal(timeoutCalls.length, 1, 'asynchronous timeout check executes the production query once');
+  equal(timeoutCalls[0].options.timeout, 8000, 'asynchronous production inventory retains its 8-second deadline');
+  equal(timedOut, [], 'asynchronous process inventory timeout provides no runtime identity');
   const corrupted = await runtime.scanProcessesAsync({ platform: 'win32', execFile(file, args, options, callback) { callback(null, '{bad JSON'); } });
   equal(corrupted, [], 'malformed process inventory fails closed');
   equal(await discover.listeningPortsOfAsync([], {}, { execFile() { throw Error('empty owners must not query OS'); } }), [], 'empty owner set avoids unnecessary queries');
@@ -243,17 +251,37 @@ async function workerBoundaries() {
 
 async function unicodePipe() {
   if (process.platform !== 'win32') return;
+  // Exercise real UTF-8 bytes without conflating cold hosted-runner PowerShell
+  // startup with the separately asserted 8-second fail-closed production policy.
+  // Only this owned synthetic child's deadline differs; it remains bounded.
+  // This does not certify that real discovery completes within 8 seconds.
+  const fixtureTimeout = 20000;
   const root = 'D:\\桥\\中文😀\\node_modules\\@deepseek-ai\\dsh', entry = root + '\\dist\\bin.js';
   const files = { [root + '\\package.json']: JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.7-rc.2', bin: 'dist/bin.js' }), [entry]: '// fixture' };
   const io = { statSync(file) { if (!(file in files)) throw Error('missing'); return { isFile: () => true, size: Buffer.byteLength(files[file]) }; },
     readFileSync(file) { if (!(file in files)) throw Error('missing'); return files[file]; } };
   const command = '"C:\\node.exe" "' + entry + '" web --no-open';
   const quote = value => "'" + value.replace(/'/g, "''") + "'";
+  let pipeFailure = null;
   const records = await runtime.scanProcessesAsync({ fs: io, execFile(file, args, options, callback) {
+    equal(options.timeout, 8000, 'real asynchronous Unicode fixture retains the production inventory deadline');
     const adjusted = args.slice(), index = args.indexOf('-Command') + 1;
     adjusted[index] = adjusted[index].replace(/Get-CimInstance[\s\S]*$/, '[pscustomobject]@{ProcessId=94;Name=\'node.exe\';ExecutablePath=\'C:\\node.exe\';CommandLine=' + quote(command) + '} | ConvertTo-Json -Compress');
-    return child.execFile(file, adjusted, options, callback);
+    const started = performance.now();
+    // Capture stderr only from this owned synthetic child, never real OS inventory.
+    return child.execFile(file, adjusted, { ...options, timeout: fixtureTimeout, stdio: ['ignore', 'pipe', 'pipe'] }, (error, stdout, stderr) => {
+      const evidence = { mode: 'async', node: process.version,
+        elapsedMs: Math.round(performance.now() - started), productionTimeoutMs: options.timeout, fixtureTimeoutMs: fixtureTimeout,
+        code: error?.code, errno: error?.errno, status: error ? undefined : 0,
+        signal: error?.signal, killed: error?.killed, stdout: String(stdout || '').slice(0, 2048),
+        stderr: String(stderr || '').slice(0, 2048) };
+      if (error) pipeFailure = Error('Synthetic Unicode pipe failure: ' + JSON.stringify(evidence));
+      else console.log('Synthetic Unicode pipe evidence: ' + JSON.stringify(evidence));
+      callback(error, stdout);
+    });
   } });
+  // Do not allow the production fail-closed empty result to hide the fixture error.
+  if (pipeFailure) throw pipeFailure;
   equal(records.map(record => record.packageJsonPath), [root + '\\package.json'], 'actual asynchronous Windows UTF-8 pipe preserves Chinese and supplementary Unicode package paths');
 }
 

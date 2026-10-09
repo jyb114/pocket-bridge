@@ -75,7 +75,24 @@ function fixture(state = {}) {
   equal(runtime.classifyProcess({ pid: 3, name: 'Uninstall DeepSeek Harness.exe' }, { fs: io, adapter: metadataApi }), null, 'never identify the uninstaller');
   equal(runtime.scanProcesses({ processes: [record, { pid: 4, name: 'node.exe', commandLine: 'node.exe app.js web' }], fs: io, adapter: metadataApi }).map(p => p.pid), [90], 'strict process inventory');
 
+  // Timeout admission is independent of a hosted Windows machine's cold
+  // PowerShell startup. The production query must retain 8 seconds and fail closed.
+  const timeoutCalls = [];
+  const timedOut = runtime.scanProcesses({ platform: 'win32', execFileSync(file, args, options) {
+    timeoutCalls.push({ file, args, options });
+    throw Object.assign(Error('synthetic inventory timeout'), { code: 'ETIMEDOUT' });
+  } });
+  equal(timeoutCalls.length, 1, 'synchronous timeout check executes the production query once');
+  equal(timeoutCalls[0].options.timeout, 8000, 'synchronous production inventory retains its 8-second deadline');
+  equal(timedOut, [], 'synchronous process inventory timeout provides no runtime identity');
+
   if (process.platform === 'win32') {
+    // This real-child fixture tests UTF-8 transport, not production startup latency.
+    // Hosted runners can spend more than 8 seconds starting a cold PowerShell.
+    // Give only the owned synthetic child a separate finite deadline; production
+    // options and fail-closed timeout behavior are asserted independently above.
+    // This does not certify that real discovery completes within 8 seconds.
+    const fixtureTimeout = 20000;
     const unicodeRoot = 'D:\\桥\\实际使用\\node_modules\\@deepseek-ai\\dsh';
     const unicodeEntry = unicodeRoot + '\\lib\\bin.js';
     const unicodeIo = virtualFs({
@@ -86,14 +103,35 @@ function fixture(state = {}) {
     const commandLine = '"C:\\node.exe" "' + unicodeEntry + '" web';
     const sample = '[pscustomobject]@{ProcessId=91;Name=\'node.exe\';ExecutablePath=\'C:\\node.exe\';CommandLine=' +
       quote(commandLine) + '} | ConvertTo-Json -Compress';
+    let pipeFailure = null;
     const scanned = runtime.scanProcesses({ fs: unicodeIo, execFileSync(file, args, options) {
+      equal(options.timeout, 8000, 'real synchronous Unicode fixture retains the production inventory deadline');
       // Exercise the real Windows PowerShell pipe/Node decoding boundary while
       // replacing only the OS inventory data; this is not a DSH compatibility test.
       const commandIndex = args.indexOf('-Command') + 1;
       const adjusted = args.slice();
       adjusted[commandIndex] = adjusted[commandIndex].replace(/Get-CimInstance[\s\S]*$/, sample);
-      return require('child_process').execFileSync(file, adjusted, options);
+      const started = performance.now();
+      try {
+        // Capture stderr only from this owned synthetic child, never real OS inventory.
+        const output = require('child_process').execFileSync(file, adjusted,
+          { ...options, timeout: fixtureTimeout, stdio: ['ignore', 'pipe', 'pipe'] });
+        console.log('Synthetic Unicode pipe evidence: ' + JSON.stringify({ mode: 'sync',
+          node: process.version, elapsedMs: Math.round(performance.now() - started),
+          productionTimeoutMs: options.timeout, fixtureTimeoutMs: fixtureTimeout, status: 0, stdout: String(output).slice(0, 2048) }));
+        return output;
+      } catch (error) {
+        pipeFailure = Error('Synthetic Unicode pipe failure: ' + JSON.stringify({ mode: 'sync',
+          node: process.version, elapsedMs: Math.round(performance.now() - started),
+          productionTimeoutMs: options.timeout, fixtureTimeoutMs: fixtureTimeout, code: error.code, errno: error.errno, status: error.status,
+          signal: error.signal, killed: error.killed, stdout: String(error.stdout || '').slice(0, 2048),
+          stderr: String(error.stderr || '').slice(0, 2048) }));
+        throw error;
+      }
     } });
+    // Production intentionally fails closed on child errors. Retain that behavior,
+    // but report the owned fixture's original failure instead of only an empty array.
+    if (pipeFailure) throw pipeFailure;
     equal(scanned.map(p => p.packageJsonPath), [unicodeRoot + '\\package.json'], 'Windows inventory preserves Chinese npm installation paths across the real UTF-8 pipe');
   }
 
