@@ -3013,14 +3013,17 @@ async function buildConsoleStatus(lang) {
 
   const conf = cfg.loadConfig();
   const tunnelDisabled = conf.tunnelProvider === 'none' || status.tunnel?.disabled === true;
-  const entries = { lan: [], wan: null, pairPage: null, pairCode: currentPairCode(), lanHttps: [], encrypted: !!e2eeSecret };
+  const entries = { lan: [], wan: null, pairPage: null, pairCode: currentPairCode(), lanHttps: [], encrypted: !!e2eeSecret,
+    lanDisabled: conf.enableLanAccess === false && !HTTPS_PORT, publicTunnelDisabled: tunnelDisabled, privateHttps: null };
+  const privateOrigin = conf.privateHttps?.enabled === true && privateHttpsStatus.normalizePrivateOrigin(conf.privateHttps.origin);
+  if (privateOrigin) entries.privateHttps = `${privateOrigin.origin}/k/${ACCESS_KEY}${kfrag}`;
   for (const x of netInfo.lanV4) {
-    entries.lan.push(`http://${x.address}:${PORT}/k/${ACCESS_KEY}${kfrag}`);
+    if (conf.enableLanAccess !== false) entries.lan.push(`http://${x.address}:${PORT}/k/${ACCESS_KEY}${kfrag}`);
     if (HTTPS_PORT) {
       entries.lanHttps.push(`https://${x.address}:${HTTPS_PORT}/k/${ACCESS_KEY}${kfrag}`);
     }
   }
-  if (netInfo.lanV4.length) {
+  if (netInfo.lanV4.length && conf.enableLanAccess !== false) {
     // 配对页**不带**密钥：它是给二维码用的，而且配对流程本来就会重新认证。
     entries.pairPage = `http://${netInfo.lanV4[0].address}:${PORT}/pair`;
   }

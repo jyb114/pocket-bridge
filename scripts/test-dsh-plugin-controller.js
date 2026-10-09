@@ -425,6 +425,18 @@ async function main() {
     assert.equal((await fx.controller.connection()).code, 'secure-connection-unavailable');
     assert.equal(healthReads, 2); assert.equal(fx.writes.length, 0);
   });
+  await use('private HTTPS reveal remains valid without advertising disabled LAN or public entries', async fx => {
+    fx.config.tunnelProvider = 'none'; fx.config.enableLanAccess = false;
+    fx.config.privateHttps = { enabled: true, origin: 'https://fixture.tailnet.ts.net' };
+    fx.write('config.json', fx.config);
+    fx.state.consoleStatus.entries.wan = null; fx.state.consoleStatus.entries.lan = []; fx.state.consoleStatus.entries.lanHttps = [];
+    fx.state.consoleStatus.entries.privateHttps = `https://fixture.tailnet.ts.net/k/${fx.access}#k=${fx.secret}`;
+    fx.state.consoleStatus.tunnel.disabled = true;
+    const result = await fx.controller.connection();
+    assert.equal(result.ok, true); assert.equal(result.mode, 'private-https');
+    assert.equal(new URL(result.url).origin, fx.config.privateHttps.origin);
+    assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
+  });
   await use('Diagnostics remains a finite redacted checklist without exposing configuration or message content', async fx => {
     const result = await fx.controller.diagnostics();
     assert.equal(result.ok, true); assert(result.checks.length > 0);

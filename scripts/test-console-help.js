@@ -105,7 +105,7 @@ function runRenderEntries(targets, opts) {
     ...o.entries
   };
   const sandbox = {
-    state: { data: { targets } },
+    state: { data: { targets, ...o.data } },
     document: { createElement: fakeEl },
     $: node,
     t: T, tr: T,
@@ -278,6 +278,34 @@ console.log('\n[行为] 安全的手机入口排序、复制、打开与不可�
   const buttons = (r, kind) => deepButtons(card(r, kind));
   const entryButtons = (r, kind) => buttons(r, kind).slice(0, 2);
 
+  for (const lang of ['zh', 'en', 'es']) check('disabled public/LAN cards do not imply connecting or expose stale URLs (' + lang + ')', () => {
+    const r = runRenderEntries(targets, { lang, entries: { lanDisabled: true, publicTunnelDisabled: true }, data: { tunnel: { disabled: true, running: true } } });
+    assert(!card(r, 'wan').innerHTML.includes('TRY CLOUDFLARE'));
+    assert(!card(r, 'wan').innerHTML.includes('fixture.example'));
+    assert(!card(r, 'lan').innerHTML.includes('192.168.1.5'));
+    const label = lang === 'zh' ? '启动已禁用' : lang === 'en' ? 'Startup disabled' : 'Inicio desactivado';
+    assert(card(r, 'wan').innerHTML.includes(label));
+    assert.equal(r.sandbox.bestEntry(r.entries), null);
+    for (const kind of ['wan', 'lan']) for (const b of entryButtons(r, kind)) { assert(b.disabled); b.onclick(); }
+    assert.equal(r.copied.length, 0); assert.equal(r.opened.length, 0);
+  });
+  check('auto without observed process is not connecting; observed process without URL may be connecting', () => {
+    const idle = runRenderEntries(targets, { entries: { wan: null }, data: { tunnel: { running: false } } });
+    assert(card(idle, 'wan').innerHTML.includes('尚未就绪')); assert(!card(idle, 'wan').innerHTML.includes('建立中'));
+    const starting = runRenderEntries(targets, { entries: { wan: null }, data: { tunnel: { running: true } } });
+    assert(card(starting, 'wan').innerHTML.includes('建立中'));
+  });
+  check('private HTTPS remains separate and usable with public and LAN startup disabled', () => {
+    const url = 'https://fixture.tailnet.ts.net/k/fixture-access#k=' + KEY;
+    const r = runRenderEntries(targets, { entries: { lanDisabled: true, publicTunnelDisabled: true, privateHttps: url }, data: { tunnel: { disabled: true } } });
+    assert.equal(r.sandbox.bestEntry(r.entries).kind, 'privateHttps');
+    assert(card(r, 'wan').innerHTML.includes('启动已禁用'));
+    assert(card(r, 'private').innerHTML.includes('已配置 · 请验证'));
+    assert(!card(r, 'private').innerHTML.includes(KEY)); assert(!card(r, 'private').innerHTML.includes('fixture-access'));
+    for (const b of entryButtons(r, 'private')) { assert.equal(b.disabled, false); b.onclick(); }
+    assert.equal(new URL(r.copied[0][0]).host, 'fixture.tailnet.ts.net');
+    assert.equal(r.opened.length, 1);
+  });
   check('未开启内网 HTTPS 时，真正的推荐函数选择 HTTPS 隧道而非普通内网', () => {
     const r = runRenderEntries(targets);
     assert.equal(r.sandbox.bestEntry(r.entries).kind, 'wan');

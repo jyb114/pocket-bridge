@@ -56,9 +56,10 @@ function fixture(mode = 'dynamic') {
   // A policy change must hide that URL before a daemon can rewrite status.json.
   const { extractFunction } = require('./page-source.js');
   const gateway = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
-  for (const provider of ['none', 'auto']) {
+  for (const provider of ['none', 'auto']) for (const lanOn of [false, true]) for (const privateOn of [false, true]) {
     const build = vm.runInNewContext('(async ' + extractFunction(gateway, 'buildConsoleStatus') + ')', {
-      cfg: { detectNetwork: () => ({ lanV4: [] }), loadConfig: () => ({ tunnelProvider: provider }) },
+      cfg: { detectNetwork: () => ({ lanV4: [{ address: '192.0.2.12' }] }), loadConfig: () => ({ tunnelProvider: provider, enableLanAccess: lanOn, privateHttps: { enabled: privateOn, origin: 'https://fixture.tailnet.ts.net' } }) },
+      privateHttpsStatus: require('./tailscale-private-https.js'),
       readJsonFile: () => ({ tunnel: { url: 'https://old-fixture.invalid', provider: 'cloudflare-quick', running: true, reachable: true } }),
       path, LOG_DIR: '/fixture', refreshDshRuntime: async () => true,
       targetCache: { at: Date.now(), list: [] }, refreshTargets: async () => {},
@@ -72,6 +73,11 @@ function fixture(mode = 'dynamic') {
       tailFile: () => '', LOG_FILE: ''
     });
     const result = await build('en');
+    assert.equal(result.entries.lan.length, lanOn ? 1 : 0);
+    assert.equal(result.entries.lanDisabled, !lanOn);
+    if (!lanOn) assert.equal(result.entries.pairPage, null);
+    assert.equal(Boolean(result.entries.privateHttps), privateOn);
+    if (privateOn) assert(result.entries.privateHttps.startsWith('https://fixture.tailnet.ts.net/k/'));
     if (provider === 'none') {
       assert.equal(result.entries.wan, null); assert.equal(result.tunnel.url, null);
       assert.equal(result.tunnel.running, null); assert.equal(result.tunnel.reachable, null); assert.equal(result.tunnel.disabled, true);

@@ -823,17 +823,21 @@ function renderTargets(list) {
  */
 function entryList(e) {
   var out = [];
-  (Array.isArray(e.lanHttps) ? e.lanHttps : []).forEach(function (u) {
+  (!e.lanDisabled && Array.isArray(e.lanHttps) ? e.lanHttps : []).forEach(function (u) {
     var phoneUrl = dshLiteAddress(u);
     out.push({ url: u, phoneUrl: phoneUrl, usable: !!phoneUrl, kind: 'lanHttps', plain: false, title: t('在家用'), primary: !!phoneUrl,
       note: t('同一 WiFi，既快又是加密的；第一次打开会有一次证书提示') });
   });
-  if (e.wan) {
+  if (e.privateHttps) {
+    var privatePhoneUrl = dshLiteAddress(e.privateHttps);
+    out.push({ url: e.privateHttps, phoneUrl: privatePhoneUrl, usable: !!privatePhoneUrl, kind: 'privateHttps', plain: false, title: t('私有 HTTPS'), note: t('通过已配置的私有网络连接；请在手机上验证连通性。') });
+  }
+  if (e.wan && !e.publicTunnelDisabled) {
     var phoneUrl = dshLiteAddress(e.wan);
     out.push({ url: e.wan, phoneUrl: phoneUrl, usable: !!phoneUrl, kind: 'wan', plain: false, title: t('在外面用'),
       note: t('经 Cloudflare，任何网络都能连；内容是加密的') });
   }
-  (Array.isArray(e.lan) ? e.lan : []).forEach(function (u) {
+  (!e.lanDisabled && Array.isArray(e.lan) ? e.lan : []).forEach(function (u) {
     out.push({ url: u, phoneUrl: '', usable: false, kind: 'lan', plain: true, title: t('普通 HTTP'),
       note: t('普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。') });
   });
@@ -870,6 +874,9 @@ function renderEntries(e) {
   var box = $('entries');
   box.innerHTML = '';
   var items = entryList(e);
+  var tunnelState = (state.data && state.data.tunnel) || {};
+  var publicDisabled = e.publicTunnelDisabled === true || tunnelState.disabled === true;
+  if (publicDisabled) items = items.filter(function (item) { return item.kind !== 'wan'; });
   function card(kind, title, subtitle, url, state, note) {
     var el = document.createElement('article');
     el.className = 'access-card ' + kind;
@@ -906,8 +913,8 @@ function renderEntries(e) {
   var lanUrl = lan && lan.url;
   var lanLite = lan && lan.phoneUrl;
   var lanCard = card('lan-card', t('内网连接'), t('同一 Wi-Fi'), lanUrl,
-    { tone: lanLite ? 'good' : 'warn', label: lanLite ? 'HTTPS' : (lan ? t('手机不可用') : t('等待中')) },
-    lan ? (lan.plain ? t('普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。') :
+    { tone: lanLite ? 'good' : 'warn', label: e.lanDisabled ? t('已禁用') : lanLite ? 'HTTPS' : (lan ? t('手机不可用') : t('尚未就绪')) },
+    e.lanDisabled ? t('内网直连未启用，因此不提供内网地址。') : lan ? (lan.plain ? t('普通 HTTP 不能用于手机加密连接。请开启内网 HTTPS，或使用外网 HTTPS 隧道地址。') :
       (lanLite ? t('同一 Wi-Fi 内的加密连接。首次访问可能需确认本机证书。') : t('链接缺少有效的加密密钥。请刷新地址；仍不可用时，更换密钥后复制新链接。'))) : t('先确认本机服务已启动。'));
   var lanActs = document.createElement('div'); lanActs.className = 'access-actions';
   addEntryButtons(lanActs, lanLite, t('内网连接'));
@@ -918,20 +925,29 @@ function renderEntries(e) {
 
   var wan = items.filter(function (item) { return item.kind === 'wan'; })[0], wanUrl = wan && wan.url;
   var wanLite = wan && wan.phoneUrl;
-  var wanCard = card('wan-card', t('外网临时通道'), 'TRY CLOUDFLARE', wanUrl,
-    { tone: wanLite ? 'good' : 'warn', label: wanLite ? t('可用') : (wanUrl ? t('手机不可用') : t('建立中')) },
-    wanUrl && !wanLite ? t('手机需要带有效密钥的 HTTPS 隧道链接。请刷新地址；仍不可用时，换新地址和密钥。') :
+  var wanCard = card('wan-card', t('外网临时通道'), publicDisabled ? t('公网隧道') : 'TRY CLOUDFLARE', wanUrl,
+    { tone: wanLite ? 'good' : 'warn', label: publicDisabled ? t('启动已禁用') : wanLite ? t('可用') : (wanUrl ? t('手机不可用') : tunnelState.running === true ? t('建立中') : t('尚未就绪')) },
+    publicDisabled ? t('公网隧道的启动和探测已禁用。这不代表已有隧道已停止，也不会撤销旧链接的访问权限。') : wanUrl && !wanLite ? t('手机需要带有效密钥的 HTTPS 隧道链接。请刷新地址；仍不可用时，换新地址和密钥。') :
       t('无需注册即可在外网使用。地址不是永久的，重建后旧地址会失效。'));
   var notice = document.createElement('div'); notice.className = 'tunnel-notice';
   notice.innerHTML = t('<b>地址变更后：</b>手机已开启系统通知的，会自动收到新的恢复链接；没开启的，在手机页面点一次“开启系统通知”。');
-  wanCard.appendChild(notice);
+  if (!publicDisabled) wanCard.appendChild(notice);
   var wanActs = document.createElement('div'); wanActs.className = 'access-actions';
   addEntryButtons(wanActs, wanLite, t('外网临时通道'));
   if (wanLite) addButton(wanActs, t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging) copy(wanLite, t('DSH 轻量版地址')); });
   addButton(wanActs, t('刷新当前地址'), '', function () { homeOperation(t('正在刷新当前外网地址…')); load(); });
   addButton(wanActs, t('更换密钥'), '', function () { homeMutate('key'); });
-  addButton(wanActs, t('换新地址和密钥'), '', function () { homeMutate('renew'); });
+  if (!publicDisabled) addButton(wanActs, t('换新地址和密钥'), '', function () { homeMutate('renew'); });
   wanCard.appendChild(wanActs); box.appendChild(wanCard);
+  var privateEntry = items.filter(function (item) { return item.kind === 'privateHttps'; })[0];
+  if (privateEntry) {
+    var privateCard = card('private-card', t('私有 HTTPS'), t('私有网络'), privateEntry.url,
+      { tone: privateEntry.usable ? 'good' : 'warn', label: privateEntry.usable ? t('已配置 · 请验证') : t('手机不可用') },
+      t('通过已配置的私有网络连接；请在手机上验证连通性。'));
+    var privateActs = document.createElement('div'); privateActs.className = 'access-actions';
+    addEntryButtons(privateActs, privateEntry.phoneUrl, t('私有 HTTPS'));
+    privateCard.appendChild(privateActs); box.appendChild(privateCard);
+  }
 
   // ── 配对码 ─────────────────────────────────────────────────────────────
   //
@@ -2359,6 +2375,15 @@ if (window.DshI18n && window.DshI18n.register) {
     '正在重新检测本机网络地址…': { en: 'Checking local network addresses again…', es: 'Volviendo a comprobar las direcciones de red local…' },
     '外网临时通道': { en: 'Temporary internet tunnel', es: 'Túnel temporal de internet' },
     '可用': { en: 'Available', es: 'Disponible' },
+    '已禁用': { en: 'Disabled', es: 'Desactivado' },
+    '启动已禁用': { en: 'Startup disabled', es: 'Inicio desactivado' },
+    '公网隧道': { en: 'Public tunnel', es: 'Túnel público' },
+    '内网直连未启用，因此不提供内网地址。': { en: 'Local network access is disabled, so no LAN address is offered.', es: 'El acceso a la red local está desactivado; no se ofrece una dirección LAN.' },
+    '公网隧道的启动和探测已禁用。这不代表已有隧道已停止，也不会撤销旧链接的访问权限。': { en: 'Public tunnel startup and probing are disabled. Existing tunnels have not been confirmed stopped, and old access links are not revoked.', es: 'El inicio y las comprobaciones del túnel público están desactivados. No se ha confirmado la detención de túneles existentes ni se han revocado los enlaces anteriores.' },
+    '私有 HTTPS': { en: 'Private HTTPS', es: 'HTTPS privado' },
+    '私有网络': { en: 'Private network', es: 'Red privada' },
+    '已配置 · 请验证': { en: 'Configured · verify connection', es: 'Configurado · verifica la conexión' },
+    '通过已配置的私有网络连接；请在手机上验证连通性。': { en: 'Use the configured private network; verify connectivity on your phone.', es: 'Usa la red privada configurada; verifica la conexión en tu teléfono.' },
     '建立中': { en: 'Connecting', es: 'Conectando' },
     '无需注册即可在外网使用。地址不是永久的，重建后旧地址会失效。': { en: 'Use it from outside without signing up. The address is temporary; rebuilding it invalidates the old one.', es: 'Úsalo desde fuera sin registrarte. La dirección es temporal; al reconstruirla, la anterior deja de funcionar.' },
     '<b>地址变更后：</b>手机已开启系统通知的，会自动收到新的恢复链接；没开启的，在手机页面点一次“开启系统通知”。': { en: '<b>When the address changes:</b> with system notifications on, your phone gets the new recovery link automatically; without them, tap “Enable system notifications” once on the phone page.', es: '<b>Cuando cambie la dirección:</b> con las notificaciones del sistema activadas, el teléfono recibe solo el nuevo enlace de recuperación; si no lo están, toca una vez “Activar notificaciones del sistema” en la página del teléfono.' },

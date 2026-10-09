@@ -194,7 +194,7 @@ function createBridgeController(options = {}, dependencies = {}) {
       if (data.instanceId !== install.identity || data.gateway?.bootId !== health.bootId || data.gateway?.port !== health.port || data.gateway?.dshPort !== hostPort || data.entries?.encrypted !== true) throw failure('gateway-identity-changed');
       const privateBase = install.config.privateHttps?.enabled === true && baseOrigin(install.config.privateHttps.origin);
       if (!privateBase && (install.config.tunnelProvider === 'none' || data.tunnel?.disabled === true)) throw failure('secure-connection-unavailable');
-      const raw = data.entries.wan || (privateBase && (data.entries.lanHttps?.[0] || data.entries.lan?.[0]));
+      const raw = privateBase ? (data.entries.privateHttps || data.entries.wan || data.entries.lanHttps?.[0] || data.entries.lan?.[0]) : data.entries.wan;
       let entry; try { entry = new URL(raw); } catch (_) { throw failure('secure-connection-unavailable'); }
       if ((!privateBase && entry.protocol !== 'https:' || privateBase && !['http:', 'https:'].includes(entry.protocol)) || entry.username || entry.password || !/^\/k\/[A-Za-z0-9_-]{16,128}$/.test(entry.pathname) ||
           entry.search || !/^#k=[A-Za-z0-9_-]{16,128}$/.test(entry.hash)) throw failure('secure-connection-unavailable');
