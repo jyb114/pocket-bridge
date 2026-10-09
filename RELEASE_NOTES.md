@@ -1,75 +1,87 @@
-# Release notes - 1.0.0-preview.13
+# Release notes - 1.0.0-preview.14
 
-## Optional DSH plugin
+## Safer startup and clearer recovery
 
-Pocket Bridge now has an installable DSH plugin. Open **Settings → Pocket Bridge**
-to start or pause phone access, reveal a private connection and locally generated
-QR code, open the computer's controls, and diagnose the selected gateway.
-The plugin reuses the existing lightweight phone interface and encrypted content
-transport. It does not load the original desktop interface over the tunnel.
+The optional DSH plugin now explains missing or outdated **Node.js 24+** and
+shows actionable startup recovery without assuming that a Windows shortcut exists.
+Diagnostics remain read-only: an unprobed dependency is unknown, and a previous
+failed start is identified as historical evidence rather than a new probe.
 
-Download `pocket-bridge-1.0.0-preview.13.tgz` from this release and install it
-through the desktop plugin manager. For the tested npm Web profiles:
+An explicit `tunnelProvider: "none"` no longer falls through to automatic
+Cloudflare startup. Disabled policy skips public-tunnel discovery, reachability
+probes and rebuilding; unsupported providers fail closed. Public work is cancelled
+if the selected policy changes across asynchronous waits. The documented
+`cloudflare` alias and supported dynamic/fixed modes remain available.
+
+**Important:** disabling tunnel startup does not terminate an existing tunnel,
+revoke old access, or disable LAN listeners. Gateway Stop pauses the gateway only;
+an old tunnel can reconnect after restart. Verify and stop an existing tunnel
+separately before relying on local-only operation. For isolated loopback-only
+checks, also disable `enableLanAccess` and `lanHttps.enabled`.
+
+## Easier local operation
+
+- The desktop console labels disabled public startup accurately, hides disabled
+  LAN HTTP entries, and shows configured private HTTPS separately.
+- Console Chinese, English and Spanish switching updates navigation, headings
+  and controls without a reload or an additional service request. Connection-card
+  headings no longer collapse into one-character columns beside status badges.
+- The plugin panel follows the host page/browser language and offers a panel-only
+  override. Known recovery and diagnostic messages use the same language. The
+  override lasts for the mounted panel and does not change DSH or browser settings.
+- Plugin controls wrap within the space the DSH host provides. Primary actions
+  precede detail fields, with complete prerequisites and lifecycle notes available
+  in an expandable section. DSH's own navigation is unchanged.
+- Lite startup and emergency update guidance remains available in Chinese,
+  English and Spanish when the main language scripts cannot load. Update identity,
+  capability, fingerprint verification, failure and retry rules are unchanged.
+
+## Installation and requirements
+
+Install `pocket-bridge-1.0.0-preview.14.tgz` through the supported DSH plugin
+manager. For an npm DSH Web profile:
 
 ```text
-dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.13/pocket-bridge-1.0.0-preview.13.tgz
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.14/pocket-bridge-1.0.0-preview.14.tgz
 ```
 
-Use the host's normal reload or restart instructions. Installing into a Web
-profile does not install into the desktop application's separate profile.
-Do not close a running DSH task merely to reload a plugin.
+A Web profile is separate from a desktop application's profile. Follow the host's
+normal restart instructions when existing tasks permit. The plugin requires a
+genuine **Node.js 24+** runtime. Public internet tunnels also need **cloudflared**;
+private HTTPS does not. The Windows installer supplies those two runtimes, while
+the plugin tarball does not. DSH and any model credentials remain separate.
 
-## Connection and lifecycle
+Managed gateway configuration, keys, devices and uploads remain outside the
+replaceable plugin package. Removing the plugin does not stop a running gateway
+or remove retained data. Hiding a connection or stopping the gateway does not
+revoke paired devices or copied links.
 
-- Manage only an identified Pocket Bridge installation. Foreign listeners and
-  a gateway serving another DSH instance are rejected rather than adopted.
-- Pin a plugin-started gateway to its DSH host. Pausing phone access stops the
-  bridge; it does not terminate DSH or its tasks.
-- Keep managed gateway configuration, connection keys and uploads under DSH_HOME,
-  outside the replaceable plugin package. Verify public source hashes before an
-  installation or upgrade, and retain private state when removing the plugin.
-- Keep connection secrets hidden until requested, then hide them after two
-  minutes, loss of authorization, or connection changes. Hiding a displayed
-  connection does not revoke it; rotate the connection through local controls
-  when revocation is needed.
-- Clear old diagnostics when gateway identity, target or connection state changes.
-  Show the check time and require another check for the current state.
+## Verification boundaries
 
-## Requirements and tested hosts
+Isolated regressions cover startup recovery, local control and stale-result
+guards, disabled tunnel policies, connection-state presentation, live language
+events, missing localization modules and failed verified-update transactions.
+Publication requires exact-commit Windows CI, package verification and the
+existing compiled-installer smoke checks. Passing those gates is not a substitute
+for physical-phone, cellular/public-tunnel or model-provider acceptance.
 
-The plugin requires genuine **Node.js 24+**. Temporary internet tunnels also
-require **cloudflared**. The Windows installer supplies both; the source plugin
-tarball does not bundle their binaries or run install hooks. DSH and model
-credentials remain separate requirements.
-
-Actual plugin operations covered **native Windows DSH 0.1.7-rc.2**,
-**npm DSH Web 0.1.7-rc.2**, and **npm DSH Web 0.2.0-rc.2** in isolated profiles.
-Real encrypted HTTPS sessions returned model replies. The newer npm host also
-completed an actual workspace-file download and an upload read by the model.
-Native plugin removal and reinstallation retained configuration and both keys.
-Read the [plugin acceptance record](docs/DSH-PLUGIN-ACCEPTANCE.md) for the exact
-operations, lifecycle results and limitations.
-
-These tests used a desktop browser with a 390 x 844 phone viewport. They do not
-certify physical iPhone/Android, cellular networks, every plugin, arbitrary old
-versions or future releases. Historical standalone gateway tests are recorded
-separately in the [compatibility matrix](docs/DSH-COMPATIBILITY.md).
+The local browser checks use official npm DSH Web 0.2.0-rc.2 in an isolated
+Linux/Chromium environment, without model credentials, model calls or public
+exposure. Controlled failure fixtures are identified separately from actual DSH
+operation. Earlier Windows/native-host and model-operation evidence belongs to
+its recorded revision in the [plugin acceptance record](docs/DSH-PLUGIN-ACCEPTANCE.md)
+and [compatibility matrix](docs/DSH-COMPATIBILITY.md); it is not a new universal
+compatibility claim for this preview.
 
 ## Privacy and distribution
 
-Plugin control routes require DSH authentication and direct loopback admission.
-Origin-less native requests additionally use an in-memory host control token.
-Conflicting Origins and relay headers remain rejected. No central telemetry,
-external QR service, remote fonts or private notification helper is added.
+Local control authentication, loopback restrictions and encrypted phone-content
+routes are unchanged. Tunnel providers still see metadata and serve the initial
+page; an actively replaced page remains a separate trust boundary. No telemetry,
+external translation/QR service, remote font or additional runtime dependency is
+introduced. See [SECURITY.md](SECURITY.md).
 
-Protected message and file routes use application-layer encryption. Tunnel
-providers still see metadata and serve the initial page; an actively replaced
-page is a separate trust boundary. This is not a claim that every byte is
-end-to-end encrypted. See [SECURITY.md](SECURITY.md).
-
-This release includes the Windows installer, source archive, verified plugin
-tarball, package verification record and SHA256SUMS. Public packages exclude
-personal reminders, connection links, credentials, configuration, logs and
-uploads. New installers remain **DSH-only**; earlier combined Codex/Dot releases
-remain available. Independent CI for the exact published commit remains required
-before packaging and again before release publication.
+The Windows installer, source archive and verified plugin tarball use the same
+preview version. Packages exclude private configuration, authentication material,
+logs, uploads, private QA harnesses and recovery files. Earlier releases remain
+available. This remains an unofficial, DSH-only preview.

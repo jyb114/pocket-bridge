@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-preview.14 - Safer startup and clearer local controls
+
+- Explain missing or outdated genuine Node.js 24+ without assuming a Windows shortcut. Keep diagnostics read-only and distinguish unknown readiness from an observed startup failure.
+- Honor `tunnelProvider: none` before public-tunnel discovery, probing or startup. Reject unsupported providers instead of silently creating a public tunnel; preserve the documented Cloudflare alias and fence asynchronous policy changes.
+- Suppress stale public links and disabled LAN HTTP entries. Preserve configured private HTTPS separately. Explain that disabled startup does not terminate an existing tunnel, revoke access, or disable LAN listeners.
+- Correct console language switching and navigation initialization; improve connection-card wrapping without redesigning the host interface.
+- Localize the plugin panel, recovery guidance and known diagnostics in Chinese, English and Spanish. Keep panel language overrides local to the mounted panel and wrap controls within the host's available width.
+- Localize Lite startup and emergency update guidance even when language scripts are unavailable, preserving update verification, retry, capability and stale-result guards.
+- Extend isolated event/state-matrix tests and retain explicit boundaries between local browser checks, Windows CI, compiled installer checks and physical-phone/network acceptance.
+
 ## 1.0.0-preview.13 - Optional DSH connection plugin
 
 - Add a host-integrated Settings panel for explicit gateway start and pause, private QR pairing, local status, and redacted diagnostics. Reuse the lightweight phone interface and an explicitly identified existing installation.

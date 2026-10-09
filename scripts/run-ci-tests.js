@@ -16,6 +16,7 @@ const NODE = process.execPath;
 const SUITE = [
   ['test-dsh-plugin-host.js', [], 'Plugin HTTP entry is direct-loopback only, authenticates through its DSH host and aborts on disposal (owned HTTP fixtures; no live DSH)'],
   ['test-dsh-plugin-controller.js', [], 'Plugin controls only its selected gateway identity and DSH target; startup and stop admission fail closed (owned servers and synthetic children)'],
+  ['test-dsh-plugin-language.js', [], 'Panel-local ZH/EN/ES language events preserve control state, secrets and pending actions (isolated React fixture)'],
   ['test-dsh-plugin-client.js', [], 'Plugin panel keeps pairing secrets behind an explicit local action, clears stale links and confirms gateway-only pause (isolated UI fixtures)'],
   ['test-dsh-plugin-installation.js', [], 'Managed gateway source hashes, atomic ownership and private state survive isolated installation and upgrade (owned directories)'],
   ['test-dsh-plugin-node.js', [], 'Bounded genuine Node resolution excludes Electron, links, module injection and unsupported binaries (isolated probes)'],
@@ -113,7 +114,9 @@ const SUITE = [
   ['test-dsh-lite-legacy.js', [], '旧版 DSH 项目、会话、历史分页与文本操作（隔离协议）'],
   ['test-dsh-lite-router.js', [], '手机版按已验证协议选新版/旧版适配，授权失败时不误连'],
   ['test-dsh-lite-code-pin.js', [], '轻量 DSH 脚本指纹、直接打开的初次钉住与旧指纹的手动更新（假 Service Worker）'],
+  ['test-dsh-lite-update-i18n.js', [], 'Emergency update notices and failure/retry events remain localized without language bundles, preserving capability and request guards'],
   ['test-dsh-lite-update.js', [], '手机切回前台只提示新版本，点击后才更新指纹且失败可重试'],
+  ['test-dsh-lite-startup-i18n.js', [], 'Pre-mount missing-adapter/version fallback stays localized without dictionary or encryption readiness (isolated browser events)'],
   ['test-dsh-lite-ui.js', [], '轻量 DSH 手机界面和多题交互（隔离浏览器）'],
   ['test-dsh-lite-actions.js', [], 'Actual isolated Chromium project creation, busy admission, encrypted adapter file/image actions and preserved drafts'],
   ['test-dsh-lite-switch.js', [], '官方 DSH 页面上的轻量模式按钮保留完整认证和加密地址'],

@@ -14,10 +14,10 @@ offering a connection or changing the gateway state.
 ## Installation
 
 Install a tested release tarball through your DSH plugin manager. No separate
-npm publication is required. Preview.13's versioned release URL is:
+npm publication is required. Preview.14's versioned release URL is:
 
 ```text
-dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.13/pocket-bridge-1.0.0-preview.13.tgz
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.14/pocket-bridge-1.0.0-preview.14.tgz
 ```
 
 That command targets an npm DSH Web profile. A desktop application's plugin
@@ -61,6 +61,21 @@ The real npm-host tests exercised this state and the panel reported it rather
 than displaying a usable HTTPS connection. Configure a supported secure
 entrance through the bridge's controls; do not treat a running listener as a
 working remote connection.
+
+## Panel language and narrow settings views
+
+The plugin follows a supported language on the host page, then the browser's
+language preference (Chinese, English, or Spanish). Its **Panel language** selector
+provides a panel-only override when the host does not expose its current language.
+The choice lasts for this mounted panel; it does not change DSH settings, browser
+storage, or cookies. Recovery guidance and known diagnostic text use the same
+language, while technical codes, versions and private links remain unchanged.
+
+Controls wrap within the width provided by the DSH settings host. Primary actions
+appear before the detail fields; full prerequisite and access-lifecycle guidance
+remains available under **Setup and access notes**. The plugin does not alter or
+hide DSH's own navigation. Very narrow host layouts may still require vertical
+scrolling.
 
 ## Local-only and private-HTTPS testing
 

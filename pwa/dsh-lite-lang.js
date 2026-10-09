@@ -48,7 +48,13 @@
     '电脑上的 DSH 版本已变化，请刷新页面后重新连接。': { en: 'The DSH version on the computer changed. Refresh this page to reconnect.', es: 'La versión de DSH del ordenador ha cambiado. Actualiza esta página para reconectar.' },
     '已重新检测当前连接。': { en: 'Current connection checked.', es: 'Conexión actual comprobada.' },
     '检测失败，保留上次结果；请检查电脑连接后重试。': { en: 'The check failed; the previous result is retained. Check the computer connection and try again.', es: 'La comprobación falló; se conserva el resultado anterior. Comprueba la conexión con el ordenador e inténtalo de nuevo.' },
-    // Router failures can appear before the main UI has mounted.
+    // Startup/router failures can appear before the main UI has mounted.
+    // dsh-lite-ui.js also keeps these startup strings when this bundle fails.
+    '正在识别 DSH 版本': { en: 'Identifying the DSH version', es: 'Identificando la versión de DSH' },
+    '连接组件不可用': { en: 'Connection component unavailable', es: 'Componente de conexión no disponible' },
+    'DSH 手机版的连接组件未加载。请重新打开页面，或检查桥是否已更新。': {
+      en: 'The DSH mobile connection component did not load. Reopen this page, or check whether the bridge has been updated.',
+      es: 'No se cargó el componente de conexión de DSH para móviles. Vuelve a abrir esta página o comprueba si el puente se ha actualizado.' },
     '连接不可用': { en: 'Connection unavailable', es: 'Conexión no disponible' },
     '旧版 DSH 连接组件': { en: 'Legacy DSH connector', es: 'Conector de DSH anterior' },
     '新版 DSH 连接组件': { en: 'Current DSH connector', es: 'Conector de DSH actual' },

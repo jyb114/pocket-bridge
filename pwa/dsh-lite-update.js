@@ -21,6 +21,85 @@
   // 和原来那条规矩一致（脚本不能自己改指纹，只有人能）。
   if (!('serviceWorker' in navigator)) return;
 
+  // This emergency script must explain failures even when pinned i18n scripts
+  // cannot load. Localization only reads existing preferences; it never changes
+  // authentication, stored pins, update admission or the verification protocol.
+  var messages = {
+    '新版更新器尚未启用。请刷新页面后重试，旧版仍可用。': {
+      en: 'The new updater is not active yet. Refresh this page and retry; the old version is still available.',
+      es: 'El nuevo actualizador aún no está activo. Actualiza esta página y vuelve a intentarlo; la versión anterior sigue disponible.' },
+    '新版更新器未能启用。请刷新页面后重试，旧版仍可用。': {
+      en: 'The new updater could not activate. Refresh this page and retry; the old version is still available.',
+      es: 'No se pudo activar el nuevo actualizador. Actualiza esta página y vuelve a intentarlo; la versión anterior sigue disponible.' },
+    'Service Worker 尚未就绪': { en: 'The Service Worker is not ready yet.', es: 'El Service Worker aún no está listo.' },
+    '手机还在使用旧版更新器。请刷新页面后重试，旧版仍可用。': {
+      en: 'Your phone is still using the old updater. Refresh this page and retry; the old version is still available.',
+      es: 'El teléfono sigue usando el actualizador anterior. Actualiza esta página y vuelve a intentarlo; la versión anterior sigue disponible.' },
+    '读不到代码指纹清单': { en: 'Could not read the code fingerprint manifest.', es: 'No se pudo leer el manifiesto de huellas del código.' },
+    '代码指纹清单无效': { en: 'The code fingerprint manifest is invalid.', es: 'El manifiesto de huellas del código no es válido.' },
+    '手机上的界面不是最新的。{detail}': {
+      en: 'The interface on your phone is out of date. {detail}', es: 'La interfaz del teléfono no está actualizada. {detail}' },
+    '更新到最新版': { en: 'Update to the latest version', es: 'Actualizar a la última versión' },
+    '正在更新…': { en: 'Updating…', es: 'Actualizando…' },
+    '重试更新': { en: 'Retry update', es: 'Reintentar actualización' },
+    '新版本文件未能完整下载并验证，手机仍在使用旧版。请重试更新。': {
+      en: 'The new files could not be fully downloaded and verified. Your phone is still using the old version. Retry the update.',
+      es: 'No se pudieron descargar y verificar todos los archivos nuevos. El teléfono sigue usando la versión anterior. Vuelve a intentar la actualización.' },
+    // The verified worker can provide this existing rejection reason.
+    '新版本文件未能完整下载并验证；旧版本仍可用。': {
+      en: 'The new files could not be fully downloaded and verified; the old version is still available.',
+      es: 'No se pudieron descargar y verificar todos los archivos nuevos; la versión anterior sigue disponible.' },
+    '正在核验…': { en: 'Verifying…', es: 'Verificando…' },
+    '正在下载并核验新版文件，隧道上可能较慢，请保持页面打开。': {
+      en: 'Downloading and verifying the new files. This may take longer over the tunnel; keep this page open.',
+      es: 'Descargando y verificando los archivos nuevos. Puede tardar más a través del túnel; mantén esta página abierta.' },
+    '（{path}）': { en: '({path})', es: '({path})' },
+    ' 手机上：{seen} → 电脑上：{want}': { en: 'Phone: {seen} → Computer: {want}', es: 'Teléfono: {seen} → Ordenador: {want}' },
+    '未知': { en: 'Unknown', es: 'Desconocido' },
+    '这个地址缺少加密密钥（结尾的 #k=… 那段），所以内容通道用不了 —— 发送键会变灰、对话也加载不出来。请从电脑控制台复制带 #k= 的完整地址并重新打开。': {
+      en: 'This link is missing the encryption key (the #k=… ending), so the content connection cannot work. Sending is disabled and conversations cannot load. Copy the full link, including #k=, from the computer console and reopen it.',
+      es: 'A este enlace le falta la clave de cifrado (la parte final #k=…), por lo que la conexión de contenido no funciona. No se pueden enviar mensajes ni cargar conversaciones. Copia el enlace completo, incluido #k=, de la consola del ordenador y vuelve a abrirlo.' }
+  };
+  function language() {
+    function supported(code) { return code === 'zh' || code === 'en' || code === 'es'; }
+    try {
+      var current = window.DshI18n && typeof window.DshI18n.lang === 'function' && window.DshI18n.lang();
+      if (supported(current)) return current;
+    } catch (_) { /* The main localization module may not be ready. */ }
+    try {
+      var stored = localStorage.getItem('dsh-lang');
+      if (supported(stored)) return stored;
+    } catch (_) { /* A blocked store must not hide recovery guidance. */ }
+    try {
+      var languages = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+      for (var i = 0; i < languages.length; i++) {
+        var code = String(languages[i] || '').toLowerCase().split('-')[0];
+        if (supported(code)) return code;
+      }
+    } catch (_) { /* Match the shared i18n module's default. */ }
+    return 'en';
+  }
+  function t(message, vars) {
+    var translated = message;
+    try {
+      // Substitute after lookup: an empty main dictionary can still interpolate
+      // its Chinese key, which must not be mistaken for a real translation.
+      if (window.DshI18n && typeof window.DshI18n.t === 'function') translated = window.DshI18n.t(message);
+    } catch (_) { /* These strings must not depend on a loaded dictionary. */ }
+    if (typeof translated !== 'string' || !translated || translated === message) {
+      var entry = Object.prototype.hasOwnProperty.call(messages, message) && messages[message];
+      translated = entry && entry[language()] || message;
+    }
+    return String(translated).replace(/\{(\w+)\}/g, function (match, name) {
+      return vars && Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match;
+    });
+  }
+  function writeText(node, message, vars) {
+    var code = language();
+    node.setAttribute('lang', code === 'zh' ? 'zh-CN' : code);
+    node.textContent = t(message, vars);
+  }
+
   var bar = null;
   var busy = false;
   var checking = false;
@@ -131,7 +210,7 @@
     }
     if (document.getElementById('dsh-lite-pin-notice')) return;
     if (bar) {
-      bar.querySelector('span').textContent = '手机上的界面不是最新的。' + detail;
+      writeText(bar.querySelector('span'), '手机上的界面不是最新的。{detail}', { detail: detail });
       return;
     }
 
@@ -146,11 +225,11 @@
     text.style.cssText = 'flex:1 1 220px;min-width:0';
     // 使用者说过「红条里的内容与实际更新不符」——那条文字是通用提示。
     // 现在把**能核对的东西**摆出来：手机上跑的是哪一版、电脑上是哪一版。
-    text.textContent = '手机上的界面不是最新的。' + detail;
+    writeText(text, '手机上的界面不是最新的。{detail}', { detail: detail });
 
     var go = document.createElement('button');
     go.type = 'button';
-    go.textContent = '更新到最新版';
+    writeText(go, '更新到最新版');
     go.style.cssText = 'min-height:38px;padding:7px 14px;border:0;border-radius:9px;' +
       'background:#fff;color:#4a1614;font:inherit;font-weight:650;cursor:pointer';
 
@@ -160,16 +239,16 @@
       if (busy) return;
       busy = true;
       go.disabled = true;
-      go.textContent = '正在更新…';
+      writeText(go, '正在更新…');
       function failed(error) {
         if (resultTimer !== null) { clearTimeout(resultTimer); resultTimer = null; }
         busy = false;
         pendingBuild = '';
         pendingRequestId = '';
         go.disabled = false;
-        go.textContent = '重试更新';
-        text.textContent = error && error.message ||
-          '新版本文件未能完整下载并验证，手机仍在使用旧版。请重试更新。';
+        writeText(go, '重试更新');
+        writeText(text, error && error.message ||
+          '新版本文件未能完整下载并验证，手机仍在使用旧版。请重试更新。');
       }
       readManifest().then(function (manifest) {
         pendingBuild = buildId(manifest.files || {});
@@ -185,8 +264,8 @@
           resultTimer = setTimeout(function () {
             resultTimer = null;
             if (!busy || !pendingRequestId) return;
-            go.textContent = '正在核验…';
-            text.textContent = '正在下载并核验新版文件，隧道上可能较慢，请保持页面打开。';
+            writeText(go, '正在核验…');
+            writeText(text, '正在下载并核验新版文件，隧道上可能较慢，请保持页面打开。');
           }, 15000);
         });
       }).catch(failed);
@@ -213,14 +292,14 @@
     if (data.type === 'dsh-code-mismatch') {
       // 顺手把"手机上 / 电脑上"两边的版本标记取出来一起显示 —— 只报一个文件名，
       // 使用者没法核对到底是不是自己刚改的那次（这正是他抱怨"内容与更新不符"的点）。
-      var detail = '（' + String(data.path || '').slice(0, 60) + '）';
+      var detail = t('（{path}）', { path: String(data.path || '').slice(0, 60) });
       show(detail);
       readManifest().then(function (manifest) {
         var want = buildId(manifest.files || {});
         var seen = '';
         try { seen = localStorage.getItem(BUILD_KEY) || ''; } catch (err) { seen = ''; }
         if (want && want !== seen) {
-          show(' 手机上：' + (seen || '未知') + ' → 电脑上：' + want);
+          show(t(' 手机上：{seen} → 电脑上：{want}', { seen: seen || t('未知'), want: want }));
           return;
         }
         show(detail);
@@ -244,10 +323,10 @@
       pendingRequestId = '';
       if (bar) {
         var b = bar.querySelector('button');
-        if (b) { b.disabled = false; b.textContent = '重试更新'; }
+        if (b) { b.disabled = false; writeText(b, '重试更新'); }
         var message = bar.querySelector('span');
-        if (message) message.textContent = data.reason ||
-          '新版本文件未能完整下载并验证，手机仍在使用旧版。请重试更新。';
+        if (message) writeText(message, data.reason ||
+          '新版本文件未能完整下载并验证，手机仍在使用旧版。请重试更新。');
       }
     }
   });
@@ -274,8 +353,8 @@
     box.setAttribute('role', 'alert');
     box.style.cssText = 'position:fixed;inset:0 0 auto;z-index:2147483647;padding:12px 14px;' +
       'background:#7a3b12;color:#fff;font:14px/1.55 system-ui,-apple-system,sans-serif';
-    box.textContent = '这个地址缺少加密密钥（结尾的 #k=… 那段），所以内容通道用不了 —— ' +
-      '发送键会变灰、对话也加载不出来。请从电脑控制台复制带 #k= 的完整地址并重新打开。';
+    writeText(box, '这个地址缺少加密密钥（结尾的 #k=… 那段），所以内容通道用不了 —— ' +
+      '发送键会变灰、对话也加载不出来。请从电脑控制台复制带 #k= 的完整地址并重新打开。');
     document.body.appendChild(box);
   }
   warnMissingKey();
@@ -326,7 +405,7 @@
       var seen = '';
       try { seen = localStorage.getItem(BUILD_KEY) || ''; } catch (err) { seen = ''; }
       if (!seen) { try { localStorage.setItem(BUILD_KEY, id); } catch (err) {} return; }
-      if (seen !== id) show(' 手机上：' + seen + ' → 电脑上：' + id);
+      if (seen !== id) show(t(' 手机上：{seen} → 电脑上：{want}', { seen: seen, want: id }));
     }).catch(function () { /* 拿不到清单 —— readManifestWithRetry 已经排了下一次 */ })
       .finally(function () { checking = false; });
   }
