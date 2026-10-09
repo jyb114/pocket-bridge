@@ -106,12 +106,12 @@ for (const f of PAGES) {
 // ── ③ 钉过指纹的文件一个都不许裁 ────────────────────────────────────────────
 console.log('\n[3] 钉过指纹的共享与 DSH Lite JS：不许按语言改写');
 {
-  // Only the shared console and selector HTML are language-trimmed. DSH Lite
+  // Only selector HTML is language-trimmed; the local console switches live. DSH Lite
   // scripts are fingerprinted exact assets, never rewritten per language.
   const calls = [...SRC.matchAll(/trimHtmlToLanguage\(req, res, path\.join\(PWA_DIR, '([^']+)'\)\)/g)]
     .map((m) => m[1]);
-  ok('裁剪只用在 console.html / go.html 上',
-    calls.length === 2 && new Set(calls).size === 2 && calls.every((c) => ['console.html', 'go.html'].indexOf(c) >= 0),
+  ok('裁剪只用在 go.html 上；本机控制台保留即时切换语言所需的词典',
+    calls.length === 1 && calls[0] === 'go.html',
     calls.join(','));
   for (const name of PINNED) {
     ok(`没有对 ${name} 做按语言裁剪`, calls.indexOf(name) < 0);

@@ -3182,7 +3182,9 @@ function handleConsole(req, res, u) {
       return true;
     }
     let html;
-    try { html = trimHtmlToLanguage(req, res, path.join(PWA_DIR, 'console.html')); }
+    // This loopback-only console switches languages live; keep its complete
+    // dictionary. Phone/selector assets retain their existing trimming policy.
+    try { html = fs.readFileSync(path.join(PWA_DIR, 'console.html'), 'utf8'); }
     catch (err) {
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('console.html 缺失');
