@@ -62,6 +62,22 @@ than displaying a usable HTTPS connection. Configure a supported secure
 entrance through the bridge's controls; do not treat a running listener as a
 working remote connection.
 
+## Local-only and private-HTTPS testing
+
+Set `tunnelProvider` to `none` to disable the daemon's public-tunnel discovery,
+reachability probes, startup and automatic rebuilding. This is not a command to
+terminate a tunnel that is already running or revoke existing external access.
+Stop bridge pauses the gateway only: an old tunnel may reconnect when it starts
+again. Verify and stop any existing tunnel separately before relying on
+local-only operation. Unknown provider
+values fail closed rather than choosing a public tunnel. `cloudflare` remains an
+alias for the configured dynamic or fixed Cloudflare mode.
+
+This setting does not disable LAN listeners. For an isolated loopback-only test,
+also set `enableLanAccess` to `false` and `lanHttps.enabled` to `false` before
+starting the test gateway. Private HTTPS configuration and device authorization
+remain separate; a local listener alone does not establish a working phone link.
+
 ## Existing Windows installation
 
 If Pocket Bridge is already installed, set the plugin's `bridgeDirectory` to

@@ -557,9 +557,19 @@ function writeStatus(status) {
 async function runDaemon() {
   const wantStatusOnly = process.argv.includes('--status');
   let admission = null, identity = null, stopped = false;
-  const checkpoint = () => { if (admission) admission.checkpoint(); };
+  let publicTunnelPreference;
+  let publicTunnelActive = false;
+  const checkpoint = () => {
+    if (admission) admission.checkpoint();
+    if (publicTunnelActive && cfg.loadConfig().tunnelProvider !== publicTunnelPreference) {
+      throw Object.assign(Error('Tunnel policy changed; public tunnel work cancelled. Refresh status before retrying.'), { code: 'daemon-tunnel-policy-changed' });
+    }
+  };
   const tunnelAdmission = { beforeMutation: checkpoint, observeSpawn: (child, kind) => admission.observeSpawn(child, kind) };
   try {
+    const tunnelPreference = cfg.loadConfig().tunnelProvider;
+    const initialTunnelPolicy = tunnel.providerPolicy(tunnelPreference);
+    if (initialTunnelPolicy.code) throw Object.assign(Error(initialTunnelPolicy.reason), { code: initialTunnelPolicy.code });
     if (!wantStatusOnly) {
       admission = createDaemonOperationLease({ logDir: LOG_DIR, owner: { pid: process.pid,
         base: path.resolve(cfg.BASE), executable: process.execPath, script: path.resolve(__filename) } });
@@ -592,6 +602,14 @@ async function runDaemon() {
 
     const port = gateway ? gateway.port : (readGatewayPort() || PROXY_PORT_RANGE[0]);
 
+    // Re-read after awaited gateway startup. A changed policy must never reuse
+    // an earlier public-tunnel authorization. Subsequent awaits are fenced too.
+    publicTunnelPreference = cfg.loadConfig().tunnelProvider;
+    const tunnelPolicy = tunnel.providerPolicy(publicTunnelPreference);
+    if (tunnelPolicy.code) throw Object.assign(Error(tunnelPolicy.reason), { code: tunnelPolicy.code });
+    publicTunnelActive = tunnelPolicy.enabled;
+    checkpoint();
+
     // 2. 隧道
     let tunnelUrl = null;
     let tunnelProvider = null;
@@ -599,9 +617,9 @@ async function runDaemon() {
     // 隧道是不是还指向正确的端口？中间层端口变过而隧道没跟上，会表现为
     // 「隧道在运行、但访问一律 502」—— 从表面完全看不出来，必须主动比对。
     const tunnelTargetFile = path.join(LOG_DIR, 'tunnel-target.txt');
-    const tunnelTargetPort = readTunnelTargetPort();
+    const tunnelTargetPort = tunnelPolicy.enabled ? readTunnelTargetPort() : null;
 
-    const tunnelUp = tunnelRunning();
+    const tunnelUp = tunnelPolicy.enabled && tunnelRunning();
     // 推断出的目标端口与中间层实际端口不一致，就说明隧道已经过期
     const tunnelStale = tunnelUp && tunnelTargetPort !== null && tunnelTargetPort !== port;
 
@@ -676,7 +694,9 @@ async function runDaemon() {
     }
 
     checkpoint();
-    if (wantStatusOnly) {
+    if (!tunnelPolicy.enabled) {
+      log('· Public tunnel startup and probing disabled (tunnelProvider: none). Existing external processes are not stopped by this setting.');
+    } else if (wantStatusOnly) {
       log('· 只读状态检查，不启动或重建隧道');
     } else if (tunnelUp && !tunnelStale && !tunnelDead) {
       // 在跑、而且真连得上 —— 什么都不用做（上面已经记完状态、通知完）
@@ -686,9 +706,7 @@ async function runDaemon() {
       tunnel.stopTunnels();
       await sleep(2000);
       checkpoint();
-      const config = cfg.loadConfig();
-      checkpoint();
-      const res = await tunnel.startTunnel(port, config.tunnelProvider || 'auto', tunnelAdmission);
+      const res = await tunnel.startTunnel(port, publicTunnelPreference, tunnelAdmission);
       checkpoint();
       tunnelUrl = res.url;
       tunnelProvider = res.provider;
@@ -733,9 +751,7 @@ async function runDaemon() {
       if (killed) log(`· 建新隧道前先停掉 ${killed} 个残留的隧道进程`);
       await sleep(2000);
       checkpoint();
-      const config = cfg.loadConfig();
-      checkpoint();
-      const res = await tunnel.startTunnel(port, config.tunnelProvider || 'auto', tunnelAdmission);
+      const res = await tunnel.startTunnel(port, publicTunnelPreference, tunnelAdmission);
       checkpoint();
       tunnelUrl = res.url;
       tunnelProvider = res.provider;
@@ -779,12 +795,13 @@ async function runDaemon() {
         // 「进程在不在」和「公网通不通」是**两件事**，分开报。
         // 混成一个布尔值正是这次要修的毛病：进程活着、地址是死的，
         // 界面上却显示「隧道正常」。
-        running: tunnelRunning() || !!tunnelUrl,
+        disabled: !tunnelPolicy.enabled,
+        running: tunnelPolicy.enabled ? tunnelRunning() || !!tunnelUrl : null,
         reachable: tunnelProbe ? tunnelProbe.ok : null,     // null = 这轮没探测
         probeMs: tunnelProbe ? tunnelProbe.ms : null,
         probeError: tunnelProbe && !tunnelProbe.ok
           ? (tunnelProbe.error || `HTTP ${tunnelProbe.status}`) : null,
-        probeFails: readProbeState().fails
+        probeFails: tunnelPolicy.enabled ? readProbeState().fails : 0
       },
       entries: {
         lan: lan.map((ip) => (key ? `http://${ip}:${port}/k/${key}${kfrag}` : `http://${ip}:${port}/`)),

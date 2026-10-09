@@ -404,6 +404,27 @@ async function main() {
     assert.equal(tunnel.state, 'unknown'); assert.match(tunnel.detail, /does not require cloudflared/);
     assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
   });
+  await use('none policy never offers a cached public tunnel as a ready or revealable entrance', async fx => {
+    fx.config.tunnelProvider = 'none'; fx.write('config.json', fx.config);
+    const status = await fx.controller.status();
+    assert.equal(status.state, 'running'); assert.equal(status.connection.available, false);
+    assert.equal(status.connection.mode, null); assert.equal(status.connection.host, null);
+    assert.equal(status.tunnel.running, null); assert.equal(status.tunnel.reachable, null);
+    const diagnostic = (await fx.controller.diagnostics()).checks.find(check => check.id === 'tunnel');
+    assert.equal(diagnostic.state, 'unknown'); assert.match(diagnostic.detail, /have not been checked or stopped/);
+    assert.equal((await fx.controller.connection()).code, 'secure-connection-unavailable');
+    assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
+  });
+  await use('none selected during final reveal health verification suppresses the pending public link', async fx => {
+    let healthReads = 0;
+    fx.state.onHealth = () => {
+      healthReads++;
+      if (healthReads === 2) { fx.config.tunnelProvider = 'none'; fx.write('config.json', fx.config); }
+      return false;
+    };
+    assert.equal((await fx.controller.connection()).code, 'secure-connection-unavailable');
+    assert.equal(healthReads, 2); assert.equal(fx.writes.length, 0);
+  });
   await use('Diagnostics remains a finite redacted checklist without exposing configuration or message content', async fx => {
     const result = await fx.controller.diagnostics();
     assert.equal(result.ok, true); assert(result.checks.length > 0);

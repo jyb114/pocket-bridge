@@ -119,6 +119,7 @@ const SUITE = [
   ['test-dsh-lite-switch.js', [], '官方 DSH 页面上的轻量模式按钮保留完整认证和加密地址'],
   ['test-review-boundaries.js', [], '历史状态与加密失败边界（隔离，不碰真会话）'],
   ['test-narrow-kill.js', ['--static-only'], '窄杀进程：源码检查；本机 cloudflared 查询显式跳过'],
+  ['test-tunnel-policy.js', [], 'Explicit none and unsupported providers fail closed before discovery, child processes or network; default and Cloudflare modes preserved (isolated spies)'],
   ['test-tunnel-security.js', [], '公网来源边界：禁用 ngrok，非本机 Host 必须经过管理端点与加密闸门（隔离）'],
   ['test-tunnel-probe.js', ['--isolated-only'], 'Owned HTTP/TCP probes require the exact gateway 204, reject foreign services and enforce absolute deadlines (no production tunnel)'],
   ['similarity-audit.js', [], '重复代码审计（只看文件）'],

@@ -3011,6 +3011,8 @@ async function buildConsoleStatus(lang) {
   })();
   const kfrag = e2eeSecret ? `#k=${e2eeSecret}` : '';
 
+  const conf = cfg.loadConfig();
+  const tunnelDisabled = conf.tunnelProvider === 'none' || status.tunnel?.disabled === true;
   const entries = { lan: [], wan: null, pairPage: null, pairCode: currentPairCode(), lanHttps: [], encrypted: !!e2eeSecret };
   for (const x of netInfo.lanV4) {
     entries.lan.push(`http://${x.address}:${PORT}/k/${ACCESS_KEY}${kfrag}`);
@@ -3022,16 +3024,15 @@ async function buildConsoleStatus(lang) {
     // 配对页**不带**密钥：它是给二维码用的，而且配对流程本来就会重新认证。
     entries.pairPage = `http://${netInfo.lanV4[0].address}:${PORT}/pair`;
   }
-  if (status.tunnel && status.tunnel.url) {
+  if (!tunnelDisabled && status.tunnel && status.tunnel.url) {
     entries.wan = `${status.tunnel.url}/k/${ACCESS_KEY}${kfrag}`;
   }
 
-  const conf = cfg.loadConfig();
   const domainMode = conf.tunnelDomainMode || 'dynamic';
   // “已经选好下次用哪种”与“这一条正在跑的隧道是什么”不是同一件事。
   // 切换策略刻意不立即重启（不能惊吓式换掉手机书签），所以控制台必须
   // 同时给出这两个状态，不能把配置值冒充成当前公网入口。
-  const tunnelProvider = (status.tunnel && status.tunnel.provider) || null;
+  const tunnelProvider = !tunnelDisabled && status.tunnel?.provider || null;
   const activeDomainMode = tunnelProvider === 'cloudflare-named' ? 'fixed'
     : tunnelProvider ? 'dynamic' : null;
 
@@ -3066,16 +3067,17 @@ async function buildConsoleStatus(lang) {
       };
     })(),
     tunnel: {
-      url: (status.tunnel && status.tunnel.url) || null,
-      provider: (status.tunnel && status.tunnel.provider) || null,
+      disabled: tunnelDisabled,
+      url: !tunnelDisabled && status.tunnel?.url || null,
+      provider: tunnelProvider,
       // 「进程在不在」和「公网通不通」必须分开报给界面。
       //
       // 原来这里只透 url 和 provider，把 running / reachable 丢掉了 ——
       // 于是界面只能写一句「已配置 · 可达性未验证」。而使用者真正会遇到的
       // 恰恰是那个中间态：cloudflared 进程活着、域名已被 Cloudflare 回收，
       // 电脑上看着一切正常，手机怎么都连不上。分开报才说得清。
-      running: status.tunnel ? !!status.tunnel.running : null,
-      reachable: status.tunnel && typeof status.tunnel.reachable === 'boolean'
+      running: !tunnelDisabled && typeof status.tunnel?.running === 'boolean' ? status.tunnel.running : null,
+      reachable: !tunnelDisabled && status.tunnel && typeof status.tunnel.reachable === 'boolean'
         ? status.tunnel.reachable : null,      // null = 守护进程这轮还没探
       probeMs: (status.tunnel && status.tunnel.probeMs) || null,
       probeError: (status.tunnel && status.tunnel.probeError) || null,

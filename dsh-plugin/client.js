@@ -65,7 +65,7 @@ window.__ModuleLoader__.load({
       return JSON.stringify([status.state, status.version || '', status.code || '', gateway.bootId || '', gateway.instanceId || '', gateway.port || 0, gateway.pid || 0,
         runtime.port || 0, runtime.kind || '', runtime.version || '', runtime.available === true,
         connection.mode || '', connection.host || '', connection.available === true, connection.encrypted === true,
-        tunnel.running === true, typeof tunnel.reachable === 'boolean' ? tunnel.reachable : null,
+        tunnel.running === true, tunnel.disabled === true, typeof tunnel.reachable === 'boolean' ? tunnel.reachable : null,
         status.operation && status.operation.phase || '', status.operation && status.operation.code || '']);
     }
     const RECOVERY = {

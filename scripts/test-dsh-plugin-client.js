@@ -251,6 +251,7 @@ async function main() {
     ['secure entrance availability', value => { value.connection.available = false; }],
     ['key readiness', value => { value.connection.encrypted = false; }],
     ['tunnel reachability', value => { value.tunnel.reachable = false; }],
+    ['tunnel startup policy', value => { value.tunnel.disabled = true; }],
     ['operation phase', value => { value.operation.phase = 'stopping'; }],
     ['operation error code', value => { value.operation.code = 'node-unavailable'; }]
   ];

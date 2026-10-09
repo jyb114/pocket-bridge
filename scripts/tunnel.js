@@ -272,39 +272,37 @@ function candidatesForMode(mode) {
   return PROVIDERS.filter((p) => p.id !== 'cloudflare-named');
 }
 
+// Validate the explicit policy before any discovery, process, log, or network
+// activity. `cloudflare` is the documented alias for mode-selected Cloudflare.
+function providerPolicy(preference = 'auto') {
+  if (preference === 'none') return { enabled: false, disabled: true };
+  if (preference === 'auto' || preference === 'cloudflare' || PROVIDERS.some(p => p.id === preference)) {
+    return { enabled: true, preference: preference === 'cloudflare' ? 'auto' : preference };
+  }
+  return { enabled: false, code: 'unsupported-tunnel-provider', reason: preference === 'ngrok'
+    ? 'ngrok 已禁用：当前版本不支持安全的公网来源识别'
+    : 'Unsupported tunnelProvider. Choose none, auto, cloudflare, cloudflare-quick, or cloudflare-named; no public tunnel was started.' };
+}
+
 /**
  * 启动隧道，失败自动降级。
  *
  * @param {number} port 本地中间层端口
- * @param {string} preference 'auto' 或某个提供方 id
+ * @param {string} preference 'none', 'auto', 'cloudflare', or a supported provider id
  * @returns {Promise<{provider: string|null, url: string|null, attempts: Array}>}
  */
 async function startTunnel(port, preference = 'auto', admission) {
   if (admission && (Object.keys(admission).some(key => !['beforeMutation', 'observeSpawn'].includes(key)) ||
       typeof admission.beforeMutation !== 'function' || typeof admission.observeSpawn !== 'function')) throw Error('invalid-daemon-admission');
+  const policy = providerPolicy(preference);
+  if (policy.disabled) return { provider: null, url: null, disabled: true, attempts: [] };
+  if (!policy.enabled) return { provider: null, url: null, code: policy.code,
+    attempts: [{ provider: typeof preference === 'string' ? preference : null, ok: false, reason: policy.reason }] };
   admission?.beforeMutation();
   const attempts = [];
   const mode = cfg.loadConfig().tunnelDomainMode || 'dynamic';
   log(`域名策略: ${mode === 'fixed' ? '固定地址（自有域名）' : '动态地址（每次更换）'}`);
-
-  // Previous releases offered ngrok as an automatic fallback. It does not
-  // supply Cloudflare's headers, and public requests were misclassified as
-  // loopback. Never launch it, even when explicitly selected in old config.
-  if (preference === 'ngrok') {
-    const reason = 'ngrok 已禁用：当前版本不支持安全的公网来源识别';
-    log(reason);
-    return { provider: null, url: null, attempts: [{ provider: 'ngrok', ok: false, reason }] };
-  }
-
-  let candidates = candidatesForMode(mode);
-  if (preference && preference !== 'auto') {
-    const wanted = PROVIDERS.filter((p) => p.id === preference);
-    if (wanted.length === 0) {
-      log(`未知的隧道提供方 "${preference}"，回退到自动选择`);
-    } else {
-      candidates = wanted;
-    }
-  }
+  const candidates = policy.preference === 'auto' ? candidatesForMode(mode) : PROVIDERS.filter(p => p.id === policy.preference);
 
   for (const p of candidates) {
     admission?.beforeMutation();
@@ -410,5 +408,5 @@ function stopTunnels() {
 
 module.exports = {
   listProviders, startTunnel, stopTunnels, extractPublicUrl, PROVIDERS, candidatesForMode, probeUrl,
-  ownTunnelPids
+  ownTunnelPids, providerPolicy
 };
