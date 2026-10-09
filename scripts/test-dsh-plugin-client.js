@@ -68,6 +68,17 @@ async function main() {
     assert.equal(client.encryptionLabel({ connection: { encrypted: false, available: true } }), 'Encryption key not confirmed');
     assert.equal(client.encryptionLabel(null), 'Encryption key not confirmed');
   });
+  for (const code of ['node-unavailable', 'node-24-required']) {
+    const failedStart = fixture(); failedStart.queue.push(response({ ...running(), state: 'stopped' }));
+    failedStart.controller.start(); await tick();
+    failedStart.queue.push(response({ ok: false, code }, 500), response({ ...running(), state: 'stopped', operation: { phase: 'failed', code } }));
+    await failedStart.controller.action('start');
+    check(code + ' explains runtime installation and retry without assuming a Windows shortcut', () => {
+      const state = failedStart.controller.getState(); assert.equal(state.code, code);
+      assert.match(state.error, /Node.js 24/); assert.match(state.error, /restart DSH/); assert.match(state.error, /Start bridge/);
+      assert(!state.error.includes('Windows shortcut'));
+    }); failedStart.controller.dispose();
+  }
   const f = fixture(); f.queue.push(response(running())); f.controller.start(); await tick();
   check('initial status load never requests the private phone URL', () => { assert.equal(f.requests.length, 1); assert.equal(f.requests[0].url, '/pocket-bridge/status'); assert.equal(f.controller.getState().connection, null); });
   const url = privateLink(); f.queue.push(response(pairing(url))); await f.controller.reveal();
@@ -240,7 +251,8 @@ async function main() {
     ['secure entrance availability', value => { value.connection.available = false; }],
     ['key readiness', value => { value.connection.encrypted = false; }],
     ['tunnel reachability', value => { value.tunnel.reachable = false; }],
-    ['operation phase', value => { value.operation.phase = 'stopping'; }]
+    ['operation phase', value => { value.operation.phase = 'stopping'; }],
+    ['operation error code', value => { value.operation.code = 'node-unavailable'; }]
   ];
   for (const [label, change] of contextChanges) {
     const changed = fixture(); changed.queue.push(response(JSON.parse(JSON.stringify(diagnosisBase)))); changed.controller.start(); await tick(); changed.queue.push(response(checklist())); await changed.controller.diagnostics();

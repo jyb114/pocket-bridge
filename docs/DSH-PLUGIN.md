@@ -40,12 +40,20 @@ a compatibility promise for every desktop wrapper or another DSH release.
 The settings entry also depends on the host exposing its Web settings UI.
 
 The gateway requires Node.js 24 or newer. A temporary internet tunnel also
-requires cloudflared. The Windows installer supplies the two runtimes; the
+requires cloudflared; private HTTPS does not. The Windows installer supplies the two runtimes; the
 plugin source tarball does not bundle their binaries. The plugin uses a genuine
 Node executable from the selected Windows installation's runtime, the current
 non-Electron Node process, or a validated PATH candidate. An Electron executable
 is not used to launch another desktop window as a daemon. Runtime discovery
 does not change global PATH or the user's process environment.
+
+If Start reports `node-unavailable` or `node-24-required`, install genuine
+Node.js 24 or newer, restart DSH when its tasks permit, and retry Start bridge.
+The panel does not assume that a plugin-only installation has a Windows shortcut.
+Diagnostics stays read-only: it does not probe Node or cloudflared executables,
+start child processes, or prepare the managed gateway directory. Its Node check
+is unknown unless the last start attempt reported a runtime failure, which is
+labeled as a previous result rather than a new dependency check.
 
 If cloudflared is unavailable and no private HTTPS entrance is configured,
 the local gateway can run while the secure phone connection remains unavailable.

@@ -150,7 +150,8 @@ function createBridgeController(options = {}, dependencies = {}) {
     const install = installation();
     const health = await locate(install);
     if (disposed) throw failure('plugin-unloaded');
-    if (operation.phase === 'starting' && health && health.dshPort === hostPort) operation = { phase: 'idle' };
+    if (health && health.dshPort === hostPort && (operation.phase === 'starting' ||
+      operation.phase === 'failed' && ['node-unavailable', 'node-24-required'].includes(operation.code))) operation = { phase: 'idle' };
     if (operation.phase === 'stopping' && !health) operation = { phase: 'idle' };
     if (operation.phase !== 'idle' && operation.startedAt && now() - operation.startedAt > 150000) operation = { phase: 'failed', code: 'operation-unconfirmed' };
     return { install, health };
@@ -245,7 +246,7 @@ function createBridgeController(options = {}, dependencies = {}) {
           operation = { phase: 'idle' }; return { ok: true, phase: 'running', message: 'The selected bridge is already running.' };
         }
         if (fs.existsSync(path.join(base, 'logs/daemon-operation.lock'))) throw failure('operation-pending');
-        const node = dependencies.nodeExecutable || await resolveBridgeNode({ bridgeDirectory: base });
+        const node = dependencies.nodeExecutable || await (dependencies.resolveBridgeNode || resolveBridgeNode)({ bridgeDirectory: base });
         if (disposed) throw failure('plugin-unloaded');
         if (managed) { managed.ensure(); install = installation(); }
         saveTarget(install); restoredMarker = resumeMarker();
@@ -289,13 +290,17 @@ function createBridgeController(options = {}, dependencies = {}) {
   }
   async function diagnostics() {
     const value = await statusFresh();
+    // Read-only diagnostics never spawn a runtime probe or prepare an installation.
+    // An operation error is historical evidence, not a fresh dependency check.
+    const nodeError = value.operation?.phase === 'failed' && ['node-unavailable', 'node-24-required'].includes(value.operation.code) ? value.operation.code : null;
     const checks = [
+      { id: 'node', label: 'Node.js 24+ startup runtime', state: nodeError ? 'fail' : 'unknown', detail: nodeError === 'node-24-required' ? 'The last start attempt found only an older Node.js runtime. Install Node.js 24 or newer, restart DSH, then retry Start bridge.' : nodeError ? 'The last start attempt could not find a usable genuine Node.js 24+ runtime. Install Node.js 24 or newer, restart DSH, then retry Start bridge.' : 'Not probed by read-only diagnostics. Start bridge checks for a usable genuine Node.js 24+ runtime; DSH’s embedded runtime alone does not confirm it.' },
       { id: 'installation', label: 'Selected bridge installation', state: value.version ? 'pass' : 'fail', detail: value.version ? `Pocket Bridge ${value.version}` : 'Choose a complete Pocket Bridge installation in this plugin configuration.' },
       { id: 'gateway', label: 'Bridge listener', state: value.state === 'running' ? 'pass' : 'fail', detail: value.state === 'running' ? 'The selected installation and current gateway identity match.' : value.code === 'dsh-target-mismatch' ? 'This bridge targets a different DSH instance. Select the matching installation or adjust its desktop controls.' : 'Start the bridge or open its desktop controls.' },
       { id: 'dsh', label: 'This DSH runtime', state: value.runtime?.available ? 'pass' : 'fail', detail: value.runtime?.available ? 'The bridge targets this running DSH host.' : 'The current DSH listener has not been confirmed by the bridge.' },
       { id: 'encryption', label: 'Phone content encryption', state: value.connection?.encrypted ? 'pass' : 'unknown', detail: value.connection?.encrypted ? 'The gateway reports an encryption key. Only a phone round trip verifies delivery.' : 'Encryption readiness has not been confirmed. No plaintext connection will be offered.' },
       { id: 'entrance', label: 'Secure phone entrance', state: value.connection?.available ? 'pass' : 'fail', detail: value.connection?.available ? 'A secure entrance is configured. Open it on a phone to verify connectivity.' : 'A complete HTTPS connection is not ready; use the desktop controls to configure it.' },
-      { id: 'tunnel', label: 'Public entrance reachability', state: value.tunnel?.reachable === true ? 'pass' : value.tunnel?.reachable === false ? 'fail' : 'unknown', detail: value.tunnel?.reachable === true ? 'The last gateway probe succeeded; it does not prove current phone connectivity.' : value.tunnel?.reachable === false ? 'The last gateway probe failed. Keep the address and retry before requesting a replacement.' : 'No successful current reachability check is available.' }
+      { id: 'tunnel', label: 'Public entrance reachability', state: value.connection?.mode === 'private-https' ? 'unknown' : value.tunnel?.reachable === true ? 'pass' : value.tunnel?.reachable === false ? 'fail' : 'unknown', detail: value.connection?.mode === 'private-https' ? 'Private HTTPS does not require cloudflared or a public tunnel. Test the private address on your phone.' : value.tunnel?.reachable === true ? 'The last gateway probe succeeded; it does not prove current phone connectivity.' : value.tunnel?.reachable === false ? 'The last gateway probe failed. Keep the address and retry before requesting a replacement.' : 'Public internet tunnels require cloudflared, which is not bundled in the plugin package. Read-only diagnostics do not probe its executable. No current public reachability result is available.' }
     ];
     return { ok: true, checks, checkedAt: new Date(now()).toISOString(), ...(value.version ? { version: value.version } : {}) };
   }

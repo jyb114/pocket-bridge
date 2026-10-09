@@ -66,13 +66,13 @@ window.__ModuleLoader__.load({
         runtime.port || 0, runtime.kind || '', runtime.version || '', runtime.available === true,
         connection.mode || '', connection.host || '', connection.available === true, connection.encrypted === true,
         tunnel.running === true, typeof tunnel.reachable === 'boolean' ? tunnel.reachable : null,
-        status.operation && status.operation.phase || '']);
+        status.operation && status.operation.phase || '', status.operation && status.operation.code || '']);
     }
     const RECOVERY = {
       'dsh-target-mismatch': 'This bridge is connected to a different DSH runtime. Open desktop controls and select this DSH instance, then refresh.',
       'unconfigured': 'Open desktop controls to finish the bridge setup, then refresh.',
       'not-configured': 'Open desktop controls to finish the bridge setup, then refresh.',
-      'gateway-unavailable': 'Start Pocket Bridge from its Windows shortcut, then refresh this panel.',
+      'gateway-unavailable': 'Use Start bridge below. If startup fails, check the prerequisites and run diagnostics.',
       'gateway-not-running': 'Start the bridge, then try again.',
       'not-running': 'Start the bridge, then try again.',
       'tunnel-unavailable': 'The internet tunnel is not ready. Wait a moment, then refresh. Desktop controls show tunnel errors.',
@@ -87,10 +87,11 @@ window.__ModuleLoader__.load({
     Object.assign(RECOVERY, {
       'installation-unavailable': 'Select a complete Pocket Bridge installation in this plugin’s configuration, then refresh.',
       'installation-not-configured': 'Select your Pocket Bridge installation in this plugin’s configuration, then refresh.',
-      'node-24-required': 'This DSH runtime cannot start the bridge directly. Use the installed Pocket Bridge Windows shortcut, then refresh.',
+      'node-24-required': 'The last start attempt found only an older Node.js runtime. Install genuine Node.js 24 or newer, restart DSH, then try Start bridge again.',
+      'node-unavailable': 'The last start attempt could not find a usable genuine Node.js 24+ runtime. Install Node.js 24 or newer, restart DSH, then try Start bridge again. The DSH desktop app’s embedded runtime may not be usable.',
       'operation-pending': 'The bridge is already starting or stopping. Refresh to check its progress; do not repeat the request.',
-      'operation-unconfirmed': 'The last operation was not confirmed. Open desktop controls or start Pocket Bridge from its Windows shortcut.',
-      'start-unconfirmed': 'The bridge did not finish starting. Open desktop controls or use the Pocket Bridge Windows shortcut.',
+      'operation-unconfirmed': 'The last operation was not confirmed. Refresh to check its state before retrying Start bridge; open desktop controls if available.',
+      'start-unconfirmed': 'The bridge did not finish starting. Refresh before retrying Start bridge; open desktop controls if available.',
       'gateway-stopped': 'Start the bridge, then show the phone connection again.',
       'dsh-unavailable': 'This DSH runtime is not responding. Keep DSH open, then refresh the bridge status.',
       'gateway-identity-changed': 'The bridge restarted or its installation changed. Refresh before trying again.',
@@ -98,7 +99,7 @@ window.__ModuleLoader__.load({
       'local-authenticated-request-required': 'Local authorization was rejected. Refresh this panel’s status, then retry. If it continues, reopen the authenticated DSH interface on this computer.',
       'control-token-unavailable': 'Local authorization is not ready. Refresh this panel’s status, then retry your action. No write request was sent.',
       'request-timeout': 'The local service did not respond in time. Refresh to check what actually happened before trying again.',
-      'bridge-unavailable': 'The bridge service is unavailable. Start Pocket Bridge from its Windows shortcut, then refresh.',
+      'bridge-unavailable': 'The bridge service is unavailable. Refresh its status, then use Start bridge if it is stopped.',
       'plugin-unloaded': 'This plugin was reloaded or removed. Reload the DSH page before trying again.'
     });
     function recovery(code) { return RECOVERY[code] || 'Refresh the status. If the problem continues, run diagnostics or open desktop controls.'; }
@@ -379,7 +380,7 @@ window.__ModuleLoader__.load({
       function openDesktop() {
         const latest = controller.getState().status;
         const url = latest && latest.gateway && consoleUrl(latest.gateway.consoleUrl);
-        if (!url) { controller.setNote('No verified local controls address is available. Start Pocket Bridge from its Windows shortcut.'); return; }
+        if (!url) { controller.setNote('No verified local controls address is available. Use Start bridge and check the prerequisites below.'); return; }
         window.open(url, '_blank', 'noopener,noreferrer');
       }
       return h('section', { className: 'pb-plugin', 'aria-label': 'Pocket Bridge controls' },
@@ -390,6 +391,7 @@ window.__ModuleLoader__.load({
         state.note && h('div', { className: 'pb-notice', role: 'status', 'aria-live': 'polite' }, busy && h('span', { className: 'pb-spinner', 'aria-hidden': true }), state.note),
         h('div', { className: 'pb-card' },
           h('div', { className: 'pb-row' }, h('div', null, h('h3', null, 'Bridge status'), h('p', { className: 'pb-muted' }, 'These controls manage Pocket Bridge. They do not close DSH.')), h('span', { className: 'pb-badge', role: 'status' }, h('span', { className: 'pb-dot ' + (status ? status.state : 'unavailable'), 'aria-hidden': true }), phase)),
+          h('p', { className: 'pb-hint' }, 'Before starting: install genuine Node.js 24 or newer. Public internet tunnels also need cloudflared; private HTTPS does not. The Windows installer includes Node.js and cloudflared, but the plugin package does not.'),
           h('div', { className: 'pb-fields' },
             h('div', null, h('div', { className: 'pb-muted' }, 'Connection'), h('div', { className: 'pb-value' }, status && status.connection ? (status.connection.mode === 'tunnel' ? 'Internet tunnel' : status.connection.mode === 'private-https' ? 'Private HTTPS' : 'Not ready') : 'Not checked')),
             h('div', null, h('div', { className: 'pb-muted' }, 'DSH runtime'), h('div', { className: 'pb-value' }, status && status.runtime ? (status.runtime.available ? 'Available' : 'Unavailable') + (status.runtime.version ? ' · ' + text(status.runtime.version, 40) : '') : 'Not checked')),
@@ -402,6 +404,7 @@ window.__ModuleLoader__.load({
             button(state.busy === 'stop' || operationPhase === 'stopping' ? 'Stopping…' : 'Stop bridge', () => controller.action('stop'), !state.local || !state.controlsReady || busy || operationPending || !running, 'pb-danger'),
             button(state.loading ? 'Refreshing…' : 'Refresh status', () => controller.refresh(), !state.local || busy || state.loading),
             button('Open desktop controls', openDesktop, !state.local || busy || !desktop)),
+          h('p', { className: 'pb-hint' }, 'Disabling or uninstalling this plugin does not stop a running bridge. Use Stop bridge first to pause phone access. Stopping does not revoke paired devices or shared links. Tunnel addresses may change after restart. Manage or revoke access in desktop controls.'),
           state.confirmStop && h('div', { className: 'pb-confirm', role: 'group', 'aria-label': 'Confirm stop bridge' },
             h('h3', null, 'Pause phone access?'), h('p', { className: 'pb-hint' }, 'Stopping the bridge stops serving phone connections. DSH stays open, and its running tasks continue.'),
             h('div', { className: 'pb-actions' }, button('Cancel', () => controller.cancelStop(), busy), button('Stop bridge', () => controller.action('stop'), busy, 'pb-danger')))),
