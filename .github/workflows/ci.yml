@@ -16,6 +16,10 @@ jobs:
     # locale behavior, and browser sizing. Run CI on the supported platform.
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['24.18.1', '24.21.0']
 
     steps:
       - uses: actions/checkout@v4
@@ -25,11 +29,24 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
+
+      # Diagnostic branch only: preserve the 8-second production deadline and
+      # report exact owned-child errors before the aggregate suite truncates output.
+      - name: Record bounded Windows Unicode pipe evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/test-dsh-runtime.js
+          $syncExit = $LASTEXITCODE
+          node scripts/test-dsh-runtime-async.js
+          $asyncExit = $LASTEXITCODE
+          if ($syncExit -ne 0 -or $asyncExit -ne 0) { throw "Unicode fixture failed: sync=$syncExit, async=$asyncExit" }
 
       # This project has no third-party npm dependencies.
 
       - name: Run isolated test suite
+        if: always()
         run: node scripts/run-ci-tests.js
 
       - name: Scan files and history for secrets

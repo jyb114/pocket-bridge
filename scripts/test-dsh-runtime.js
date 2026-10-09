@@ -86,14 +86,35 @@ function fixture(state = {}) {
     const commandLine = '"C:\\node.exe" "' + unicodeEntry + '" web';
     const sample = '[pscustomobject]@{ProcessId=91;Name=\'node.exe\';ExecutablePath=\'C:\\node.exe\';CommandLine=' +
       quote(commandLine) + '} | ConvertTo-Json -Compress';
+    let pipeFailure = null;
     const scanned = runtime.scanProcesses({ fs: unicodeIo, execFileSync(file, args, options) {
+      equal(options.timeout, 8000, 'real synchronous Unicode fixture retains the production inventory deadline');
       // Exercise the real Windows PowerShell pipe/Node decoding boundary while
       // replacing only the OS inventory data; this is not a DSH compatibility test.
       const commandIndex = args.indexOf('-Command') + 1;
       const adjusted = args.slice();
       adjusted[commandIndex] = adjusted[commandIndex].replace(/Get-CimInstance[\s\S]*$/, sample);
-      return require('child_process').execFileSync(file, adjusted, options);
+      const started = performance.now();
+      try {
+        // Capture stderr only from this owned synthetic child, never real OS inventory.
+        const output = require('child_process').execFileSync(file, adjusted,
+          { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+        console.log('Synthetic Unicode pipe evidence: ' + JSON.stringify({ mode: 'sync',
+          node: process.version, elapsedMs: Math.round(performance.now() - started),
+          timeout: options.timeout, status: 0, stdout: String(output).slice(0, 2048) }));
+        return output;
+      } catch (error) {
+        pipeFailure = Error('Synthetic Unicode pipe failure: ' + JSON.stringify({ mode: 'sync',
+          node: process.version, elapsedMs: Math.round(performance.now() - started),
+          timeout: options.timeout, code: error.code, errno: error.errno, status: error.status,
+          signal: error.signal, killed: error.killed, stdout: String(error.stdout || '').slice(0, 2048),
+          stderr: String(error.stderr || '').slice(0, 2048) }));
+        throw error;
+      }
     } });
+    // Production intentionally fails closed on child errors. Retain that behavior,
+    // but report the owned fixture's original failure instead of only an empty array.
+    if (pipeFailure) throw pipeFailure;
     equal(scanned.map(p => p.packageJsonPath), [unicodeRoot + '\\package.json'], 'Windows inventory preserves Chinese npm installation paths across the real UTF-8 pipe');
   }
 
