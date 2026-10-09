@@ -142,7 +142,7 @@ function createBridgeController(options = {}, dependencies = {}) {
   }
   function transport(install) {
     const privateEntry = install.config.privateHttps?.enabled === true && baseOrigin(install.config.privateHttps.origin);
-    const tunnel = baseOrigin(install.recorded.tunnel?.url);
+    const tunnel = install.config.tunnelProvider === 'none' || install.recorded.tunnel?.disabled === true ? null : baseOrigin(install.recorded.tunnel?.url);
     const candidate = privateEntry || tunnel;
     return { available: !!candidate, mode: privateEntry ? 'private-https' : tunnel ? 'tunnel' : null, host: candidate?.host || null };
   }
@@ -150,7 +150,8 @@ function createBridgeController(options = {}, dependencies = {}) {
     const install = installation();
     const health = await locate(install);
     if (disposed) throw failure('plugin-unloaded');
-    if (operation.phase === 'starting' && health && health.dshPort === hostPort) operation = { phase: 'idle' };
+    if (health && health.dshPort === hostPort && (operation.phase === 'starting' ||
+      operation.phase === 'failed' && ['node-unavailable', 'node-24-required'].includes(operation.code))) operation = { phase: 'idle' };
     if (operation.phase === 'stopping' && !health) operation = { phase: 'idle' };
     if (operation.phase !== 'idle' && operation.startedAt && now() - operation.startedAt > 150000) operation = { phase: 'failed', code: 'operation-unconfirmed' };
     return { install, health };
@@ -163,13 +164,14 @@ function createBridgeController(options = {}, dependencies = {}) {
       let encrypted = false;
       try { encrypted = (await request(health.port, '/__dsh/lite-status')).encrypted === true; } catch (_) { /* No optimistic encryption claim. */ }
       const entry = transport(install);
+      const tunnelDisabled = install.config.tunnelProvider === 'none' || install.recorded.tunnel?.disabled === true;
       return { ok: true, state: matched ? 'running' : 'unavailable', ...(matched ? {} : { code: 'dsh-target-mismatch' }),
         version: install.version, gateway: publicGateway(health), connection: { ...entry,
           available: matched && health.dshAlive === true && encrypted && entry.available &&
             (entry.mode === 'private-https' || install.recorded.tunnel?.reachable !== false), encrypted },
         runtime: { available: matched && health.dshAlive === true, port: health.dshPort, ...(options.hostRuntime.version ? { version: options.hostRuntime.version } : {}) },
-        tunnel: { running: install.recorded.tunnel?.running === true,
-          reachable: typeof install.recorded.tunnel?.reachable === 'boolean' ? install.recorded.tunnel.reachable : null,
+        tunnel: { disabled: tunnelDisabled, running: tunnelDisabled ? null : install.recorded.tunnel?.running === true,
+          reachable: !tunnelDisabled && typeof install.recorded.tunnel?.reachable === 'boolean' ? install.recorded.tunnel.reachable : null,
           checkedAt: typeof install.recorded.updatedAt === 'string' ? install.recorded.updatedAt : null }, operation: { ...operation } };
     } catch (error) {
       return { ok: false, state: 'unconfigured', code: error.code || 'installation-unavailable', connection: { available: false, encrypted: false }, operation: { ...operation } };
@@ -191,7 +193,8 @@ function createBridgeController(options = {}, dependencies = {}) {
       const data = await request(health.port, '/__console/status', undefined, 10000, 512 * 1024);
       if (data.instanceId !== install.identity || data.gateway?.bootId !== health.bootId || data.gateway?.port !== health.port || data.gateway?.dshPort !== hostPort || data.entries?.encrypted !== true) throw failure('gateway-identity-changed');
       const privateBase = install.config.privateHttps?.enabled === true && baseOrigin(install.config.privateHttps.origin);
-      const raw = data.entries.wan || (privateBase && (data.entries.lanHttps?.[0] || data.entries.lan?.[0]));
+      if (!privateBase && (install.config.tunnelProvider === 'none' || data.tunnel?.disabled === true)) throw failure('secure-connection-unavailable');
+      const raw = privateBase ? (data.entries.privateHttps || data.entries.wan || data.entries.lanHttps?.[0] || data.entries.lan?.[0]) : data.entries.wan;
       let entry; try { entry = new URL(raw); } catch (_) { throw failure('secure-connection-unavailable'); }
       if ((!privateBase && entry.protocol !== 'https:' || privateBase && !['http:', 'https:'].includes(entry.protocol)) || entry.username || entry.password || !/^\/k\/[A-Za-z0-9_-]{16,128}$/.test(entry.pathname) ||
           entry.search || !/^#k=[A-Za-z0-9_-]{16,128}$/.test(entry.hash)) throw failure('secure-connection-unavailable');
@@ -201,8 +204,9 @@ function createBridgeController(options = {}, dependencies = {}) {
         if (!tunnelBase || entry.origin !== tunnelBase.origin || data.tunnel?.reachable === false) throw failure('secure-connection-unavailable');
       }
       entry.searchParams.set('target', 'lite');
-      const current = installation();
       const fresh = await request(health.port, '/__health');
+      const current = installation();
+      if (!privateBase && current.config.tunnelProvider === 'none') throw failure('secure-connection-unavailable');
       if (current.identity !== install.identity || !same(fresh, health) || fresh.dshAlive !== true || disposed) throw failure('gateway-identity-changed');
       return { ok: true, url: entry.href, mode: privateBase ? 'private-https' : 'tunnel', gateway: publicGateway(health), expiresAt: new Date(now() + 120000).toISOString() };
     } catch (error) { return { ok: false, code: error.code || 'connection-unavailable' }; }
@@ -245,7 +249,7 @@ function createBridgeController(options = {}, dependencies = {}) {
           operation = { phase: 'idle' }; return { ok: true, phase: 'running', message: 'The selected bridge is already running.' };
         }
         if (fs.existsSync(path.join(base, 'logs/daemon-operation.lock'))) throw failure('operation-pending');
-        const node = dependencies.nodeExecutable || await resolveBridgeNode({ bridgeDirectory: base });
+        const node = dependencies.nodeExecutable || await (dependencies.resolveBridgeNode || resolveBridgeNode)({ bridgeDirectory: base });
         if (disposed) throw failure('plugin-unloaded');
         if (managed) { managed.ensure(); install = installation(); }
         saveTarget(install); restoredMarker = resumeMarker();
@@ -289,13 +293,17 @@ function createBridgeController(options = {}, dependencies = {}) {
   }
   async function diagnostics() {
     const value = await statusFresh();
+    // Read-only diagnostics never spawn a runtime probe or prepare an installation.
+    // An operation error is historical evidence, not a fresh dependency check.
+    const nodeError = value.operation?.phase === 'failed' && ['node-unavailable', 'node-24-required'].includes(value.operation.code) ? value.operation.code : null;
     const checks = [
+      { id: 'node', label: 'Node.js 24+ startup runtime', state: nodeError ? 'fail' : 'unknown', detail: nodeError === 'node-24-required' ? 'The last start attempt found only an older Node.js runtime. Install Node.js 24 or newer, restart DSH, then retry Start bridge.' : nodeError ? 'The last start attempt could not find a usable genuine Node.js 24+ runtime. Install Node.js 24 or newer, restart DSH, then retry Start bridge.' : 'Not probed by read-only diagnostics. Start bridge checks for a usable genuine Node.js 24+ runtime; DSH’s embedded runtime alone does not confirm it.' },
       { id: 'installation', label: 'Selected bridge installation', state: value.version ? 'pass' : 'fail', detail: value.version ? `Pocket Bridge ${value.version}` : 'Choose a complete Pocket Bridge installation in this plugin configuration.' },
       { id: 'gateway', label: 'Bridge listener', state: value.state === 'running' ? 'pass' : 'fail', detail: value.state === 'running' ? 'The selected installation and current gateway identity match.' : value.code === 'dsh-target-mismatch' ? 'This bridge targets a different DSH instance. Select the matching installation or adjust its desktop controls.' : 'Start the bridge or open its desktop controls.' },
       { id: 'dsh', label: 'This DSH runtime', state: value.runtime?.available ? 'pass' : 'fail', detail: value.runtime?.available ? 'The bridge targets this running DSH host.' : 'The current DSH listener has not been confirmed by the bridge.' },
       { id: 'encryption', label: 'Phone content encryption', state: value.connection?.encrypted ? 'pass' : 'unknown', detail: value.connection?.encrypted ? 'The gateway reports an encryption key. Only a phone round trip verifies delivery.' : 'Encryption readiness has not been confirmed. No plaintext connection will be offered.' },
       { id: 'entrance', label: 'Secure phone entrance', state: value.connection?.available ? 'pass' : 'fail', detail: value.connection?.available ? 'A secure entrance is configured. Open it on a phone to verify connectivity.' : 'A complete HTTPS connection is not ready; use the desktop controls to configure it.' },
-      { id: 'tunnel', label: 'Public entrance reachability', state: value.tunnel?.reachable === true ? 'pass' : value.tunnel?.reachable === false ? 'fail' : 'unknown', detail: value.tunnel?.reachable === true ? 'The last gateway probe succeeded; it does not prove current phone connectivity.' : value.tunnel?.reachable === false ? 'The last gateway probe failed. Keep the address and retry before requesting a replacement.' : 'No successful current reachability check is available.' }
+      { id: 'tunnel', label: 'Public entrance reachability', state: value.connection?.mode === 'private-https' ? 'unknown' : value.tunnel?.reachable === true ? 'pass' : value.tunnel?.reachable === false ? 'fail' : 'unknown', detail: value.tunnel?.disabled ? 'Public tunnel startup and probing are disabled. Existing tunnel processes have not been checked or stopped by this setting; verify and stop any existing tunnel separately before relying on local-only operation.' : value.connection?.mode === 'private-https' ? 'Private HTTPS does not require cloudflared or a public tunnel. Test the private address on your phone.' : value.tunnel?.reachable === true ? 'The last gateway probe succeeded; it does not prove current phone connectivity.' : value.tunnel?.reachable === false ? 'The last gateway probe failed. Keep the address and retry before requesting a replacement.' : 'Public internet tunnels require cloudflared, which is not bundled in the plugin package. Read-only diagnostics do not probe its executable. No current public reachability result is available.' }
     ];
     return { ok: true, checks, checkedAt: new Date(now()).toISOString(), ...(value.version ? { version: value.version } : {}) };
   }

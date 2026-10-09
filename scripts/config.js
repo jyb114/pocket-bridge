@@ -38,7 +38,7 @@ const DEFAULTS = {
   dshWebExecutable: '',     // 可选：CLI 的 Node 可执行文件或 dsh 命令
   dshWebEntry: '',          // 使用 Node 时填写 @deepseek-ai/dsh 的 CLI 入口
   dshWebArguments: ['web', '--no-open'], // 参数数组；不经过 shell、不自动联网安装
-  tunnelProvider: 'auto',   // auto | cloudflare | none
+  tunnelProvider: 'auto',   // none | auto | cloudflare (mode-selected) | cloudflare-quick | cloudflare-named
   enableLanAccess: true,    // 是否提供内网直连入口
   dshPort: 0,               // 0 = 自动发现；显式指定则优先
   // Optional private tailnet HTTPS. Provision Serve explicitly outside Bridge;

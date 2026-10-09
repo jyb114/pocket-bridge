@@ -14,10 +14,10 @@ offering a connection or changing the gateway state.
 ## Installation
 
 Install a tested release tarball through your DSH plugin manager. No separate
-npm publication is required. Preview.13's versioned release URL is:
+npm publication is required. Preview.14's versioned release URL is:
 
 ```text
-dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.13/pocket-bridge-1.0.0-preview.13.tgz
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.14/pocket-bridge-1.0.0-preview.14.tgz
 ```
 
 That command targets an npm DSH Web profile. A desktop application's plugin
@@ -40,12 +40,20 @@ a compatibility promise for every desktop wrapper or another DSH release.
 The settings entry also depends on the host exposing its Web settings UI.
 
 The gateway requires Node.js 24 or newer. A temporary internet tunnel also
-requires cloudflared. The Windows installer supplies the two runtimes; the
+requires cloudflared; private HTTPS does not. The Windows installer supplies the two runtimes; the
 plugin source tarball does not bundle their binaries. The plugin uses a genuine
 Node executable from the selected Windows installation's runtime, the current
 non-Electron Node process, or a validated PATH candidate. An Electron executable
 is not used to launch another desktop window as a daemon. Runtime discovery
 does not change global PATH or the user's process environment.
+
+If Start reports `node-unavailable` or `node-24-required`, install genuine
+Node.js 24 or newer, restart DSH when its tasks permit, and retry Start bridge.
+The panel does not assume that a plugin-only installation has a Windows shortcut.
+Diagnostics stays read-only: it does not probe Node or cloudflared executables,
+start child processes, or prepare the managed gateway directory. Its Node check
+is unknown unless the last start attempt reported a runtime failure, which is
+labeled as a previous result rather than a new dependency check.
 
 If cloudflared is unavailable and no private HTTPS entrance is configured,
 the local gateway can run while the secure phone connection remains unavailable.
@@ -53,6 +61,37 @@ The real npm-host tests exercised this state and the panel reported it rather
 than displaying a usable HTTPS connection. Configure a supported secure
 entrance through the bridge's controls; do not treat a running listener as a
 working remote connection.
+
+## Panel language and narrow settings views
+
+The plugin follows a supported language on the host page, then the browser's
+language preference (Chinese, English, or Spanish). Its **Panel language** selector
+provides a panel-only override when the host does not expose its current language.
+The choice lasts for this mounted panel; it does not change DSH settings, browser
+storage, or cookies. Recovery guidance and known diagnostic text use the same
+language, while technical codes, versions and private links remain unchanged.
+
+Controls wrap within the width provided by the DSH settings host. Primary actions
+appear before the detail fields; full prerequisite and access-lifecycle guidance
+remains available under **Setup and access notes**. The plugin does not alter or
+hide DSH's own navigation. Very narrow host layouts may still require vertical
+scrolling.
+
+## Local-only and private-HTTPS testing
+
+Set `tunnelProvider` to `none` to disable the daemon's public-tunnel discovery,
+reachability probes, startup and automatic rebuilding. This is not a command to
+terminate a tunnel that is already running or revoke existing external access.
+Stop bridge pauses the gateway only: an old tunnel may reconnect when it starts
+again. Verify and stop any existing tunnel separately before relying on
+local-only operation. Unknown provider
+values fail closed rather than choosing a public tunnel. `cloudflare` remains an
+alias for the configured dynamic or fixed Cloudflare mode.
+
+This setting does not disable LAN listeners. For an isolated loopback-only test,
+also set `enableLanAccess` to `false` and `lanHttps.enabled` to `false` before
+starting the test gateway. Private HTTPS configuration and device authorization
+remain separate; a local listener alone does not establish a working phone link.
 
 ## Existing Windows installation
 

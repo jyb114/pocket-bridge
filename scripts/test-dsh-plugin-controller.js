@@ -124,6 +124,13 @@ async function fixture(options = {}) {
     } };
 }
 
+function snapshot(directory) {
+  return fs.readdirSync(directory, { recursive: true }).sort().map(relative => {
+    const full = path.join(directory, relative), stat = fs.lstatSync(full);
+    return [relative, stat.isDirectory() ? 'directory' : crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex'), stat.mtimeMs];
+  });
+}
+
 async function use(name, run, options) {
   await check(name, async () => { const fx = await fixture(options); try { await run(fx); } finally { await fx.close(); } });
 }
@@ -336,6 +343,99 @@ async function main() {
     fs.linkSync(path.join(fx.directory, relative), path.join(fx.directory, `${path.basename(relative)}.private-link`));
     const result = await fx.controller.status();
     assert.equal(result.ok, false); assert.equal(result.connection.available, false); assert.equal(fx.reads.length, 0);
+  });
+  let diagnosticProbes = 0;
+  await use('Read-only diagnostics leaves startup runtime unprobed even with a running bridge', async fx => {
+    const before = snapshot(fx.directory);
+    const result = await fx.controller.diagnostics();
+    const node = result.checks.find(check => check.id === 'node');
+    assert.equal(node.state, 'unknown'); assert.match(node.detail, /Not probed/);
+    assert.equal(diagnosticProbes, 0); assert.deepEqual(snapshot(fx.directory), before);
+    assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
+  }, { dependencies: { resolveBridgeNode() { diagnosticProbes++; throw Error('Diagnostics must not probe Node'); } } });
+  await use('Diagnostics does not prepare an absent managed gateway or execute a runtime probe', async fx => {
+    const source = path.join(fx.directory, 'public-source'), target = path.join(fx.directory, 'not-created-gateway');
+    fs.mkdirSync(source); fs.mkdirSync(path.join(source, 'dsh-plugin'));
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'pocket-bridge', version: '1.0.0-fixture' }));
+    const paths = ['package.json', 'scripts/gateway-daemon.js', 'scripts/mobile-proxy.js', 'pwa/dsh-lite.html', 'pwa/e2ee.js', ...Array.from({ length: 15 }, (_, i) => `docs/fixture-${i}.md`)];
+    fs.writeFileSync(path.join(source, 'dsh-plugin/gateway-source-manifest.json'), JSON.stringify({ schemaVersion: 1, package: { name: 'pocket-bridge', version: '1.0.0-fixture' }, files: paths.map(relative => ({ relative, size: 0, sha256: '0'.repeat(64) })) }));
+    const before = snapshot(fx.directory); let probes = 0;
+    const managedController = createBridgeController({ managed: true, sourceDirectory: source, bridgeDirectory: target, hostRuntime: { port: fx.hostPort } }, {
+      request() { throw Error('No listener is owned by this unprepared fixture'); },
+      resolveBridgeNode() { probes++; throw Error('Diagnostics must not probe'); },
+      spawn() { throw Error('Diagnostics must not spawn'); }
+    });
+    try {
+      const result = await managedController.diagnostics();
+      assert.equal(result.checks.find(check => check.id === 'node').state, 'unknown');
+      assert.equal(probes, 0); assert(!fs.existsSync(target)); assert.deepEqual(snapshot(fx.directory), before);
+    } finally { managedController.dispose(); }
+  });
+  for (const code of ['node-unavailable', 'node-24-required']) {
+    let probes = 0;
+    await use(`Diagnostics reports observed ${code} without retrying startup or changing files`, async fx => {
+      fx.state.healthStatus = 503;
+      const config = fs.readFileSync(path.join(fx.directory, 'config.json'));
+      assert.equal((await fx.controller.diagnostics()).checks.find(check => check.id === 'node').state, 'unknown');
+      assert.equal(probes, 0);
+      assert.equal((await fx.controller.action({ action: 'start' })).code, code);
+      const result = await fx.controller.diagnostics();
+      const node = result.checks.find(check => check.id === 'node');
+      assert.equal(node.state, 'fail'); assert.match(node.detail, /last start attempt/);
+      assert.match(node.detail, /Node.js 24/); assert.equal(probes, 1);
+      fx.state.healthStatus = 200;
+      const recovered = await fx.controller.diagnostics();
+      assert.equal(recovered.checks.find(check => check.id === 'node').state, 'unknown');
+      assert.equal((await fx.controller.status()).operation.phase, 'idle');
+      assert.equal(probes, 1);
+      assert(fs.readFileSync(path.join(fx.directory, 'config.json')).equals(config));
+      assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
+    }, { dependencies: { resolveBridgeNode() { probes++; throw Object.assign(Error(code), { code }); } } });
+  }
+  await use('Private HTTPS diagnostics does not present an old public tunnel failure as a prerequisite', async fx => {
+    fx.recorded.tunnel.reachable = false;
+    fx.write('logs/status.json', fx.recorded);
+    fx.config.privateHttps = { enabled: true, origin: 'https://private-fixture.example' };
+    fx.write('config.json', fx.config);
+    const result = await fx.controller.diagnostics();
+    const status = await fx.controller.status();
+    assert.equal(status.connection.mode, 'private-https');
+    const tunnel = result.checks.find(check => check.id === 'tunnel');
+    assert.equal(tunnel.state, 'unknown'); assert.match(tunnel.detail, /does not require cloudflared/);
+    assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
+  });
+  await use('none policy never offers a cached public tunnel as a ready or revealable entrance', async fx => {
+    fx.config.tunnelProvider = 'none'; fx.write('config.json', fx.config);
+    const status = await fx.controller.status();
+    assert.equal(status.state, 'running'); assert.equal(status.connection.available, false);
+    assert.equal(status.connection.mode, null); assert.equal(status.connection.host, null);
+    assert.equal(status.tunnel.running, null); assert.equal(status.tunnel.reachable, null);
+    const diagnostic = (await fx.controller.diagnostics()).checks.find(check => check.id === 'tunnel');
+    assert.equal(diagnostic.state, 'unknown'); assert.match(diagnostic.detail, /have not been checked or stopped/);
+    assert.equal((await fx.controller.connection()).code, 'secure-connection-unavailable');
+    assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
+  });
+  await use('none selected during final reveal health verification suppresses the pending public link', async fx => {
+    let healthReads = 0;
+    fx.state.onHealth = () => {
+      healthReads++;
+      if (healthReads === 2) { fx.config.tunnelProvider = 'none'; fx.write('config.json', fx.config); }
+      return false;
+    };
+    assert.equal((await fx.controller.connection()).code, 'secure-connection-unavailable');
+    assert.equal(healthReads, 2); assert.equal(fx.writes.length, 0);
+  });
+  await use('private HTTPS reveal remains valid without advertising disabled LAN or public entries', async fx => {
+    fx.config.tunnelProvider = 'none'; fx.config.enableLanAccess = false;
+    fx.config.privateHttps = { enabled: true, origin: 'https://fixture.tailnet.ts.net' };
+    fx.write('config.json', fx.config);
+    fx.state.consoleStatus.entries.wan = null; fx.state.consoleStatus.entries.lan = []; fx.state.consoleStatus.entries.lanHttps = [];
+    fx.state.consoleStatus.entries.privateHttps = `https://fixture.tailnet.ts.net/k/${fx.access}#k=${fx.secret}`;
+    fx.state.consoleStatus.tunnel.disabled = true;
+    const result = await fx.controller.connection();
+    assert.equal(result.ok, true); assert.equal(result.mode, 'private-https');
+    assert.equal(new URL(result.url).origin, fx.config.privateHttps.origin);
+    assert.equal(fx.writes.length, 0); assert.equal(fx.children.length, 0);
   });
   await use('Diagnostics remains a finite redacted checklist without exposing configuration or message content', async fx => {
     const result = await fx.controller.diagnostics();

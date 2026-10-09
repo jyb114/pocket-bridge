@@ -82,7 +82,7 @@ function fixture({ statusOnly = false, realTunnel = false } = {}) {
       } };
     vm.createContext(context); vm.runInContext(source, context, { filename: name }); return context;
   }
-  const fakeTunnel = { ownTunnelPids: () => [], extractPublicUrl: () => state.tunnelUrl,
+  const fakeTunnel = { providerPolicy: require('./tunnel.js').providerPolicy, ownTunnelPids: () => [], extractPublicUrl: () => state.tunnelUrl,
     probeUrl: async () => { state.probes++; return state.onProbe ? state.onProbe() : { ok: true, ms: 1 }; },
     stopTunnels() { state.stopTunnels++; state.onTunnelStop?.(); return 0; },
     async startTunnel(port, provider, admission) { state.tunnelCreates++; admission.beforeMutation(); return { url: null, provider: null }; } };
@@ -98,7 +98,7 @@ function fixture({ statusOnly = false, realTunnel = false } = {}) {
   context.fixtureState = state;
   vm.runInContext(`findRunningGateway = async expected => { fixtureState.calls.push(expected);
     return fixtureState.onFind ? fixtureState.onFind(expected) : fixtureState.gateway; };
-    tunnelRunning = () => fixtureState.tunnelUp; readTunnelTargetPort = () => fixtureState.targetPort;
+    tunnelRunning = () => { fixtureState.tunnelLookups = (fixtureState.tunnelLookups || 0) + 1; return fixtureState.tunnelUp; }; readTunnelTargetPort = () => fixtureState.targetPort;
     readTunnelUrl = () => fixtureState.tunnelUrl; readProbeState = () => ({ fails: 4 });
     writeStatus = value => fixtureState.writes.push(value); resolveNodeExecutable = () => process.execPath;
     module.exports.actualProbe = probeGateway;
@@ -109,6 +109,56 @@ function fixture({ statusOnly = false, realTunnel = false } = {}) {
     clock(value) { state.timerControl = value.set; state.timerClear = value.clear; } };
 }
 async function run() {
+  await check('none policy skips tunnel discovery, probes, startup and stop for absent or existing tunnels', async () => {
+    for (const statusOnly of [false, true]) for (const tunnelUp of [false, true]) {
+      const f = fixture({ statusOnly, realTunnel: true });
+      f.state.config = { tunnelProvider: 'none' }; f.state.tunnelUp = tunnelUp;
+      await f.run();
+      assert.equal(f.state.tunnelLookups || 0, 0); assert.equal(f.state.probes, 0);
+      assert.equal(f.state.stopTunnels, 0); assert.equal(f.state.tunnelCreates, 0);
+      assert.equal(f.state.spawns.length, 0); assert.equal(f.fakeProcess.exitCode, 0);
+      if (!statusOnly) {
+        const result = f.state.writes.at(-1); assert.equal(result.gateway.running, true);
+        assert.equal(result.tunnel.disabled, true); assert.equal(result.tunnel.running, null);
+        assert.equal(result.tunnel.url, null); assert.equal(result.entries.wan, null);
+      }
+    }
+  });
+  await check('none still permits only the selected local gateway child when the listener is absent', async () => {
+    const f = fixture({ realTunnel: true }); f.state.config = { tunnelProvider: 'none' };
+    f.state.onFind = expected => expected.pid ? f.state.gateway : null;
+    await f.run(); assert.equal(f.fakeProcess.exitCode, 0);
+    assert.equal(f.state.spawns.length, 1);
+    assert.equal(path.basename(f.state.spawns[0].args[0]), 'mobile-proxy.js');
+    assert.equal(f.state.tunnelLookups || 0, 0); assert.equal(f.state.probes, 0);
+    assert.equal(f.state.writes.at(-1).tunnel.disabled, true);
+  });
+  await check('none selected during gateway discovery cancels public work before tunnel discovery', async () => {
+    const f = fixture({ realTunnel: true });
+    f.state.onFind = () => { f.state.config = { tunnelProvider: 'none' }; return f.state.gateway; };
+    await f.run(); assert.equal(f.state.spawns.length, 0); assert.equal(f.state.probes, 0);
+    assert.equal(f.state.tunnelLookups || 0, 0); assert.equal(f.state.writes.at(-1).tunnel.disabled, true);
+  });
+  await check('none selected during a probe or rebuild wait prevents another probe or provider startup', async () => {
+    for (const stage of ['probe', 'rebuild']) {
+      const f = fixture();
+      const disable = () => { f.state.config = { tunnelProvider: 'none' }; };
+      if (stage === 'probe') { f.state.tunnelUp = true; f.state.onProbe = () => { disable(); return { ok: false }; }; }
+      else f.state.onTunnelStop = disable;
+      await f.run(); assert.equal(f.state.tunnelCreates, 0); assert.equal(f.state.spawns.length, 0);
+      assert.equal(f.state.probes, stage === 'probe' ? 1 : 0);
+      assert.match(f.state.writes.at(-1).error, /Tunnel policy changed/);
+    }
+  });
+  await check('unsupported tunnel policy refuses startup before any gateway or tunnel discovery', async () => {
+    for (const preference of ['typo', '', null, false, 'ngrok']) {
+      const f = fixture({ realTunnel: true }); f.state.config = { tunnelProvider: preference };
+      await f.run(); assert.equal(f.fakeProcess.exitCode, 1);
+      assert.equal(f.state.calls.length, 0); assert.equal(f.state.spawns.length, 0);
+      assert.equal(f.state.probes, 0); assert.equal(f.state.tunnelLookups || 0, 0);
+      assert(f.state.writes.at(-1).error);
+    }
+  });
   await check('atomic lease excludes concurrent runs and never reclaims old or incomplete evidence', async () => {
     const f = fixture(), lease = f.lease();
     assert.throws(f.lease, error => error.code === 'daemon-operation-pending');

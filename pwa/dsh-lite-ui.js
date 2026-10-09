@@ -210,6 +210,11 @@
       filesFilter: $('files-filter'), filesList: $('files-list'), filesMore: $('files-more'), filesStatus: $('files-status')
     };
     var app = $('app');
+    // Pre-mount fallback text has its own language when i18n is unavailable.
+    // Once mounted, inherit the page language again so later switches work.
+    [refs.status, refs.errorText, refs.retry, refs.reconnect].forEach(function (node) {
+      node.removeAttribute('lang');
+    });
     // Stored preferences already drive t(), but loading a fresh Chinese HTML
     // shell does not fire a language-change event. Translate static labels on
     // every mount without calling a previous controller's onLangChange hook.
@@ -4147,18 +4152,64 @@
     return controller;
   }
 
+  // Startup guidance must survive a missing language bundle (or i18n itself).
+  // Keep this small fallback in the UI: no additional script, request, stored
+  // preference write or dependency on encryption/adapter readiness is needed.
+  var startupMessages = {
+    '正在识别 DSH 版本': { en: 'Identifying the DSH version', es: 'Identificando la versión de DSH' },
+    '连接组件不可用': { en: 'Connection component unavailable', es: 'Componente de conexión no disponible' },
+    'DSH 手机版的连接组件未加载。请重新打开页面，或检查桥是否已更新。': {
+      en: 'The DSH mobile connection component did not load. Reopen this page, or check whether the bridge has been updated.',
+      es: 'No se cargó el componente de conexión de DSH para móviles. Vuelve a abrir esta página o comprueba si el puente se ha actualizado.' },
+    '重试': { en: 'Retry', es: 'Reintentar' },
+    '重连': { en: 'Reconnect', es: 'Reconectar' }
+  };
+  function startupLanguage() {
+    function supported(code) { return code === 'zh' || code === 'en' || code === 'es'; }
+    try {
+      var current = window.DshI18n && typeof window.DshI18n.lang === 'function' && window.DshI18n.lang();
+      if (supported(current)) return current;
+    } catch (_) { /* Fall back to the existing browser preference. */ }
+    try {
+      var stored = window.localStorage.getItem('dsh-lang');
+      if (supported(stored)) return stored;
+    } catch (_) { /* Storage may be unavailable in a private/blocked context. */ }
+    try {
+      var nav = window.navigator;
+      var languages = nav && nav.languages && nav.languages.length ? nav.languages : [nav && nav.language];
+      for (var i = 0; i < languages.length; i++) {
+        var code = String(languages[i] || '').toLowerCase().split('-')[0];
+        if (supported(code)) return code;
+      }
+    } catch (_) { /* Use the shared i18n module's default. */ }
+    return 'en';
+  }
+  function startupText(message) {
+    var translated = t(message);
+    if (typeof translated === 'string' && translated && translated !== message) return translated;
+    var entry = startupMessages[message];
+    return entry && entry[startupLanguage()] || message;
+  }
   function start() {
+    if (window.__dshLiteDeferAutoMount === true || !window.DshLiteAdapter) {
+      var language = startupLanguage();
+      ['connection-status', 'error-text', 'error-retry', 'reconnect'].forEach(function (id) {
+        $(id).setAttribute('lang', language === 'zh' ? 'zh-CN' : language);
+      });
+      $('error-retry').textContent = startupText('重试');
+      $('reconnect').textContent = startupText('重连');
+    }
     if (window.__dshLiteDeferAutoMount === true) {
-      $('connection-status').textContent = '正在识别 DSH 版本';
+      $('connection-status').textContent = startupText('正在识别 DSH 版本');
       return;
     }
     if (window.DshLiteAdapter) {
       mount(window.DshLiteAdapter);
     } else {
       var status = $('connection-status');
-      status.textContent = '连接组件不可用';
+      status.textContent = startupText('连接组件不可用');
       status.dataset.state = 'disconnected';
-      $('error-text').textContent = 'DSH 手机版的连接组件未加载。请重新打开页面，或检查桥是否已更新。';
+      $('error-text').textContent = startupText('DSH 手机版的连接组件未加载。请重新打开页面，或检查桥是否已更新。');
       $('error-banner').hidden = false;
       $('error-retry').onclick = function () { location.reload(); };
       $('reconnect').onclick = function () { location.reload(); };

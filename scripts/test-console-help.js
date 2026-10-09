@@ -43,8 +43,11 @@ const dict = vm.runInNewContext(`(${extractRegisterArg(html)})`, {});
 function fakeEl(tag) {
   return {
     tagName: String(tag || 'div').toUpperCase(),
-    id: '', className: '', textContent: '', innerHTML: '',
-    children: [], parentNode: null, attrs: {}, onclick: null,
+    id: '', className: '', textContent: '', _innerHTML: '',
+    get innerHTML() { return this._innerHTML; },
+    set innerHTML(value) { this._innerHTML = value; for (const child of this.children || []) child.parentNode = null; this.children = []; },
+    children: [], parentNode: null, attrs: {}, onclick: null, listeners: {},
+    addEventListener(name, callback) { this.listeners[name] = callback; },
     style: { cssText: '', opacity: '' },
     setAttribute(k, v) { this.attrs[k] = v; },
     getAttribute(k) { return this.attrs[k]; },
@@ -83,7 +86,7 @@ function runRenderEntries(targets, opts) {
   const box = fakeEl('div');
   const copied = [];
   const opened = [];
-  let httpsRequests = 0;
+  let httpsRequests = 0, balanceRequests = 0;
   const nodes = new Map([['entries', box]]);
   const node = (id) => {
     if (!nodes.has(id)) nodes.set(id, fakeEl('div'));
@@ -105,7 +108,7 @@ function runRenderEntries(targets, opts) {
     ...o.entries
   };
   const sandbox = {
-    state: { data: { targets } },
+    state: { data: { targets, ...o.data } },
     document: { createElement: fakeEl },
     $: node,
     t: T, tr: T,
@@ -113,7 +116,7 @@ function runRenderEntries(targets, opts) {
     mkBtn: (label, cls, fn) => { const b = fakeEl('button'); b.textContent = label; b.className = cls || ''; b.onclick = fn; return b; },
     copy: (v, label) => { copied.push([v, label]); }, homeOperation: () => { }, homeMutate: () => { },
     open: (...args) => { opened.push(args); }, addressChanging: !!o.addressChanging,
-    load: () => {}, renderDevices: () => {}, renderNotify: () => {}, loadBalance: () => {},
+    load: () => {}, renderDevices: () => {}, renderNotify: () => {}, loadBalance: () => { balanceRequests++; },
     renderAdvanced: () => {}, applyI18n: () => {}, renderDesktopSummary: () => {}, renderRestartWait: () => {},
     renderTargets: () => {},
     console
@@ -121,6 +124,28 @@ function runRenderEntries(targets, opts) {
   sandbox.window = sandbox;
   sandbox.URL = URL;
   vm.createContext(sandbox);
+  if (o.liveLanguage) {
+    const storage = new Map([['dsh-lang', o.lang || 'zh'], ['dsh-console-tab', 'connect']]);
+    sandbox.localStorage = { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
+    sandbox.navigator = { languages: [o.lang || 'zh'] };
+    sandbox.location = { reload() { throw Error('Language changes must not reload the console'); } };
+    sandbox.setTimeout = () => { throw Error('Language changes must not schedule work'); };
+    sandbox.document.documentElement = { style: { setProperty() {} }, setAttribute() {} };
+    sandbox.desktopPages = { connect: ['总览', '连接、设备与本机服务'], notify: ['通知', '手机推送设置'], settings: ['设置与诊断', '用量、内网 HTTPS 与运行记录'] };
+    const tabs = Object.keys(sandbox.desktopPages).map(key => {
+      const tab = fakeEl('button'); tab.setAttribute('data-page', key); tab.on = key === 'connect';
+      tab.label = fakeEl('span'); tab.querySelector = () => tab.label;
+      tab.classList = { toggle(_cls, on) { tab.on = on; } }; tab.removeAttribute = name => { delete tab.attrs[name]; };
+      return tab;
+    });
+    sandbox.document.querySelectorAll = query => query === '#tabs .tab' ? tabs : [];
+    sandbox.document.querySelector = query => query === '#tabs .tab.on' ? tabs.find(tab => tab.on) : tabs.find(tab => query.includes('"' + tab.getAttribute('data-page') + '"'));
+    vm.runInContext(fs.readFileSync(path.join(BASE, 'pwa/i18n.js'), 'utf8'), sandbox);
+    sandbox.DshI18n.register(dict); sandbox.t = sandbox.tr = sandbox.DshI18n.t;
+    for (const fn of ['applyI18n', 'showPage', 'refreshDesktopNavigation', 'refreshConsoleLanguage']) vm.runInContext(extractFunction(html, fn), sandbox);
+    sandbox.onLangChange = sandbox.refreshConsoleLanguage;
+    sandbox.tabs = tabs;
+  }
   for (const fn of ['dshLiteAddress', 'entryList', 'bestEntry', 'maskedEntry', 'render']) {
     vm.runInContext(extractFunction(html, fn), sandbox, { filename: fn });
   }
@@ -128,7 +153,7 @@ function runRenderEntries(targets, opts) {
   if (o.hero) sandbox.render({ gateway: { running: true }, targets, entries, devices: [] });
   else sandbox.renderEntries(entries);
   const find = (id) => box.children.find((c) => c.id === id) || null;
-  return { box, find, copied, opened, entries, sandbox, node, get httpsRequests() { return httpsRequests; } };
+  return { box, find, copied, opened, entries, sandbox, node, get httpsRequests() { return httpsRequests; }, get balanceRequests() { return balanceRequests; } };
 }
 
 console.log('\n[静态] 那几句说明在不在、翻没翻\n');
@@ -278,6 +303,77 @@ console.log('\n[行为] 安全的手机入口排序、复制、打开与不可�
   const buttons = (r, kind) => deepButtons(card(r, kind));
   const entryButtons = (r, kind) => buttons(r, kind).slice(0, 2);
 
+  for (const lang of ['zh', 'en', 'es']) check('disabled public/LAN cards do not imply connecting or expose stale URLs (' + lang + ')', () => {
+    const r = runRenderEntries(targets, { lang, entries: { lanDisabled: true, publicTunnelDisabled: true }, data: { tunnel: { disabled: true, running: true } } });
+    assert(!card(r, 'wan').innerHTML.includes('TRY CLOUDFLARE'));
+    assert(!card(r, 'wan').innerHTML.includes('fixture.example'));
+    assert(!card(r, 'lan').innerHTML.includes('192.168.1.5'));
+    const label = lang === 'zh' ? '启动已禁用' : lang === 'en' ? 'Startup disabled' : 'Inicio desactivado';
+    assert(card(r, 'wan').innerHTML.includes(label));
+    assert.equal(r.sandbox.bestEntry(r.entries), null);
+    for (const kind of ['wan', 'lan']) for (const b of entryButtons(r, kind)) { assert(b.disabled); b.onclick(); }
+    assert.equal(r.copied.length, 0); assert.equal(r.opened.length, 0);
+  });
+  check('auto without observed process is not connecting; observed process without URL may be connecting', () => {
+    const idle = runRenderEntries(targets, { entries: { wan: null }, data: { tunnel: { running: false } } });
+    assert(card(idle, 'wan').innerHTML.includes('尚未就绪')); assert(!card(idle, 'wan').innerHTML.includes('建立中'));
+    const starting = runRenderEntries(targets, { entries: { wan: null }, data: { tunnel: { running: true } } });
+    assert(card(starting, 'wan').innerHTML.includes('建立中'));
+  });
+  check('private HTTPS remains separate and usable with public and LAN startup disabled', () => {
+    const url = 'https://fixture.tailnet.ts.net/k/fixture-access#k=' + KEY;
+    const r = runRenderEntries(targets, { entries: { lanDisabled: true, publicTunnelDisabled: true, privateHttps: url }, data: { tunnel: { disabled: true } } });
+    assert.equal(r.sandbox.bestEntry(r.entries).kind, 'privateHttps');
+    assert(card(r, 'wan').innerHTML.includes('启动已禁用'));
+    assert(card(r, 'private').innerHTML.includes('已配置 · 请验证'));
+    assert(!card(r, 'private').innerHTML.includes(KEY)); assert(!card(r, 'private').innerHTML.includes('fixture-access'));
+    for (const b of entryButtons(r, 'private')) { assert.equal(b.disabled, false); b.onclick(); }
+    assert.equal(new URL(r.copied[0][0]).host, 'fixture.tailnet.ts.net');
+    assert.equal(r.opened.length, 1);
+  });
+  check('real language switch callback updates navigation, active title and dynamic cards without reload or extra fetch', () => {
+    const r = runRenderEntries(targets, { liveLanguage: true, entries: { lanDisabled: true, publicTunnelDisabled: true } });
+    r.sandbox.state.data = { gateway: { running: true }, targets, entries: r.entries, devices: [], tunnel: { disabled: true } };
+    r.sandbox.state.busy = true; r.sandbox.addressChanging = true;
+    r.sandbox.showPage('settings');
+    const switcher = r.sandbox.DshI18n.makeSwitcher();
+    for (const [lang, title, label] of [['en', 'Settings and diagnostics', 'Startup disabled'], ['es', 'Ajustes y diagnóstico', 'Inicio desactivado'], ['zh', '设置与诊断', '启动已禁用']]) {
+      switcher.value = lang; switcher.listeners.change();
+      assert.equal(r.node('desktop-title').textContent, title);
+      assert.equal(r.sandbox.tabs.find(tab => tab.on).getAttribute('data-page'), 'settings');
+      assert(card(r, 'wan').innerHTML.includes(label));
+      assert.equal(r.sandbox.state.busy, true); assert.equal(r.sandbox.addressChanging, true);
+      for (const b of entryButtons(r, 'wan')) assert.equal(b.disabled, true);
+    }
+    assert.equal(r.balanceRequests, 0); assert.equal(r.httpsRequests, 0);
+    assert.equal(r.copied.length, 0); assert.equal(r.opened.length, 0);
+  });
+  check('first-load dictionary registration translates navigation and placeholders for saved languages', () => {
+    for (const [lang, overview, subtitle] of [['en', 'Overview', 'Connections, devices, and local services'], ['es', 'Resumen', 'Conexiones, dispositivos y servicios locales']]) {
+      const r = runRenderEntries(targets, { liveLanguage: true, lang }); r.sandbox.state.data = null;
+      r.sandbox.refreshConsoleLanguage();
+      assert.equal(r.node('desktop-title').textContent, overview); assert.equal(r.node('desktop-subtitle').textContent, subtitle);
+      assert.equal(r.sandbox.tabs[0].label.textContent, overview); assert.equal(r.balanceRequests, 0);
+    }
+    assert.match(html, /\.access-head\{[^}]*flex-wrap:wrap/);
+    assert.match(html, /\.access-head>div\{[^}]*flex:1 1 140px/);
+    assert.match(html, /\.access-head h3\{[^}]*word-break:keep-all/);
+  });
+  check('console HTTP representation retains all language dictionaries and keeps loopback gate', () => {
+    const proxy = fs.readFileSync(path.join(BASE, 'scripts/mobile-proxy.js'), 'utf8');
+    const context = { fs, path, PWA_DIR: path.join(BASE, 'pwa'), isLoopback: req => req.local,
+      trimHtmlToLanguage() { throw Error('Console must not strip live languages'); } };
+    const handle = vm.runInNewContext('(' + extractFunction(proxy, 'handleConsole') + ')', context);
+    for (const cookie of ['zh', 'en', 'es']) {
+      let code, body;
+      const res = { writeHead(value) { code = value; }, end(value) { body = value; } };
+      handle({ local: true, headers: { cookie: 'dsh-lang=' + cookie } }, res, { pathname: '/console' });
+      assert.equal(code, 200); const served = vm.runInNewContext('(' + extractRegisterArg(body) + ')');
+      assert.equal(served['总览'].en, 'Overview'); assert.equal(served['总览'].es, 'Resumen');
+      assert.match(body, /refreshConsoleLanguage\(\);\s*}\s*<\/script>/);
+      handle({ local: false }, res, { pathname: '/console' }); assert.equal(code, 403);
+    }
+  });
   check('未开启内网 HTTPS 时，真正的推荐函数选择 HTTPS 隧道而非普通内网', () => {
     const r = runRenderEntries(targets);
     assert.equal(r.sandbox.bestEntry(r.entries).kind, 'wan');
