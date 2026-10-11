@@ -184,6 +184,106 @@ async function inventoryAndCache() {
   equal(posix.map(p => p.pid), [51], 'asynchronous POSIX two-inventory join still rejects unrelated Node');
 }
 
+async function inventoryDiagnostics() {
+  const secret = 'PRIVATE-inventory-token-path-command';
+  const failures = [
+    ['sync-style timeout', { code: 'ETIMEDOUT' }, 'timeout'],
+    ['native async timeout', { code: null, killed: true, signal: 'SIGTERM' }, 'timeout'],
+    ['missing command', { code: 'ENOENT' }, 'error'],
+    ['nonzero exit', { code: 1 }, 'error'],
+    ['buffer overflow', { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true, signal: 'SIGTERM' }, 'error'],
+    ['external signal', { code: null, killed: false, signal: 'SIGTERM' }, 'error']
+  ];
+  for (const [name, fields, status] of failures) {
+    const result = await runtime.scanProcessesWithDiagnosticsAsync({ platform: 'win32',
+      execFile(file, args, options, callback) {
+        equal(options.timeout, 8000, name + ': asynchronous production deadline stays exact');
+        check(args[3].includes("$ErrorActionPreference = 'Stop';"), 'CIM command errors produce a failed query');
+        callback(Object.assign(Error(secret), { cmd: secret, path: secret, stdout: secret, stderr: secret, ...fields }), secret, secret);
+      } });
+    equal(result, { processes: [], processInventory: { status, timeoutMs: 8000 } }, name + ': fixed diagnostic, no process identity or private fields');
+  }
+  for (const platform of ['linux', 'darwin']) {
+    const failed = await runtime.scanProcessesWithDiagnosticsAsync({ platform,
+      execFile(file, args, options, callback) {
+        equal(options.timeout, 8000, 'each POSIX process query retains its deadline');
+        if (args[2] === 'pid=,comm=') callback(null, '51 /opt/DeepSeek Harness');
+        else callback(Object.assign(Error(secret), { code: 'ETIMEDOUT' }));
+      } });
+    equal(failed, { processes: [], processInventory: { status: 'timeout', timeoutMs: 8000 } },
+      platform + ': partial inventory cannot supply process identity');
+  }
+
+  let mode = 'timeout', time = 1000, scans = 0, probes = 0, goodHttp = true;
+  const resolver = runtime.createRuntimeResolver({ platform: 'win32', adapter: desktopApi, now: () => time,
+    detectInstallation: () => none,
+    execFile(file, args, options, callback) {
+      scans++;
+      equal(file, 'powershell', 'diagnostic fixture executes only injected process inventory');
+      equal(options.timeout, 8000, 'resolver production process inventory keeps the original deadline');
+      if (mode === 'timeout') callback(Object.assign(Error(secret), { code: null, killed: true, signal: 'SIGTERM' }));
+      else if (mode === 'error') callback(Object.assign(Error(secret), { code: 'EACCES', stderr: secret }));
+      else callback(null, mode === 'bad-json' ? '{' + secret : mode === 'empty' ? '' : queryResult(file));
+    },
+    listeningPortsOf: pids => pids.length ? [{ pid: 9123, port: 19003 }] : [{ pid: 99999, port: 19099 }],
+    probeDshRuntime: async input => {
+      probes++;
+      return adapter.createRuntimeRecord({ ...input, fingerprint: adapter.fingerprintDshHttp(goodHttp ? auth : {}) });
+    }
+  });
+  const timeout = await resolver.resolveRuntime({});
+  equal(timeout.running, false, 'inventory timeout cannot admit an unrelated listener');
+  equal(timeout.processInventory, { status: 'timeout', timeoutMs: 8000 }, 'resolver retains timeout evidence');
+  equal(timeout.reason, 'DSH process inventory timed out after 8000 ms. Runtime discovery is incomplete.', 'timeout reason is distinct from no candidates');
+  equal(probes, 0, 'unowned listener from failed inventory is never probed');
+  equal(JSON.stringify(runtime.serializeRuntime(timeout)).includes(secret), false, 'public runtime contains no error payload');
+  mode = 'ok';
+  equal(await resolver.resolveRuntime({}), timeout, 'cached timeout follows the unchanged runtime TTL');
+  equal(scans, 1, 'cached reads do not create unbounded retry scans');
+  time += 5000;
+  const recovered = await resolver.resolveRuntime({});
+  equal(recovered.processInventory, { status: 'ok', timeoutMs: 8000 }, 'successful fresh scan clears timeout diagnostic');
+  equal([recovered.running, recovered.pid, recovered.port, recovered.reason], [true, 9123, 19003, null], 'recovery requires newly verified exact process, owner and HTTP identity');
+  for (const next of ['error', 'bad-json']) {
+    mode = next;
+    const failed = await resolver.resolveRuntime({}, { force: true });
+    equal(failed.processInventory.status, 'error', next + ': generic inventory error remains distinct');
+    equal(failed.reason, 'DSH process inventory failed. Runtime discovery is incomplete.', next + ': error text is fixed and redacted');
+    equal([failed.running, failed.port, failed.pid], [false, null, null], next + ': last good runtime never authorizes a failed scan');
+    check(!JSON.stringify(runtime.serializeRuntime(failed)).includes(secret), next + ': source error/output is not serialized');
+  }
+  mode = 'empty';
+  const empty = await resolver.resolveRuntime({}, { force: true });
+  equal(empty.processInventory.status, 'empty', 'successful empty scan replaces stale inventory error');
+  equal(empty.reason, 'No running DSH web runtime was found.', 'completed empty scan retains the precise no-runtime reason');
+
+  mode = 'timeout'; goodHttp = false;
+  const rejected = await resolver.resolveRuntime({ dshPort: 19006 }, { force: true });
+  equal(rejected.running, false, 'configured port still needs fresh HTTP identity after inventory timeout');
+  equal(rejected.processInventory.status, 'timeout', 'configured-port failure retains inventory limitation');
+  goodHttp = true;
+  const explicit = await resolver.resolveRuntime({ dshPort: 19006 }, { force: true });
+  equal([explicit.running, explicit.port, explicit.pid], [true, 19006, null], 'genuine configured listener remains usable without invented PID evidence');
+  equal(explicit.processInventory.status, 'timeout', 'successful explicit probe does not conceal incomplete process inventory');
+  mode = 'ok';
+  const refreshed = await resolver.resolveRuntime({}, { force: true });
+  equal(runtime.serializeRuntime(refreshed).processInventory.status, 'ok', 'public diagnostic clears after forced successful recovery');
+
+  // A late failed scan must not put its diagnostic back after invalidation.
+  let release;
+  const late = runtime.createRuntimeResolver({ platform: 'win32', adapter: desktopApi,
+    detectInstallation: () => none, listeningPortsOf: () => [],
+    execFile(file, args, options, callback) { release = callback; }
+  });
+  const old = late.resolveRuntime({});
+  const failOld = release;
+  late.invalidateRuntime();
+  const current = late.resolveRuntime({});
+  release(null, ''); await current;
+  failOld(Object.assign(Error(secret), { code: 'ETIMEDOUT' })); await old;
+  equal(late.peekRuntime().processInventory.status, 'empty', 'late timeout cannot restore stale diagnostic after current success');
+}
+
 async function workerBoundaries() {
   // Cache/generation/timeout/worker-data checks run the exact source module with
   // an injected Worker constructor; neither finder nor native APIs execute.
@@ -236,7 +336,7 @@ async function workerBoundaries() {
   const owned = fs.mkdtempSync(path.join(tmpBase, 'dsh-runtime-worker-'));
   try {
     const exe = path.join(owned, 'DeepSeek Harness.exe'), packageDir = path.join(owned, 'resources', 'app');
-    fs.mkdirSync(packageDir, { recursive: true }); fs.writeFileSync(exe, 'synthetic file, never executed');
+    fs.mkdirSync(packageDir, { recursive: true }); fs.writeFileSync(exe, 'synthetic file, never executed', { mode: 0o700 });
     fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ version: '0.1.7-rc.2' }));
     const actual = await runtime.detectInstallationAsync({ dshExecutable: exe, dshWebExecutable: path.join(owned, 'absent-cli') });
     equal(actual.version, '0.1.7-rc.2', 'actual Worker reads bounded adjacent version metadata');
@@ -287,6 +387,6 @@ async function unicodePipe() {
 
 (async () => {
   const baseline = await responsiveness(false), improved = await responsiveness(true);
-  await inventoryAndCache(); await workerBoundaries(); await unicodePipe();
+  await inventoryAndCache(); await inventoryDiagnostics(); await workerBoundaries(); await unicodePipe();
   console.log(JSON.stringify({ checks, responsiveness: [baseline, improved], scope: 'isolated owned HTTP/child inventory and worker fixtures; no live DSH' }));
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

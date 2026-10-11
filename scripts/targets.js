@@ -36,6 +36,8 @@ const TEXT = {
     dshWebEdition: 'Web 版',
     dshInstalled: '已安装，当前没在运行',
     dshMissing: '没找到 DSH',
+    dshInventoryTimeout: 'DSH 进程检测在 8 秒后超时，尚无法确认是否正在运行。请刷新重试。',
+    dshInventoryError: 'DSH 进程检测失败，尚无法确认是否正在运行。请刷新重试。',
     dshNoExe: '没找到 DSH 装在哪，请在 config.json 里填 dshExecutable',
     dshAlready: 'DSH 已经在运行了',
     dshStarted: 'DSH 已启动（端口 {port}）',
@@ -60,6 +62,8 @@ const TEXT = {
     dshWebEdition: 'Web',
     dshInstalled: 'Installed, not running right now',
     dshMissing: 'DSH not found',
+    dshInventoryTimeout: 'DSH process discovery timed out after 8 seconds. Its running state could not be confirmed. Refresh to retry.',
+    dshInventoryError: 'DSH process discovery failed. Its running state could not be confirmed. Refresh to retry.',
     dshNoExe: 'Could not find where DSH is installed — set dshExecutable in config.json',
     dshAlready: 'DSH is already running',
     dshStarted: 'DSH started (port {port})',
@@ -84,6 +88,8 @@ const TEXT = {
     dshWebEdition: 'Web',
     dshInstalled: 'Instalado, ahora mismo no está en marcha',
     dshMissing: 'No se encontró DSH',
+    dshInventoryTimeout: 'La detección de procesos de DSH agotó el tiempo de espera de 8 segundos. No se pudo confirmar si está en marcha. Actualiza para reintentar.',
+    dshInventoryError: 'Falló la detección de procesos de DSH. No se pudo confirmar si está en marcha. Actualiza para reintentar.',
     dshNoExe: 'No se encontró dónde está instalado DSH: rellena dshExecutable en config.json',
     dshAlready: 'DSH ya está en marcha',
     dshStarted: 'DSH iniciado (puerto {port})',
@@ -189,8 +195,10 @@ const dsh = {
     ]);
     const running = Boolean(runtime.running && runtime.port);
     const ipcOnly = !running && d.profile === 'desktop-ipc';
-    const key = running ? 'dshRunningVersion' : ipcOnly ? 'dshIpc'
-      : d.installed ? 'dshInstalled' : 'dshMissing';
+    const inventoryStatus = runtime.processInventory && runtime.processInventory.status;
+    const inventoryKey = inventoryStatus === 'timeout' ? 'dshInventoryTimeout' : inventoryStatus === 'error' ? 'dshInventoryError' : null;
+    const key = running ? 'dshRunningVersion' : inventoryKey || (ipcOnly ? 'dshIpc'
+      : d.installed ? 'dshInstalled' : 'dshMissing');
     const noteArgs = running ? { port: runtime.port,
       version: runtime.version || T(lang).dshUnknownVersion,
       edition: runtime.kind === 'cli' ? T(lang).dshWebEdition : T(lang).dshDesktopEdition } : {};

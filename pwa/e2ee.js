@@ -608,6 +608,7 @@
 
   /** 现在手上有哪把钥匙（地址里的优先，其次本地存的） */
   function currentSecret() {
+    if (preparedStarted) return global.__dshE2eeSecret === preparedKey ? preparedKey : null;
     try {
       var s = secretFromUrl();
       if (s) return s;
@@ -1122,8 +1123,7 @@
   }
 
   /** 启动：有密钥就装上。返回是否启用了加密。 */
-  function start() {
-    var secret = secretFromUrl();
+  function startWithSecret(secret, prepared) {
     if (!secret) return false;
     global.__dshE2eeSecret = secret;      // 给上层（比如 codex.html）取用
     var okWs = installWsEncryption(secret);
@@ -1132,11 +1132,69 @@
     try { installXhrRequestEncrypt(secret); } catch (e) { }
     // ★ 证明专用的 fetch 必须在**重试包装之前**抓住，
     //   否则证明自己撞上 403 时会递归再证明一遍。
-    try { fetchForProof = global.fetch; } catch (e) { }
+    try {
+      fetchForProof = global.fetch;
+      if (prepared) {
+        var preparedFetch = fetchForProof;
+        fetchForProof = function (url, init) {
+          if (url !== '/__auth/verify' && url !== '/__auth/challenge') return Promise.reject(new Error('invalid-proof-path'));
+          return preparedFetch(url, Object.assign({}, init, { redirect: 'error', referrerPolicy: 'no-referrer' }))
+            .then(function (response) { if (response.redirected) throw new Error('proof-redirect'); return response; });
+        };
+      }
+    } catch (e) { }
     try { installProofRetry(); } catch (e) { }
     try { installXhrProofRetry(); } catch (e) { }
-    installProofUpkeep();
+    if (!prepared) installProofUpkeep();
     return okWs;
+  }
+
+  function start() { return startWithSecret(secretFromUrl(), false); }
+
+  // Preparation pages defer auto-start: an older stored key must never install
+  // wrappers before the explicitly transferred current key is admitted.
+  var preparedStarted = false, preparedKey = null, preparedWrites = [];
+  function startPrepared(secret) {
+    if (preparedStarted || global.__dshE2eeSecret || typeof secret !== 'string' ||
+        !/^[A-Za-z0-9_-]{16,256}$/.test(secret)) return false;
+    preparedStarted = true; preparedKey = secret; secretSource = 'prepared';
+    return startWithSecret(secret, true);
+  }
+  function savePreparedSecret(secret) {
+    if (!preparedStarted || secretSource !== 'prepared' || global.__dshE2eeSecret !== secret || !proofState.ok) return false;
+    // Read previous values before writing. A failed preparation must not erase
+    // an already working origin, including one that held this same key.
+    try {
+      var stores = [[global.localStorage, PERSIST_SECRET_KEY], [global.sessionStorage, SESSION_SECRET_KEY]];
+      var changes = stores.map(function (item) { return { store: item[0], name: item[1], previous: item[0].getItem(item[1]) }; });
+      for (var i = 0; i < changes.length; i++) {
+        var item = changes[i];
+        if (item.previous !== secret) {
+          preparedWrites.push(item); // Even a setter that writes then throws is tracked.
+          item.store.setItem(item.name, secret);
+        }
+        if (item.store.getItem(item.name) !== secret) throw new Error('storage-unavailable');
+      }
+      return true;
+    } catch (_) { rollbackPreparedSecret(secret); return false; }
+  }
+  function rollbackPreparedSecret(secret) {
+    for (var i = preparedWrites.length - 1; i >= 0; i--) {
+      var item = preparedWrites[i];
+      try {
+        // A later different key belongs to another context. Never overwrite it.
+        if (item.store.getItem(item.name) !== secret) continue;
+        if (item.previous == null) item.store.removeItem(item.name);
+        else item.store.setItem(item.name, item.previous);
+      } catch (_) { /* Unknown storage state is not a successful preparation. */ }
+    }
+    preparedWrites = [];
+  }
+  function forgetPreparedSecret(secret) {
+    if (!preparedStarted || preparedKey !== secret) return;
+    rollbackPreparedSecret(secret);
+    if (global.__dshE2eeSecret === secret) { global.__dshE2eeSecret = null; proofState.ok = false; }
+    preparedKey = null;
   }
 
   /**
@@ -1205,10 +1263,14 @@
       return { ok: proofState.ok, at: proofState.at, fails: proofState.fails,
         inflight: !!proofState.inflight, why: proofState.lastWhy };
     },
-    start: start
+    start: start,
+    startPrepared: startPrepared,
+    savePreparedSecret: savePreparedSecret,
+    forgetPreparedSecret: forgetPreparedSecret
   };
 
   // 尽早装上 —— 必须赶在 DSH 自己的脚本建立 WebSocket 之前。
   // 这个文件是注入在 <head> 最前面的，所以直接同步执行就好。
-  try { global.__dshE2eeOn = start(); } catch (e) { global.__dshE2eeOn = false; }
+  var deferStart = global.document && global.document.currentScript && global.document.currentScript.hasAttribute('data-defer-start');
+  if (!deferStart) { try { global.__dshE2eeOn = start(); } catch (e) { global.__dshE2eeOn = false; } }
 })(window);

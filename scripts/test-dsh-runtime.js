@@ -86,6 +86,30 @@ function fixture(state = {}) {
   equal(timeoutCalls[0].options.timeout, 8000, 'synchronous production inventory retains its 8-second deadline');
   equal(timedOut, [], 'synchronous process inventory timeout provides no runtime identity');
 
+  const privateInventoryError = Object.assign(Error('PRIVATE inventory command --token=PRIVATE'), {
+    code: 'EACCES', cmd: 'PRIVATE command', path: 'C:\\PRIVATE\\user', stdout: 'PRIVATE stdout', stderr: 'PRIVATE stderr'
+  });
+  for (const [name, output, error, status] of [
+    ['timeout', '', Object.assign(Error('PRIVATE deadline'), { code: 'ETIMEDOUT' }), 'timeout'],
+    ['query error', '', privateInventoryError, 'error'],
+    ['invalid JSON', '{PRIVATE broken JSON', null, 'error'],
+    ['empty Windows output', '  \r\n', null, 'empty'],
+    ['empty JSON array', '[]', null, 'empty'],
+    ['unrelated candidates', JSON.stringify([{ ProcessId: 1, Name: 'node.exe', CommandLine: 'node.exe unrelated.js' }]), null, 'empty'],
+    ['verified candidate', JSON.stringify([{ ProcessId: 90, Name: record.name, ExecutablePath: record.executablePath, CommandLine: record.commandLine }]), null, 'ok']
+  ]) {
+    const result = runtime.scanProcessesWithDiagnostics({ platform: 'win32', fs: io, adapter: metadataApi,
+      execFileSync(file, args, options) {
+        equal(options.timeout, 8000, name + ': synchronous production deadline stays exact');
+        check(args[3].includes("$ErrorActionPreference = 'Stop';"), 'CIM errors cannot masquerade as successful empty output');
+        if (error) throw error;
+        return output;
+      } });
+    equal(result.processInventory, { status, timeoutMs: 8000 }, name + ': bounded fixed-vocabulary diagnostic');
+    equal(result.processes.map(p => p.pid), status === 'ok' ? [90] : [], name + ': no failure manufactures process identity');
+    check(!JSON.stringify(result).includes('PRIVATE'), name + ': raw inventory errors and output are not returned');
+  }
+
   if (process.platform === 'win32') {
     // This real-child fixture tests UTF-8 transport, not production startup latency.
     // Hosted runners can spend more than 8 seconds starting a cold PowerShell.
@@ -242,5 +266,9 @@ function fixture(state = {}) {
     candidates: [{ ...cliRunning, executablePath: 'secret-path', commandLine: '--token=SECRET' }] });
   const diagnostic = JSON.stringify(safe);
   check(!/SECRET|sensitive-location|secret-path|hidden-user-directory/.test(diagnostic), 'diagnostics exclude commands, package paths and launch argv');
+  equal(runtime.serializeRuntime({ processInventory: { status: 'timeout', timeoutMs: 999999, message: 'PRIVATE', stderr: 'PRIVATE' } }).processInventory,
+    { status: 'timeout', timeoutMs: 8000 }, 'serialization rebuilds inventory diagnostics from fixed public fields');
+  equal(runtime.serializeRuntime({ processInventory: { status: 'PRIVATE', timeoutMs: 8000 } }).processInventory, null,
+    'unknown diagnostic statuses are not copied to public output');
   console.log('DSH runtime regression checks passed: ' + checks);
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

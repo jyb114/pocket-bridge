@@ -64,7 +64,7 @@ function harness(sequence = [], options = {}) {
     }
   };
   vm.createContext(box);
-  for (const name of ['restartFailureMessage', 'renderRestartWait', 'waitForRestart', 'load', 'action', 'render']) {
+  for (const name of ['managedPrimaryGuard', 'restartFailureMessage', 'renderRestartWait', 'waitForRestart', 'load', 'action', 'render']) {
     const implementation = extractFunction(source, name);
     assert.ok(implementation, 'actual console function must exist');
     vm.runInContext(implementation, box, { filename: 'actual-console-' + name });

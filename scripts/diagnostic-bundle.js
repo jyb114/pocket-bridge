@@ -9,14 +9,14 @@
 //
 //   1. **先脱敏，再自检，最后才写文件。**
 //      不是「相信脱敏规则写得对」，而是拿**真实凭据**回过头去搜一遍产物；
-//      搜到就**拒绝写出**，并明确说搜到了哪一项。脱敏规则迟早会漏一条，
-//      自检能兜住；反过来（信任规则）漏了就是真的漏了。
+//      搜到就**拒绝写出**，并明确说搜到了哪一项。这多一道已知值检查，
+//      不能证明没有其他私人内容，分享前仍需人工检查。
 //
 //   2. **白名单式收集**，不是「把 logs 打包再删敏感项」。
 //      后者只要漏删一个文件就全泄了。这里只挑明确要的那几样。
 //
-// 产物里**没有**：访问密钥、加密密钥、推送凭据、会话令牌、设备指纹、
-// 消息正文、上传文件的路径与内容、代理日志的帧内容。
+// 不收集会话或上传文件；设备只输出固定的类型/浏览器分类。
+// 日志与状态仍可能含有规则不认识的私人内容，分享前必须人工检查。
 //
 // 用法：
 //   node scripts/diagnostic-bundle.js              写到 logs/diagnostic-<时间>.json
@@ -26,6 +26,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { labelFromUa } = require('./sessions.js');
 
 const BASE = path.resolve(__dirname, '..');
 const LOG_DIR = path.join(BASE, 'logs');
@@ -143,10 +144,10 @@ function tailLines(file, n) {
 
 // ── 组装（白名单）────────────────────────────────────────────────────────────
 const bundle = {
-  _说明: '这是脱敏后的诊断信息。生成时已用真实凭据回搜过一遍，确认不含密钥、令牌、' +
-    '推送凭据、设备指纹、会话正文与可识别路径。日志只取尾部少量行。',
+  _说明: '这是经过脱敏规则处理的诊断信息。生成时已回搜已收集的本机凭据。' +
+    '自检不能识别所有私人内容；日志只取尾部少量行，分享前仍须人工检查。',
   generatedAt: new Date().toISOString(),
-  note: '如果你仍看到不该出现的内容，那是脱敏规则的漏洞，请连同这一段一起反馈。',
+  note: '如发现遗漏，请勿公开原始内容。请用虚构示例说明问题，敏感报告走约定的私密渠道。',
 
   runtime: {
     platform: process.platform,
@@ -173,14 +174,14 @@ const bundle = {
   tunnelProbe: scrubJson(path.join(LOG_DIR, 'tunnel-probe.json')),
   selfCheck: scrubJson(path.join(LOG_DIR, 'self-check.json')),
   devices: (() => {
-    // 设备列表：只留「有几台、什么类型、什么时候加的」，不留指纹与 IP。
-    // 「iPhone · Safari 在 09-16 加过」这种信息对排查够用了。
+    // label 可由用户自定义，未知设备的默认 label 还会包含 IP。
+    // 不对自由文本猜测脱敏：只从 UA 生成固定的类型/浏览器分类，不输出原始 UA。
     const raw = readMaybe(path.join(LOG_DIR, 'devices.json'));
     if (!raw) return null;
     try {
       const d = JSON.parse(raw);
       return (d.devices || []).map((x) => ({
-        label: x.label,
+        label: labelFromUa(typeof x.ua === 'string' ? x.ua : ''),
         createdAt: x.createdAt,
         lastSeenAt: x.lastSeenAt,
         revoked: !!x.revokedAt,
@@ -227,8 +228,8 @@ if (leaks.length) {
 
 console.log('\n=== 脱敏诊断包 ===\n');
 console.log(`  已收集 ${SECRETS.length} 项本机凭据用于自检`);
-console.log('  ✓ 用真实凭据回搜产物：没有命中（密钥/令牌/推送凭据/设备指纹都不在里面）');
-console.log('  ✓ 没有私钥块，没有可识别的用户目录路径');
+console.log('  ✓ 用已收集的本机凭据回搜产物：没有命中');
+console.log('  ✓ 未命中私钥块特征或当前用户目录的完整路径');
 console.log('  产物里保留的：运行环境、隧道三态、自检结果、设备数量与类型（无指纹）、日志尾部少量行\n');
 
 if (TO_STDOUT) {

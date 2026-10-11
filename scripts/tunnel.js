@@ -33,7 +33,7 @@ const LOG_FILE = path.join(LOG_DIR, 'tunnel.log');
  * service, login page, access denial or relay error must not be called healthy
  * merely because an HTTP connection reached something on the configured port.
  */
-function probeUrl(url, timeoutMs = 12000) {
+function probeUrl(url, timeoutMs = 12000, options = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     let settled = false, deadline = null;
@@ -61,7 +61,8 @@ function probeUrl(url, timeoutMs = 12000) {
     }, timeoutMs);
     try {
       req = mod.get(target, { timeout: timeoutMs }, (res) => {
-        const ok = res.statusCode === 204;
+        const ok = res.statusCode === 204 && (!options.expectedBootId ||
+          res.headers['x-pocket-bridge-boot'] === options.expectedBootId);
         done({
           ok,
           status: res.statusCode,

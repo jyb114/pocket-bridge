@@ -9,7 +9,7 @@ const vm = require('vm');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
-const { extractFunction, sliceBalanced } = require('./page-source.js');
+const { extractFunction, sliceBalanced, extractRegisterArg } = require('./page-source.js');
 const requestOrigin = require('./request-origin.js');
 const dshPhoneSurface = require('./dsh-phone-surface.js');
 const src = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
@@ -92,7 +92,10 @@ function target(id, installed = true, running = false) {
 function browserRender(html, list) {
   const elements = {};
   function element() {
-    return { innerHTML: '', style: {}, children: [], appendChild(c) { this.children.push(c); } };
+    return { _innerHTML: '', style: {}, children: [],
+      get innerHTML() { return this._innerHTML; },
+      set innerHTML(value) { this._innerHTML = value; this.children = []; },
+      appendChild(c) { this.children.push(c); } };
   }
   const page = { location: { hash: '#k=test-fragment' },
     document: { getElementById(id) { return elements[id] || (elements[id] = element()); },
@@ -103,7 +106,42 @@ function browserRender(html, list) {
   vm.runInContext(extractFunction(html, 'esc'), page);
   vm.runInContext(extractFunction(html, 'render'), page);
   page.render({ targets: list });
+  elements.list.render = targets => page.render({ targets });
   return elements.list;
+}
+function consoleRender(list, language = 'zh') {
+  const html = fs.readFileSync(path.join(__dirname, '../pwa/console.html'), 'utf8');
+  function element() {
+    return { _innerHTML: '', style: {}, children: [],
+      get innerHTML() { return this._innerHTML; },
+      set innerHTML(value) { this._innerHTML = value; this.children = []; },
+      appendChild(c) { this.children.push(c); } };
+  }
+  const box = element();
+  const stored = new Map([['dsh-lang', language]]);
+  const page = vm.createContext({ document: { createElement: element, querySelectorAll: () => [], documentElement: { setAttribute() {} } }, $: () => box,
+    navigator: { languages: [language] },
+    localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
+    fetch() { throw Error('language change must not fetch'); },
+    location: { reload() { throw Error('language change must not reload'); } },
+    esc: value => String(value == null ? '' : value).replace(/</g, '&lt;'), desktopIcon: () => '',
+    mkBtn: (label, cls, onclick) => ({ label, cls, onclick }),
+    targetAction() { throw Error('rendering must not launch an action'); },
+    window: { open() { throw Error('rendering must not navigate'); } } });
+  page.window = page;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../pwa/i18n.js'), 'utf8'), page);
+  page.DshI18n.register(vm.runInNewContext('(' + extractRegisterArg(html) + ')'));
+  page.t = page.tr = page.DshI18n.t;
+  page.applyI18n = () => page.DshI18n.apply(); page.refreshDesktopNavigation = () => {};
+  page.state = { data: { targets: list } };
+  page.render = (data, options) => { assert.equal(options.languageOnly, true); page.renderTargets(data.targets); };
+  vm.runInContext(extractFunction(html, 'renderTargets'), page);
+  vm.runInContext(extractFunction(html, 'refreshConsoleLanguage'), page);
+  page.onLangChange = page.refreshConsoleLanguage;
+  page.renderTargets(list);
+  box.render = targets => { page.state.data.targets = targets; page.renderTargets(targets); };
+  box.setLang = code => page.DshI18n.setLang(code);
+  return box;
 }
 (async () => {
   const routingCases = [
@@ -182,6 +220,50 @@ function browserRender(html, list) {
     assert.equal(box.children[0].children[0].children[0].href,'/k/test-access?target=dsh#k=test-fragment');
     const noDsh=browserRender(res.body,[target('codex',true,true)]); assert.equal(noDsh.children.length,0);
   });
+  // Use the actual server-owned translations with the actual two renderers.
+  // Target status/key selection is independently exercised by test-dsh-targets.
+  const consoleSource = fs.readFileSync(path.join(__dirname, '../pwa/console.html'), 'utf8');
+  assert.match(consoleSource, /\.target \.ds\.inventory-error\s*\{\s*white-space:normal\s*\}/, 'failure text may wrap inside its existing desktop row');
+  const targetSource = fs.readFileSync(path.join(__dirname, 'targets.js'), 'utf8');
+  const textStart = targetSource.indexOf('{', targetSource.indexOf('const TEXT ='));
+  const targetText = vm.runInNewContext('(' + targetSource.slice(textStart, sliceBalanced(targetSource, textStart, '{', '}') + 1) + ')');
+  for (const language of ['zh', 'en', 'es']) {
+    for (const key of ['dshInventoryTimeout', 'dshInventoryError']) {
+      check('inventory failure is visible without launch/open controls, then clears on recovery: ' + language + '/' + key, () => {
+        const h = environment({ lang: language }); const res = response();
+        h.box.serveLauncherPage(h.req, res, 503, 'dsh');
+        const failed = { ...target('dsh', false, false), canStart: false, noteKey: key, note: targetText[language][key] };
+        const selector = browserRender(res.body, [failed]);
+        const console = consoleRender([failed], language);
+        assert.ok(console.children[0].innerHTML.includes('class="ds inventory-error"'), 'only inventory failure notes opt into readable wrapping');
+        for (const nextLanguage of ['zh', 'en', 'es', 'zh', language]) {
+          console.setLang(nextLanguage);
+          assert.ok(console.children[0].innerHTML.includes(targetText[nextLanguage][key]), 'cached failure immediately follows actual DshI18n language changes');
+          assert.equal(failed.note, targetText[language][key], 'language switching does not mutate or refetch the cached server note');
+        }
+        for (const view of [selector, console]) {
+          assert.equal(view.children.length, 1, 'failure-only target is visible');
+          assert.ok(view.children[0].innerHTML.includes(failed.note), 'localized inventory note is rendered');
+          assert.equal(view.children[0].children[0].children.length, 0, 'failure-only target has no start, stop, or open control');
+          view.render([{ ...failed, installed: true, canStart: true }]);
+          assert.ok(view.children[0].innerHTML.includes(failed.note), 'installed but unverified target still shows inventory failure');
+          assert.equal(view.children[0].children[0].children.length, 1, 'existing installed-target start control is preserved');
+          view.render([{ ...target('dsh', true, true), noteKey: 'dshRunningVersion', note: 'verified running fixture' }]);
+          assert.equal(view.children.length, 1, 'refresh replaces rather than duplicates old card');
+          assert.ok(view.children[0].innerHTML.includes('verified running fixture'));
+          assert.ok(!view.children[0].innerHTML.includes(failed.note), 'recovery removes stale diagnostic');
+          assert.ok(!view.children[0].innerHTML.includes('inventory-error'), 'verified target uses the normal note style');
+          assert.equal(view.children[0].children[0].children.length, 2, 'verified target keeps original open and stop controls');
+          view.render([{ ...target('dsh', false, false), noteKey: 'dshMissing', note: targetText[language].dshMissing }]);
+          assert.ok(!view.innerHTML.includes(failed.note));
+          assert.ok(view.children.every(card => !card.innerHTML.includes(failed.note)), 'successful empty scan does not retain the old failure');
+          assert.ok(view.children.every(card => !card.innerHTML.includes('inventory-error')), 'successful empty scan uses the normal missing style');
+        }
+        const unrelated = browserRender(res.body, [{ ...failed, id: 'codex' }, { ...failed, noteKey: 'unknownStatus' }]);
+        assert.equal(unrelated.children.length, 0, 'only allowlisted DSH inventory failures are retained');
+      });
+    }
+  }
   check('actual routes retain localized DSH setup without a retired page handler',()=>{
     assert.ok(src.includes('res.end(injectProofAssets(launcherPage(req, lang)));'));
     assert.doesNotMatch(src,/function serveCodexPage\(/);

@@ -20,6 +20,7 @@ const wsBridge = require('./ws-e2ee-bridge.js');
 const source = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
 const secretSource = fs.readFileSync(path.join(__dirname, 'ws-e2ee-bridge.js'), 'utf8');
 const SECRET = 'isolated-missing-key-secret-0123456789';
+const BOOT_ID = '11111111-1111-4111-8111-111111111111';
 const LOGIN = 'isolated-login-cookie';
 const PRIVATE_TEXT = 'Private synthetic DSH conversation content';
 const SESSION = 'isolated-dsh-session';
@@ -44,6 +45,7 @@ vm.runInContext(extractFunction(secretSource, 'readSecret') + '\n' + extractFunc
 const context = {
   privateHttpsAdmission: require('./private-https-admission.js'), cfg: { loadConfig: () => ({ privateHttps: { enabled: false, origin: '' } }) },
   Buffer, URL, Readable, e2ee, path, crypto, net, setTimeout, setImmediate, process: { env: {} },
+  GATEWAY_BOOT_ID: BOOT_ID,
   MAX_E2EE_BODY: 64 * 1024 * 1024, retiredTargets: require('./retired-targets.js'),
   dshPhoneSurface: require('./dsh-phone-surface.js'),
   COOKIE_NAME: 'fixture-legacy-login', COOKIE_VALUE: LOGIN, GATEWAY_AUTH_COOKIE: 'fixture-login',
@@ -266,7 +268,8 @@ async function upgrade(pathname, headers = {}) {
       assert.equal(JSON.parse(result.body).error, 'encrypted-request-required'); checks++;
     }
     result = await request({ pathname: '/__probe', method: 'GET', body: null, encrypted: false });
-    assert.equal(result.status, 204); assert.equal(result.body.length, 0); checks++;
+    assert.equal(result.status, 204); assert.equal(result.body.length, 0);
+    assert.equal(result.headers['x-pocket-bridge-boot'], BOOT_ID); checks++;
     result = await upgrade('/api/remote.mux', { host: 'localhost:8080' });
     assert.equal(result.status, 101); assert.equal(checkedWsKey, null); checks++;
     // Retired routes remain harmless with missing keys and valid cookies.

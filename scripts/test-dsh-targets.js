@@ -74,7 +74,7 @@ function fixture(options = {}) {
     }
   };
   vm.runInNewContext(source, sandbox, { filename: 'targets.js' });
-  return { api: sandbox.module.exports, calls, files };
+  return { api: sandbox.module.exports, calls, files, setRuntime(value) { runtime = clone(value); } };
 }
 const cliRuntime = { installed: true, running: true, kind: 'cli', version: '0.1.5-rc.3',
   source: 'process', profile: 'remote-mux', pid: 9001, port: 19387, supported: true };
@@ -136,6 +136,44 @@ async function test(title, body) {
     const f = fixture({ runtime: { ...cliRuntime, version: null } });
     assert((await f.api.dsh.status('en')).note.includes('unknown version'));
     assert((await f.api.dsh.status('es')).note.includes('versión desconocida'));
+  });
+  await test('Inventory failures produce fixed localized notes without claiming installation or availability', async () => {
+    for (const [status, key] of [['timeout', 'dshInventoryTimeout'], ['error', 'dshInventoryError']]) {
+      const f = fixture({ runtime: { installed: false, running: false, port: null,
+        processInventory: { status, timeoutMs: 8000 }, reason: 'PRIVATE command/path/stderr' } });
+      const cached = (await f.api.list({ lang: 'zh' }))[0];
+      assert.equal(cached.noteKey, key); assert.equal(cached.installed, false);
+      assert.equal(cached.running, false); assert.equal(cached.canStart, false); assert.equal(cached.port, null);
+      assert.equal((await f.api.available()).length, 0);
+      const distinct = new Set();
+      for (const language of ['zh', 'en', 'es']) {
+        const direct = await f.api.dsh.status(language);
+        const translated = f.api.localize([cached], language)[0];
+        assert.equal(direct.noteKey, key); assert.equal(translated.note, direct.note);
+        assert(!direct.note.includes('PRIVATE')); assert(!/[{}]/.test(direct.note));
+        if (status === 'timeout') assert(direct.note.includes('8'));
+        assert(direct.note.includes(language === 'zh' ? '请刷新重试' : language === 'en' ? 'Refresh to retry' : 'Actualiza para reintentar'));
+        if (language !== 'zh') assert(!/[\u4e00-\u9fff]/.test(direct.note));
+        distinct.add(direct.note);
+      }
+      assert.equal(distinct.size, 3);
+      f.setRuntime({ ...cliRuntime, processInventory: { status: 'ok', timeoutMs: 8000 } });
+      assert.equal((await f.api.dsh.status('en')).noteKey, 'dshRunningVersion');
+      f.setRuntime({ installed: false, running: false, port: null, processInventory: { status: 'empty', timeoutMs: 8000 } });
+      assert.equal((await f.api.dsh.status('en')).noteKey, 'dshMissing');
+      assert.equal(f.calls.spawn.length + f.calls.exec.length + f.calls.kill.length, 0);
+    }
+  });
+  await test('Inventory uncertainty does not hide verified installation or a genuine configured listener', async () => {
+    const processInventory = { status: 'timeout', timeoutMs: 8000 };
+    const stopped = fixture({ installed: cliLaunch, runtime: { running: false, processInventory } });
+    const st = await stopped.api.dsh.status('en');
+    assert.equal(st.noteKey, 'dshInventoryTimeout'); assert.equal(st.installed, true); assert.equal(st.running, false);
+    assert.equal(st.canStart, true); assert.equal(st.port, null);
+    const running = fixture({ runtime: { ...cliRuntime, processInventory } });
+    const current = await running.api.dsh.status('en');
+    assert.equal(current.noteKey, 'dshRunningVersion'); assert.equal(current.running, true);
+    assert.equal(current.runtime.processInventory.status, 'timeout');
   });
   await test('IPC-only desktop launch is rejected immediately without shell or waiting', async () => {
     const f = fixture({ installed: { installed: true, kind: 'desktop', profile: 'desktop-ipc', version: '0.1.0-rc.8', launch: null } });

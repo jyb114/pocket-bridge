@@ -63,6 +63,8 @@ The supported phone content channels use authenticated encrypted requests and re
 
 The raw original DSH web interface is not exposed as a remote alternative in new releases. Open the original interface locally on the computer when needed. Encryption failures, missing keys, expired authorization, and unsupported capabilities must be reported without falling back to plaintext remote content.
 
+An optional [primary and backup Quick Tunnel pair](docs/DUAL-TUNNELS.md) is available for the Windows gateway and is off by default. A reload-only phone reminder can copy a verified alternate address. The copied address carries no credentials; that other origin needs its own login and encryption-key setup before it can be used. Both paths share the same PC, network and Cloudflare service, so they are not independent disaster recovery.
+
 An optional [private Tailscale HTTPS entrance](docs/TAILSCALE-PRIVATE-HTTPS.md) can avoid serving the initial application through Cloudflare. It is disabled by default, preserves the bridge's device and encryption checks, and does not install or configure a VPN. Real phone enrollment and connectivity must be verified after the owner sets it up. The phone's Settings → Connection and compatibility panel shows the observed runtime and implemented interface coverage separately from release acceptance.
 
 Local DSH history, uploads, configuration, and browser drafts have separate storage boundaries. Do not assume that every file on the computer or phone is encrypted at rest. Optional notification services are separate external recipients. No personal notification script or account is included. See [SECURITY.md](SECURITY.md) for the precise scope.

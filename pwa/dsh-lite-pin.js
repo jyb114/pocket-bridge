@@ -5,7 +5,7 @@
   // that loads boot.js. Pin the same bridge scripts here without delaying chat.
   if (!('serviceWorker' in navigator)) return;
   var required = ['/e2ee.js', '/dsh-lite-pin.js', '/dsh-lite-adapter.js',
-    '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js',
+    '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js',
     // 界面文案（中/英/西）也钉住：它是**决定界面说什么话**的那个文件，
     // 而且每个页面都会加载 —— 不在名单里就等于"有人换掉它，谁都不会发现"。
     '/i18n.js', '/dsh-lite-lang.js'];

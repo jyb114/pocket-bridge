@@ -56,4 +56,32 @@ The screenshot route accepts only its exact bounded width request. Unknown field
 
 Never post keys, complete connection URLs, account details, private logs, uploaded files, or full transcripts in a public issue. For a sensitive report, contact the maintainer through a private channel already agreed with them; this repository does not publish a personal messaging address. Public non-sensitive bugs can use [GitHub Issues](https://github.com/jyb114/pocket-bridge/issues).
 
+Diagnostic exports apply redaction rules and check for collected local credentials; this is not a guarantee that every private detail has been removed. Device summaries include only a fixed device/browser classification, timestamps and state flags, not custom labels, raw user agents or device source addresses. Other status and log text still needs review before sharing. Do not attach an unreviewed bundle or the raw `logs/` directory to a public issue. If redaction misses something, report the shape of the problem with synthetic values rather than publishing the original content.
+
+For a reproducible public bug report, include the Pocket Bridge and DSH versions, Windows version, phone OS/browser, connection type (for example, LAN or temporary HTTPS tunnel, without its address), steps, expected result and observed result. A cropped, manually reviewed screenshot or synthetic example is preferable to a full diagnostic bundle. Physical-phone and cellular results must be identified as such; isolated tests alone do not establish them.
+
 Before publishing, scan public source, installer payload, and compiled artifacts for secrets and local notification data. Keep runtime license notices. Check both positive encrypted operations and negative unauthorized/retired routes; do not weaken a check merely to make a fixture pass.
+
+## Explicit backup preparation
+
+Backup preparation transfers credentials only after an explicit user click and
+confirmation. Source admission requires an authenticated, proven device and an
+encrypted request. The one-use ticket and receiver receipt are short-lived,
+kept in gateway memory, and bound to the current installation, gateway boot,
+port, device, backup generation/origin and access/encryption key versions. A
+server-verified recipient receipt is required before releasing the content key.
+The secret phase uses a MessagePort tied to the receiving document; a later
+navigation cannot inherit it. Post-message setup uses exact origins and windows,
+never a wildcard target or window.name. Neither secret is put in a navigation
+URL, clipboard, diagnostic response or log. Redirecting preparation fetches fail.
+
+The receiver defers ordinary stored-key startup, verifies its own device cookie
+and encrypted completion with the transferred in-memory key, then requires
+persistent/session storage readback. Failed preparation attempts to restore only its own writes, without replacing
+a later different key it can observe. Rollback is best effort when browser
+storage itself fails; successful saving is never claimed without readback. Successful preparation is a
+point-in-time check of that browser origin, not a promise of future availability.
+Browser data clearing, different browser contexts, key rotation and device
+revocation can invalidate access. Existing code-pinning trust-on-first-use and
+trusted-device limitations still apply; this is not protection against a
+compromised browser, endpoint, or already trusted application code.

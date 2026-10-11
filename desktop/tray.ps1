@@ -352,6 +352,50 @@ function Start-Gateway {
 }
 
 # （$StopFlag 已在上面定义，这里只用它。）
+# A marked child may still target the previous gateway port while startup is
+# moving the pair. Only its complete persisted installation/slot/native proof
+# permits stopping that old target; a valid port or matching name is not proof.
+function Get-BridgePreviousTargetBirth($Info, $Tokens) {
+  $held = $null; $stream = $null; $reader = $null
+  try {
+    Assert-BridgeOwnedStopPaths -RequireLogs
+    $file = Join-Path $LogDir 'tunnels.json'
+    $item = Get-Item -LiteralPath $file -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 131072) { return $null }
+    $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    if ($stream.Length -gt 131072) { return $null }
+    $reader = New-Object IO.StreamReader($stream, [Text.Encoding]::UTF8)
+    $record = $reader.ReadToEnd() | ConvertFrom-Json
+    $instance = Get-BridgeInstanceId
+    if (-not (Test-BridgeUuid $instance) -or $record.version -ne 1 -or $record.instanceId -cne $instance) { return $null }
+    $marker = [regex]::Match([IO.Path]::GetFileName($Tokens[6]), '^(primary|backup)-([0-9a-f]{32})\.log$')
+    $target = [regex]::Match($Tokens[3], '^http://127\.0\.0\.1:([1-9][0-9]{0,4})$')
+    if (-not $marker.Success -or -not $target.Success -or [int]$target.Groups[1].Value -gt 65535) { return $null }
+    $role = $marker.Groups[1].Value; $generation = $marker.Groups[2].Value
+    $slot = $record.slots.$role; $proof = $slot.proof
+    if (-not $slot -or -not $proof -or $slot.role -cne $role -or $slot.generation -cne $generation -or
+        $slot.targetPort -isnot [ValueType] -or [string]$slot.targetPort -cne $target.Groups[1].Value -or
+        $proof.version -ne 1 -or $proof.platform -cne 'win32' -or $proof.role -cne $role -or
+        $proof.generation -cne $generation -or [int]$proof.pid -ne [int]$Info.ProcessId -or
+        $proof.birth -isnot [string] -or $proof.birth -cnotmatch '^[1-9][0-9]{16,18}$' -or
+        $proof.commandLine -cne [string]$Info.CommandLine -or $proof.argv0 -cne $Tokens[0] -or
+        -not (Test-BridgePathEqual $proof.exe $Info.ExecutablePath) -or
+        -not (Test-BridgePathEqual $proof.nativeExe $Info.ExecutablePath) -or
+        -not (Test-BridgePathEqual $proof.logFile $Tokens[6]) -or
+        -not (Test-BridgePathEqual $proof.configFile $Tokens[10]) -or @($proof.args).Count -ne 10) { return $null }
+    for ($i = 0; $i -lt 10; $i++) { if ($proof.args[$i] -cne $Tokens[$i + 1]) { return $null } }
+    $held = Get-Process -Id ([int]$Info.ProcessId) -ErrorAction Stop
+    $null = $held.Handle
+    $birth = $held.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)
+    if ($birth -cne $proof.birth) { return $null }
+    return $birth
+  } catch { return $null }
+  finally {
+    if ($held) { $held.Dispose() }
+    if ($reader) { $reader.Dispose() } elseif ($stream) { $stream.Dispose() }
+  }
+}
+
 function Get-BridgeTunnelProofs([int]$Port) {
   $proofs = New-Object 'Collections.Generic.List[object]'
   $unverified = 0
@@ -370,10 +414,24 @@ function Get-BridgeTunnelProofs([int]$Port) {
       if (-not (Test-BridgePathEqual $info.ExecutablePath $tunnelExe)) { continue }
       $tokens = Split-BridgeProcessArguments $info.CommandLine
       $birth = Get-BridgeBirthMilliseconds $info.CreationDate
-      $owned = $false
+      $owned = $false; $nativeBirth = $null
       if ($tokens -and $null -ne $birth -and (Test-BridgePathEqual $tokens[0] $tunnelExe)) {
         $owned = ($tokens.Count -eq 5 -and $tokens[1] -ceq 'tunnel' -and $tokens[2] -ceq '--url' -and
           $tokens[3] -ceq "http://127.0.0.1:$Port" -and $tokens[4] -ceq '--no-autoupdate')
+        if (-not $owned -and $tokens.Count -eq 11) {
+          $slotLog = $tokens[6]
+          $slotDirectory = Join-Path $LogDir 'tunnels'
+          $marked = ($tokens[1] -ceq 'tunnel' -and $tokens[2] -ceq '--url' -and
+            $tokens[4] -ceq '--no-autoupdate' -and
+            $tokens[5] -ceq '--logfile' -and $tokens[7] -ceq '--metrics' -and $tokens[8] -ceq '127.0.0.1:0' -and
+            (Test-BridgePathEqual ([IO.Path]::GetDirectoryName($slotLog)) $slotDirectory) -and
+            [IO.Path]::GetFileName($slotLog) -cmatch '^(primary|backup)-[0-9a-f]{32}\.log$' -and
+            $tokens[9] -ceq '--config' -and (Test-BridgePathEqual $tokens[10] ([IO.Path]::ChangeExtension($slotLog, '.yml'))))
+          if ($marked) {
+            $owned = $tokens[3] -ceq "http://127.0.0.1:$Port"
+            if (-not $owned) { $nativeBirth = Get-BridgePreviousTargetBirth $info $tokens; $owned = [bool]$nativeBirth }
+          }
+        }
         if (-not $owned -and $namedName) {
           $owned = ($tokens.Count -eq 7 -and $tokens[1] -ceq 'tunnel' -and $tokens[2] -ceq '--config' -and
             (Test-BridgePathEqual $tokens[3] $configPath) -and $tokens[4] -ceq 'run' -and
@@ -382,7 +440,7 @@ function Get-BridgeTunnelProofs([int]$Port) {
       }
       if ($owned) {
         $proofs.Add([pscustomobject]@{ processId = [int]$info.ProcessId; birth = $birth;
-          executable = [string]$info.ExecutablePath; commandLine = [string]$info.CommandLine })
+          executable = [string]$info.ExecutablePath; commandLine = [string]$info.CommandLine; nativeBirth = $nativeBirth })
       } else { $unverified++ }
     }
   } catch { $unverified++ }
@@ -405,6 +463,8 @@ function Stop-BridgeOwnedTunnel($Proof) {
     $null = $heldProcess.Handle
     if ((Get-BridgeBirthMilliseconds $heldProcess.StartTime) -ne $Proof.birth -or
         -not (Test-BridgeSameProcess (Get-BridgeProcessInfo $Proof.processId) $Proof)) { return $false }
+    if ($Proof.nativeBirth -and
+        $heldProcess.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture) -cne $Proof.nativeBirth) { return $false }
     $heldProcess.Kill()
     return $heldProcess.WaitForExit(3000)
   } catch { return $false }

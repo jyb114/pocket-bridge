@@ -25,7 +25,7 @@ const KEY_EPOCH_KEY = '/__dsh-access-key-epoch';
 const DSH_STATIC_CACHE = 'dsh-static-modules-v1';
 const LITE_PIN_REQUIRED = ['/e2ee.js', '/i18n.js', '/dsh-lite-lang.js',
   '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js',
-  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js'];
+  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js', '/dsh-lite-switch.js'];
 const PIN_HASH = /^[a-f0-9]{64}$/i;
 
 function isCacheableDshStaticModule(url) {

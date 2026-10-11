@@ -39,6 +39,7 @@ const SUITE = [
 
   ['test-config.js', [], 'Actual isolated DSH config saves retain legacy and unknown fields; identity changes touch only owned authentication fixtures'],
   ['test-runtime-requirements.js', [], '源码运行的 Node.js 版本门槛与 CI、安装说明一致'],
+  ['test-diagnostic-isolated.js', [], 'Actual stdout/file diagnostic exports omit free-form device labels and source IPs, preserve useful summaries and refuse residual private-key blocks (owned synthetic logs; no live gateway or credentials)'],
   ['test-gateway-listener.js', [], 'Actual owned HTTP/TCP listeners reserve the exact IPv4 tunnel origin, avoid occupied ports, share IPv6/upgrade handlers and roll back incomplete startup (no production service)'],
   ['check-frontend.js', [], '静态检查：脚本注入、id 引用、备选优先级表'],
   ['test-contrast.js', [], '静态检查：文字对比度是否过 AA、键盘焦点是否可见'],
@@ -101,6 +102,14 @@ const SUITE = [
   ['test-dsh-lazy-images.js', [], '已验证 DSH 模块的内嵌图片改为按需取，版本不匹配则原样放行'],
   ['test-dsh-lazy-image-store.js', [], '图片内容哈希、磁盘边界与官方入口改写'],
   ['test-dsh-lite-rpc.js', [], '轻量 DSH RPC 只接受已知方法、加密请求与正确协议参数'],
+  ['test-backup-preparation.js', [], 'Boot-bound one-time backup capabilities, receiver receipts, expiry and revocation (synthetic)'],
+  ['test-backup-preparation-http.js', [], 'Preparation origin/device/proof/E2EE gates, recipient receipt and protected completion (synthetic)'],
+  ['test-backup-preparation-browser.js', [], 'Real Chromium synthetic cross-origin popup, receipt-before-key MessagePort, storage rollback and navigation fencing'],
+  ['test-backup-preparation-ui.js', [], 'Explicit preparation click, document-owned message channel, receipt-before-key, storage rollback and truthful readiness (synthetic DOM)'],
+  ['test-backup-tunnel-api.js', [], 'Backup tunnel desktop opt-in gates, explicit configuration and current gateway-bound safe DTO wiring (synthetic)'],
+  ['test-backup-tunnel-console.js', [], 'Default-off backup setting, dormant unsupported opt-in, confirmation and credential-free/stale copy controls (synthetic DOM)'],
+  ['test-dsh-lite-backup.js', [], 'Full-refresh-only mobile backup prompt, proof gating, safe generations, clipboard fallback and cancellation (synthetic DOM)'],
+  ['test-dsh-lite-backup-browser.js', [], 'Local Chromium mobile backup prompt: genuine reload, back/SPA/reconnect, proof wait, focus, small-screen and multilingual checks'],
   ['test-dsh-lite-addresses.js', [], '手机地址面板经过设备证明和加密包装，明文请求不能读出访问地址'],
   ['test-dsh-lite-attachment.js', [], 'Actual authenticated encrypted attachment entry validates official session references, image bytes and metadata without path or plaintext fallback'],
   ['test-dsh-lite-attachment-gateway.js', [], 'Owned HTTP collector and actual encrypted image handler preserve complete large rasters, exact per-route caps and fail-closed disconnect/overflow/abort behavior'],
@@ -123,6 +132,10 @@ const SUITE = [
   ['test-review-boundaries.js', [], '历史状态与加密失败边界（隔离，不碰真会话）'],
   ['test-narrow-kill.js', ['--static-only'], '窄杀进程：源码检查；本机 cloudflared 查询显式跳过'],
   ['test-tunnel-policy.js', [], 'Explicit none and unsupported providers fail closed before discovery, child processes or network; default and Cloudflare modes preserved (isolated spies)'],
+  ['test-tunnel-process.js', [], 'Exact native process proofs and held-handle stop contracts (synthetic OS queries only; Windows live acceptance remains separate)'],
+  ['test-tunnel-process-windows.js', [], 'Actual Windows PowerShell ownership capture/inspect/held-handle stop against two owned harmless Node children; no real tunnel or network', { platform: 'win32' }],
+  ['test-dual-tunnel-runtime.js', [], 'Explicit Windows Quick opt-in, two independent slots, bounded repair, current-boot readiness and stop/policy fencing (synthetic children/network/clock)'],
+  ['test-refresh-managed.js', [], 'Managed slot refresh is exact-boot-bound, preserves disabled single-primary behavior and never falls into broad legacy cleanup (synthetic HTTP/process/filesystem)'],
   ['test-tunnel-security.js', [], '公网来源边界：禁用 ngrok，非本机 Host 必须经过管理端点与加密闸门（隔离）'],
   ['test-tunnel-probe.js', ['--isolated-only'], 'Owned HTTP/TCP probes require the exact gateway 204, reject foreign services and enforce absolute deadlines (no production tunnel)'],
   ['similarity-audit.js', [], '重复代码审计（只看文件）'],
@@ -159,7 +172,7 @@ for (const [file, args, why, environment] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js', 'test-dsh-lite-backup-browser.js', 'test-backup-preparation-browser.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;

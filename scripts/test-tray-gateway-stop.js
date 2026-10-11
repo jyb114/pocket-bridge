@@ -30,7 +30,7 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($SourcePath, [ref]$tok
 if ($errors.Count) { throw 'Tray source does not parse' }
 $names = @('Test-BridgeUuid','Get-BridgeInstanceId','Get-BridgeCanonicalPath','Test-BridgePathEqual',
   'Split-BridgeProcessArguments','Get-BridgeProcessInfo','Get-BridgeBirthMilliseconds','Get-BridgeGatewayProof',
-  'Get-BridgeHealth','Find-Gateway','Start-Gateway','Get-BridgeTunnelProofs','Test-BridgeSameProcess',
+  'Get-BridgeHealth','Find-Gateway','Start-Gateway','Get-BridgePreviousTargetBirth','Get-BridgeTunnelProofs','Test-BridgeSameProcess',
   'Stop-BridgeOwnedTunnel','Get-BridgeNowMilliseconds','Write-BridgeStopFlag','Set-BridgeStopControls',
   'Pump-BridgeStopEvents','Test-BridgeDaemonOperationPending','Test-BridgeGatewayStartupPending',
   'Test-BridgeShutdownPending','Assert-BridgeOwnedStopPaths','Test-BridgeInstalledTunnelPending',
@@ -43,24 +43,49 @@ $NodeExe = Join-Path $Base 'runtime\node.exe'; $ProxyJs = Join-Path $Base 'scrip
 $StopFlag = Join-Path $LogDir 'user-stopped.flag'; $TunnelExe = Join-Path $Base 'cloudflared\cloudflared.exe'
 $LeasePath = Join-Path $LogDir 'daemon-operation.lock'
 $Instance = '11111111-1111-4111-8111-111111111111'; $Boot = '22222222-2222-4222-8222-222222222222'
-$Birth = [datetime]'2026-10-01T01:02:03.456Z'
+# Explicit script scope avoids production helper locals such as $birth shadowing the synthetic clock.
+$script:FixtureBirth = [datetime]'2026-10-01T01:02:03.456Z'
 [void][IO.Directory]::CreateDirectory($LogDir)
 $script:passes = 0
 function Check($Label, [scriptblock]$Body) { & $Body; $script:passes++; Write-Output ('OK ' + $Label) }
 function Assert($Value, $Message) { if (-not $Value) { throw $Message } }
 function Clone($Value) { return ($Value | ConvertTo-Json -Compress | ConvertFrom-Json) }
+function Save-PreviousManagedPair {
+  $slots=@{}
+  foreach ($role in @('primary','backup')) {
+    $generation = if ($role -eq 'primary') { 'a' * 32 } else { 'b' * 32 }
+    $log = Join-Path (Join-Path $LogDir 'tunnels') ($role + '-' + $generation + '.log')
+    $info = Clone $script:ownTunnel
+    if ($role -eq 'backup') { $info.ProcessId=302 }
+    $config=[IO.Path]::ChangeExtension($log,'.yml')
+    $info.CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8080 --no-autoupdate --logfile "' + $log + '" --metrics 127.0.0.1:0 --config "' + $config + '"')
+    $argv=Split-BridgeProcessArguments $info.CommandLine
+    $slots[$role]=@{ role=$role; generation=$generation; targetPort=8080; proof=@{
+      version=1; platform='win32'; role=$role; generation=$generation; pid=$info.ProcessId;
+      birth=$script:FixtureBirth.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture);
+      exe=$TunnelExe; nativeExe=$TunnelExe; argv0=$TunnelExe; commandLine=$info.CommandLine;
+      args=@($argv[1..10]); logFile=$log; configFile=$config } }
+    if ($role -eq 'primary') { $script:ownTunnel=$info } else { $script:lateTunnel=$info }
+  }
+  $script:tunnelList=@($script:ownTunnel,$script:lateTunnel)
+  $record=@{ version=1; instanceId=$Instance; port=8080; slots=$slots }
+  [IO.File]::WriteAllText((Join-Path $LogDir 'tunnels.json'),($record | ConvertTo-Json -Depth 8 -Compress))
+  return $record
+}
 function Reset {
   if (Test-Path -LiteralPath $StopFlag) { Remove-Item -LiteralPath $StopFlag -Force }
   if (Test-Path -LiteralPath $LeasePath) { Remove-Item -LiteralPath $LeasePath -Force }
   $config = Join-Path $LogDir 'cloudflared-named.yml'
   if (Test-Path -LiteralPath $config) { Remove-Item -LiteralPath $config }
+  $managed = Join-Path $LogDir 'tunnels.json'
+  if (Test-Path -LiteralPath $managed) { Remove-Item -LiteralPath $managed }
   [IO.File]::WriteAllText((Join-Path $LogDir 'instance.json'), ('{"instanceId":"' + $Instance + '"}'))
   [IO.File]::WriteAllText((Join-Path $LogDir 'gateway-port.txt'), '8081')
   $script:ownHealth = [pscustomobject]@{ service='pocket-bridge-gateway'; instanceId=$Instance; bootId=$Boot; pid=101; port=8081 }
   $script:ownProcess = [pscustomobject]@{ ProcessId=101; Name='node.exe'; ExecutablePath=$NodeExe;
-    CommandLine=('"' + $NodeExe + '" "' + $ProxyJs + '"'); CreationDate=$Birth }
+    CommandLine=('"' + $NodeExe + '" "' + $ProxyJs + '"'); CreationDate=$script:FixtureBirth }
   $script:ownTunnel = [pscustomobject]@{ ProcessId=301; Name='cloudflared.exe'; ExecutablePath=$TunnelExe;
-    CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate'); CreationDate=$Birth }
+    CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate'); CreationDate=$script:FixtureBirth }
   $script:tunnelList = @($script:ownTunnel)
   $script:posted=$false; $script:mode='exit'; $script:responseMode='accepted'; $script:preChange=$false
   $script:ownHealthReads=0; $script:afterHealthReads=0; $script:clock=0
@@ -117,7 +142,7 @@ function Get-CimInstance { param($ClassName,$Filter,$ErrorAction)
   if ($Filter -eq 'ProcessId=101') {
     if (-not $script:posted) { return $script:ownProcess }
     if ($script:mode -in @('timeout','health-gone-alive')) { return $script:ownProcess }
-    if ($script:mode -eq 'reused-pid') { $changed=Clone $script:ownProcess; $changed.CreationDate=$Birth.AddDays(1); return $changed }
+    if ($script:mode -eq 'reused-pid') { $changed=Clone $script:ownProcess; $changed.CreationDate=$script:FixtureBirth.AddDays(1); return $changed }
     if ($script:mode -eq 'temporary' -and $script:afterHealthReads -le 1) { return $script:ownProcess }
     $script:events += 'gateway-physically-gone'; return $null
   }
@@ -150,7 +175,7 @@ function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$Tim
 function Get-Process { param($Id,$ErrorAction)
   if ($Id -eq 101) {
     $script:events += 'held-gateway-handle'
-    $start = if ($script:gatewayHandleBirthChanged) { $Birth.AddDays(1) } else { $Birth }
+    $start = if ($script:gatewayHandleBirthChanged) { $script:FixtureBirth.AddDays(1) } else { $script:FixtureBirth }
     $fake=[pscustomobject]@{ Id=$Id; Handle=1; StartTime=$start }
     $fake | Add-Member ScriptProperty HasExited {
       if ($script:forceHeldGatewayAlive) { return $false }
@@ -162,7 +187,8 @@ function Get-Process { param($Id,$ErrorAction)
   }
   Assert ($Id -in @(301,302)) 'Unverified native process lookup'
   $script:events += 'held-tunnel-handle'
-  $start = if ($script:tunnelHandleMode -eq 'changed-birth') { $Birth.AddDays(1) } else { $Birth }
+  $start = if ($script:tunnelHandleMode -eq 'changed-birth') { $script:FixtureBirth.AddDays(1) } else { $script:FixtureBirth }
+  if ($script:tunnelHandleMode -eq 'changed-sub-ms') { $start = $script:FixtureBirth.AddTicks(1) }
   $fake=[pscustomobject]@{ Id=$Id; Handle=1; StartTime=$start }
   $fake | Add-Member ScriptMethod Kill {
     $script:killed += $this.Id; $script:events += 'held-tunnel-kill'
@@ -293,6 +319,68 @@ ingress:
   $script:ownTunnel.CommandLine=$script:ownTunnel.CommandLine.Replace($config,$config + '.other')
   Assert ((Get-BridgeTunnelProofs 8081).proofs.Count -eq 0) 'Config substring accepted'
 }
+Check 'two managed Quick slots require distinct exact generated log and config paths' {
+  Reset
+  $slotDirectory=Join-Path $LogDir 'tunnels'
+  $primaryLog=Join-Path $slotDirectory ('primary-' + ('a' * 32) + '.log')
+  $backupLog=Join-Path $slotDirectory ('backup-' + ('b' * 32) + '.log')
+  $one=Clone $script:ownTunnel; $two=Clone $script:ownTunnel; $two.ProcessId=302
+  $one.CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate --logfile "' + $primaryLog + '" --metrics 127.0.0.1:0 --config "' + [IO.Path]::ChangeExtension($primaryLog,'.yml') + '"')
+  $two.CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate --logfile "' + $backupLog + '" --metrics 127.0.0.1:0 --config "' + [IO.Path]::ChangeExtension($backupLog,'.yml') + '"')
+  $script:tunnelList=@($one,$two)
+  Assert ((Get-BridgeTunnelProofs 8081).proofs.Count -eq 2) 'Managed pair not recognized'
+  $two.CommandLine=$two.CommandLine.Replace('127.0.0.1:0','0.0.0.0:0')
+  Assert ((Get-BridgeTunnelProofs 8081).proofs.Count -eq 1) 'Expanded metrics scope accepted'
+  $two.CommandLine=$one.CommandLine.Replace([IO.Path]::ChangeExtension($primaryLog,'.yml'),[IO.Path]::ChangeExtension($backupLog,'.yml'))
+  Assert ((Get-BridgeTunnelProofs 8081).proofs.Count -eq 1) 'Mismatched generation config accepted'
+}
+Check 'desktop Stop retires both verified managed slots after gateway exit' {
+  Reset
+  $slotDirectory=Join-Path $LogDir 'tunnels'
+  $primaryLog=Join-Path $slotDirectory ('primary-' + ('a' * 32) + '.log')
+  $backupLog=Join-Path $slotDirectory ('backup-' + ('b' * 32) + '.log')
+  $script:ownTunnel.CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate --logfile "' + $primaryLog + '" --metrics 127.0.0.1:0 --config "' + [IO.Path]::ChangeExtension($primaryLog,'.yml') + '"')
+  $script:lateTunnel=Clone $script:ownTunnel; $script:lateTunnel.ProcessId=302
+  $script:lateTunnel.CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate --logfile "' + $backupLog + '" --metrics 127.0.0.1:0 --config "' + [IO.Path]::ChangeExtension($backupLog,'.yml') + '"')
+  $script:tunnelList=@($script:ownTunnel,$script:lateTunnel)
+  $result=Stop-Gateway
+  Assert ($result.ok -and $result.gatewayStopped -and $result.tunnelsStopped -eq 2) 'Managed pair was not stopped'
+  Assert ($script:killed.Count -eq 2 -and 301 -in $script:killed -and 302 -in $script:killed) 'Wrong managed processes stopped'
+  Assert ($script:events.IndexOf('gateway-physically-gone') -lt $script:events.IndexOf('held-tunnel-kill')) 'Tunnel stopped before gateway exit'
+}
+Check 'desktop Stop proves and stops both previous-port managed generations' {
+  Reset; $null=Save-PreviousManagedPair
+  $result=Stop-Gateway
+  Assert ($result.ok -and $result.tunnelsStopped -eq 2 -and $script:killed.Count -eq 2) 'Previous-port pair left behind'
+}
+Check 'previous-port managed proof rejects altered installation slot and native identity' {
+  foreach ($kind in @('missing','instance','role','generation','target','argv','executable','birth','pid','command','log','config')) {
+    Reset; $record=Save-PreviousManagedPair; $slot=$record.slots.primary
+    if ($kind -eq 'instance') { $record.instanceId='33333333-3333-4333-8333-333333333333' }
+    if ($kind -eq 'role') { $slot.role='backup' }
+    if ($kind -eq 'generation') { $slot.generation='c' * 32 }
+    if ($kind -eq 'target') { $slot.targetPort=9999 }
+    if ($kind -eq 'argv') { $slot.proof.args[2]='http://127.0.0.1:9999' }
+    if ($kind -eq 'executable') { $slot.proof.exe=$TunnelExe + '.other' }
+    if ($kind -eq 'birth') { $slot.proof.birth=$script:FixtureBirth.AddTicks(1).ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture) }
+    if ($kind -eq 'pid') { $slot.proof.pid=999 }
+    if ($kind -eq 'command') { $slot.proof.commandLine += ' --unknown' }
+    if ($kind -eq 'log') { $slot.proof.logFile=$slot.proof.logFile + '.other' }
+    if ($kind -eq 'config') { $slot.proof.configFile=$slot.proof.configFile + '.other' }
+    [IO.File]::WriteAllText((Join-Path $LogDir 'tunnels.json'),($record | ConvertTo-Json -Depth 8 -Compress))
+    if ($kind -eq 'missing') { Remove-Item -LiteralPath (Join-Path $LogDir 'tunnels.json') }
+    $found=Get-BridgeTunnelProofs 8081
+    Assert (@($found.proofs | Where-Object { $_.processId -eq 301 }).Count -eq 0) ('Altered old-target proof accepted: ' + $kind)
+    Assert ($script:killed.Count -eq 0) 'Discovery signaled a process'
+  }
+}
+Check 'previous-port held stop rechecks full native birth precision' {
+  Reset; $null=Save-PreviousManagedPair
+  $proof=@((Get-BridgeTunnelProofs 8081).proofs | Where-Object { $_.processId -eq 301 })[0]
+  Assert ($null -ne $proof -and $proof.nativeBirth) 'No exact prior-target proof captured'
+  $script:tunnelHandleMode='changed-sub-ms'
+  Assert (-not (Stop-BridgeOwnedTunnel $proof) -and $script:killed.Count -eq 0) 'Sub-millisecond changed birth was signaled'
+}
 Check 'tunnel birth change refuses held-handle kill' {
   Reset; $script:tunnelHandleMode='changed-birth'; $result=Stop-Gateway
   Assert ($result.gatewayStopped -and $result.code -eq 'tunnel-unconfirmed' -and $script:killed.Count -eq 0) 'Reused tunnel PID killed'
@@ -394,7 +482,7 @@ Check 'lease appearing before final result prevents a completed stop claim' {
   Assert (-not $result.ok -and $result.code -eq 'shutdown-pending' -and $result.tunnelsStopped -eq 1) 'Final lease race counted as complete'
 }
 Check 'another exact owned gateway startup without health prevents completion and later Start' {
-  Reset; $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$Birth.AddSeconds(1)
+  Reset; $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$script:FixtureBirth.AddSeconds(1)
   $script:otherGatewayList=@($startup); $result=Stop-Gateway; Start-Gateway
   Assert ($result.code -eq 'shutdown-pending' -and $script:killed.Count -eq 0 -and $script:fakeStartCount -eq 0) 'Unhealthy owned startup was ignored'
   Assert ((Test-Path -LiteralPath $StopFlag) -and $script:tunnelScans -eq 0) 'Startup refusal lost stop intent'
@@ -516,7 +604,7 @@ Check 'a different healthy gateway cannot replace a still-live pending original 
   Reset; $script:mode='handle-alive'; $null=Stop-Gateway
   $script:forceHeldGatewayAlive=$true; $script:mode='health-stale'
   $script:ownHealth.pid=102
-  $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$Birth.AddSeconds(1)
+  $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$script:FixtureBirth.AddSeconds(1)
   $script:otherGatewayList=@($startup); $result=Stop-Gateway
   Assert ($result.code -eq 'shutdown-pending' -and $script:requestCount -eq 1 -and $script:killed.Count -eq 0) 'New health displaced a held live original'
   Assert ($script:PendingGatewayStopHandle -and $script:PendingGatewayStopProof.processId -eq 101 -and

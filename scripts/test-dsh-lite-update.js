@@ -11,7 +11,7 @@ const script = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-updat
 const manifest = (hash) => ({ files: Object.fromEntries(
   ['/dsh-lite-ui.js', '/dsh-lite-adapter.js', '/dsh-lite-pin.js', '/e2ee.js',
     '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-switch.js',
-    '/i18n.js', '/dsh-lite-lang.js']
+    '/i18n.js', '/dsh-lite-lang.js', '/dsh-backup-prepare.js']
     .map((name) => [name, hash.repeat(64)])) });
 
 function fixture(options = {}) {

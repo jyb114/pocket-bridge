@@ -493,3 +493,10 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
 /* Runtime coverage is advisory and separate from live acceptance evidence. */
 .compatibility-row { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
 .compatibility-row span:last-child { text-align:right; color:var(--muted); }
+
+/* Secret-free recovery address: readable and selectable on narrow phones. */
+.backup-address{display:block;width:100%;box-sizing:border-box;min-height:44px;padding:10px;margin:12px 0;border:1px solid var(--line,#d9e0eb);border-radius:8px;font:inherit;font-size:14px;background:var(--surface,#fff);color:inherit}
+.backup-address[hidden]{display:none}
+.backup-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.backup-actions button{min-height:44px;white-space:normal}
+.backup-warning{padding:12px;border-radius:8px;background:#fff4de;color:#6c4600;line-height:1.6}

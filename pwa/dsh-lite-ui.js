@@ -174,6 +174,261 @@
     return node;
   }
 
+  // A document reload is distinct from route changes, reconnects, tab focus and
+  // back/forward restoration. Keep the latch outside individual UI mounts.
+  var backupDocumentState = null;
+  function createBackupRecovery(options) {
+    var win = window, doc = document;
+    if (!backupDocumentState) backupDocumentState = win.__dshLiteBackupDocumentState || null;
+    if (!backupDocumentState) {
+      var reload = false;
+      try {
+        var entries = win.performance && win.performance.getEntriesByType && win.performance.getEntriesByType('navigation');
+        reload = entries && entries.length ? entries[0].type === 'reload' :
+          !!(win.performance && win.performance.navigation && win.performance.navigation.type === 1);
+      } catch (_) { /* Unknown navigation is never treated as a refresh. */ }
+      backupDocumentState = { eligible: reload, consumed: false };
+      win.__dshLiteBackupDocumentState = backupDocumentState;
+    }
+    var disposed = false, loading = false, serial = 0, panel = null, nodes = null, snapshot = null;
+    var lastRead = 0, autoValue = null, changed = false, previous = '', storageKey = 'dsh-lite-backup-generation';
+    var preparation = win.PocketBridgeBackupPrepare && win.PocketBridgeBackupPrepare.createSource({
+      t: t, ready: ready, read: read, context: function () { return options.context ? options.context() : null; },
+      active: function () { return !!(panel && panel.isConnected); }, onState: function () { render(); }
+    });
+    var MAX_AGE = 180000;
+    try { previous = win.localStorage.getItem(storageKey) || ''; } catch (_) {}
+    function t(value) { return options.t(value); }
+    function element(tag, name, text) {
+      var node = doc.createElement(tag);
+      if (name) node.className = name;
+      if (text) { node.textContent = t(text); node.setAttribute('data-i18n', text); }
+      return node;
+    }
+    function ready() { return !disposed && options.ready() === true; }
+    function safeSlot(data) {
+      var tunnels = data && data.tunnels;
+      var slot = tunnels && tunnels.backup;
+      var result = { enabled: !!(tunnels && tunnels.enabled === true), supported: !!(tunnels && tunnels.supported === true),
+        phase: slot && typeof slot.phase === 'string' ? slot.phase : 'unavailable',
+        code: tunnels && tunnels.code === 'tunnel-migration-unconfirmed' ? tunnels.code : '', url: '', generation: '', checkedAt: 0 };
+      if (!result.enabled || !result.supported || !slot || slot.phase !== 'ready' || slot.reachable !== true) return result;
+      var generation = String(slot.generation == null ? '' : slot.generation);
+      var checkedAt = typeof slot.checkedAt === 'number' ? slot.checkedAt : Date.parse(slot.checkedAt || '');
+      if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(generation) || !Number.isFinite(checkedAt) ||
+          checkedAt > Date.now() + 5000 || Date.now() - checkedAt > MAX_AGE) return result;
+      try {
+        var url = new URL(slot.url);
+        // Only the app's bare origin/path may enter this UI, clipboard or window.
+        // Do not "fix" an accidental credential link by stripping its secrets.
+        if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash ||
+            !/^[a-z0-9-]+\.trycloudflare\.com$/.test(url.hostname) ||
+            (url.pathname !== '/' && url.pathname !== '/dsh-lite') ||
+            (slot.origin && slot.origin !== url.origin) ||
+            (slot.url !== url.origin && slot.url !== url.origin + url.pathname)) return result;
+        result.url = url.origin + '/dsh-lite';
+        result.generation = generation;
+        result.checkedAt = checkedAt;
+      } catch (_) {}
+      return result;
+    }
+    function usable() {
+      return ready() && !doc.hidden && snapshot && snapshot.url && typeof snapshot.current === 'function' && snapshot.current() &&
+        Date.now() - snapshot.checkedAt <= MAX_AGE && snapshot.checkedAt <= Date.now() + 5000;
+    }
+    function remember(value) {
+      if (!value.url) return;
+      var identity = value.generation + '|' + new URL(value.url).origin;
+      if (previous && previous !== identity) changed = true;
+      previous = identity;
+      // This remembers only the public address generation, never authentication
+      // material and never a claim that another origin has been prepared.
+      try { win.localStorage.setItem(storageKey, identity); } catch (_) {}
+    }
+    function render(message) {
+      if (!nodes || !panel || !panel.isConnected) return;
+      var valid = usable();
+      nodes.address.value = valid ? snapshot.url : '';
+      nodes.address.hidden = !valid;
+      nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading;
+      nodes.check.disabled = loading || !ready();
+      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === win.location.origin;
+      nodes.warning.hidden = !changed;
+      nodes.using.hidden = !(valid && win.location && new URL(snapshot.url).origin === win.location.origin);
+      var preparationResult = preparation && preparation.result();
+      var preparedHere = valid && preparationResult && preparationResult.phase === 'prepared' &&
+        preparationResult.origin === new URL(snapshot.url).origin && preparationResult.generation === snapshot.generation;
+      nodes.status.textContent = t(message || (preparedHere ? preparationResult.message :
+        preparationResult && preparationResult.phase !== 'prepared' && !loading ? preparationResult.message : loading ? '正在检查当前备用地址…' :
+        !ready() ? '请先完成当前页面的登录与加密验证。' :
+        snapshot && snapshot.code === 'tunnel-migration-unconfirmed' ? '当前主通道的管理归属未确认，备用启动已暂停以保留现有连接。请在电脑上先“停止桥接”，确认停止后再“启动桥接”，然后重新检查；期间手机连接会中断。' :
+        snapshot && !snapshot.supported ? '当前连接方式不支持备用隧道。' :
+        snapshot && !snapshot.enabled ? '备用隧道未开启。请在电脑控制台中选择是否启用。' :
+        valid ? '备用通道可达；此手机在该地址的登录与加密状态尚未验证。' :
+        '当前没有已验证可达的备用地址。请稍后重新检查。'));
+    }
+    async function read() {
+      if (!ready()) throw new Error('not-ready');
+      var e2ee = win.DshE2EE, secret = win.__dshE2eeSecret;
+      var connection = options.context ? options.context() : null;
+      function current() { return ready() && win.DshE2EE === e2ee && win.__dshE2eeSecret === secret &&
+        (!options.context || options.context() === connection); }
+      if (!e2ee || typeof e2ee.encryptedFetch !== 'function' || !win.__dshE2eeSecret) throw new Error('not-ready');
+      var aborter = typeof win.AbortController === 'function' ? new win.AbortController() : null;
+      var timer;
+      var deadline = new Promise(function (_resolve, reject) {
+        timer = win.setTimeout(function () {
+          if (aborter) aborter.abort();
+          reject(new Error('address-timeout'));
+        }, 10000);
+      });
+      var operation = (async function () {
+        var response = await e2ee.encryptedFetch(secret, '/__dsh/lite-addresses', {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'content-type': 'application/json; charset=utf-8' }, body: '{}',
+          signal: aborter ? aborter.signal : undefined
+        });
+        if (!response.ok || !response.headers || response.headers.get('x-dsh-e2ee-decrypted') !== '1' ||
+            response.headers.get('x-dsh-e2ee') === '1') throw new Error('unverified-response');
+        var data = await response.json();
+        if (!data || data.ok !== true) throw new Error('unavailable');
+        if (!current()) throw new Error('connection-changed');
+        var value = safeSlot(data); value.current = current; return value;
+      })();
+      try { return await Promise.race([operation, deadline]); }
+      finally { win.clearTimeout(timer); }
+    }
+    async function refresh(copyAfter) {
+      if (disposed || loading || !ready()) return;
+      var request = ++serial;
+      loading = true; snapshot = null; render();
+      try {
+        var value = await read();
+        if (disposed || request !== serial || !ready() || !panel || !panel.isConnected) return;
+        snapshot = value; lastRead = Date.now(); remember(value);
+        loading = false; render();
+        if (!copyAfter || !usable()) return;
+        var url = snapshot.url;
+        loading = true; renderButtons();
+        try {
+          if (!win.navigator.clipboard || typeof win.navigator.clipboard.writeText !== 'function') throw new Error('manual-copy');
+          await win.navigator.clipboard.writeText(url);
+          if (request === serial && panel && panel.isConnected) render('已复制备用地址。请妥善保存，并先在此手机上完成该地址的登录与加密设置。');
+        } catch (_) {
+          if (request !== serial || !panel || !panel.isConnected || !usable()) return;
+          nodes.address.focus(); nodes.address.select();
+          render('浏览器未允许自动复制。地址已选中，请长按或使用复制快捷键。');
+        }
+      } catch (_) {
+        if (request === serial && !disposed) { snapshot = null; loading = false; render('无法验证备用地址。请检查连接后重试。'); }
+      } finally {
+        if (request === serial && !disposed) { loading = false; renderButtons(); }
+      }
+    }
+    function renderButtons() {
+      if (!nodes || !panel || !panel.isConnected) return;
+      var valid = usable();
+      nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading;
+      nodes.check.disabled = loading || !ready();
+      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === win.location.origin;
+    }
+    function show(initial) {
+      if (disposed) return;
+      serial++; loading = false; snapshot = initial || null;
+      if (initial) { lastRead = Date.now(); remember(initial); }
+      panel = options.overlay(t('保存当前备用地址'), function (body, box) {
+        box.id = 'dsh-lite-backup-dialog';
+        var heading = box.querySelector('.screen-bar strong');
+        if (heading) heading.setAttribute('data-i18n', '保存当前备用地址');
+        var close = box.querySelector('.screen-bar button');
+        if (close) close.setAttribute('data-i18n', '关闭');
+        var explanation = element('p', 'panel-line', '网页刷新后，请保存当前备用地址。主地址失效时，可尝试打开它。');
+        var status = element('p', 'panel-line');
+        status.id = 'dsh-lite-backup-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+        var warning = element('p', 'backup-warning', '备用地址已更换。旧地址可能失效；请在新地址重新完成登录与加密设置。');
+        warning.id = 'dsh-lite-backup-changed'; warning.setAttribute('role', 'note');
+        var address = element('input', 'backup-address');
+        address.id = 'dsh-lite-backup-address'; address.type = 'text'; address.readOnly = true; address.hidden = true;
+        address.setAttribute('aria-label', t('不含凭据的备用地址')); address.setAttribute('data-i18n-aria', '不含凭据的备用地址'); address.autocomplete = 'off'; address.spellcheck = false;
+        var actions = element('div', 'backup-actions');
+        function button(id, text, fn) {
+          var node = element('button', 'screen-action', text); node.id = id; node.type = 'button';
+          node.addEventListener('click', fn); actions.append(node); return node;
+        }
+        var prepare = button('dsh-lite-backup-prepare', '准备备用入口', function () { if (usable() && preparation) preparation.begin(); });
+        var copy = button('dsh-lite-backup-copy', '复制当前备用地址', function () { refresh(true); });
+        var select = button('dsh-lite-backup-select', '选择地址以手动复制', function () {
+          if (!usable()) { snapshot = null; render(); return; }
+          address.focus(); address.select(); render('地址已选中，请长按或使用复制快捷键。');
+        });
+        var open = button('dsh-lite-backup-open', '打开备用地址', function () {
+          if (!usable()) { snapshot = null; render(); return; }
+          win.open(snapshot.url, '_blank', 'noopener,noreferrer');
+        });
+        var check = button('dsh-lite-backup-check', '重新检查备用地址', function () { refresh(false); });
+        var using = element('p', 'backup-warning', '此页面正在使用备用通道。保存此地址不会增加另一条可切换的通道。');
+        using.id = 'dsh-lite-backup-using'; using.hidden = true;
+        var preparationNote = element('p', 'panel-line', '首次使用请点击“准备备用入口”，在新窗口完成此浏览器的登录与加密验证。只有你主动点击并确认后才会传递凭据；复制地址始终不含凭据。');
+        preparationNote.id = 'dsh-lite-backup-preparation';
+        var risk = element('p', 'panel-line', '主备通道仍依赖同一台电脑、网络和 Cloudflare，不能保证在这些服务故障时可用。');
+        body.append(explanation, status, warning, using, address, actions, preparationNote, risk);
+        nodes = { status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check, prepare: prepare };
+      }, options.opener);
+      render();
+      if (!initial) refresh(false);
+    }
+    async function maybePrompt() {
+      if (!backupDocumentState.eligible || backupDocumentState.consumed || !ready() || doc.hidden) return;
+      if (doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) return;
+      backupDocumentState.consumed = true;
+      var request = ++serial;
+      try {
+        var value = await read();
+        if (disposed || request !== serial || !ready() || !backupDocumentState.eligible || doc.hidden) return;
+        // Disabled installations stay quiet. The settings entry is always there.
+        if (!value.enabled) return;
+        if (doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) { autoValue = value; return; }
+        show(value);
+      } catch (_) {
+        // A failed read cannot establish opt-in. Do not interrupt an unrelated
+        // login/reconnect failure; the optional settings panel allows a retry.
+      }
+    }
+    function update() {
+      if (disposed) return;
+      if (preparation) preparation.update();
+      if (!ready() || doc.hidden) { serial++; loading = false; snapshot = null; autoValue = null; render(); return; }
+      if (panel && panel.isConnected) {
+        render();
+        if (snapshot && !usable()) { snapshot = null; render(); }
+        if (!loading && Date.now() - lastRead > 15000) refresh(false);
+      }
+      if (autoValue && backupDocumentState.eligible && !doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) {
+        var pending = autoValue; autoValue = null; if (pending.current && pending.current()) show(pending);
+      }
+      maybePrompt();
+    }
+    function restore(event) {
+      if (event.persisted) { backupDocumentState.eligible = false; invalidate(); }
+    }
+    function invalidate() {
+      if (preparation) preparation.cancel();
+      serial++; loading = false; snapshot = null; autoValue = null;
+      if (panel && panel.isConnected && panel.__liteClose) panel.__liteClose(false);
+      panel = null; nodes = null;
+    }
+    function visibility() { if (doc.hidden) { serial++; loading = false; snapshot = null; autoValue = null; render(); } }
+    win.addEventListener('pageshow', restore);
+    win.addEventListener('pagehide', invalidate);
+    doc.addEventListener('visibilitychange', visibility);
+    return { show: function () { show(); }, update: update, dispose: function () {
+      if (preparation) preparation.dispose();
+      disposed = true; invalidate();
+      win.removeEventListener('pageshow', restore); win.removeEventListener('pagehide', invalidate);
+      doc.removeEventListener('visibilitychange', visibility);
+    } };
+  }
+
   function mount(adapter, connectionInfo) {
     if (active) active.dispose();
     if (!adapter || typeof adapter.connect !== 'function') throw new Error('DSH lite adapter is unavailable');
@@ -496,6 +751,7 @@
       refs.projectsToggle.setAttribute('aria-expanded', String(!!open));
     }
     function setStatus(value) {
+      if (state.connection !== value) backupConnectionEpoch++;
       state.connection = value;
       // 状态**文案**单独记一份。为什么不复用 `state.connection`：
       // 它会被别处（比如适配器重连）改动，而"连接断开"那行字是使用者最后看到的事实。
@@ -3515,7 +3771,10 @@
       var compatibility = el('button', 'menu-extra', t('连接与兼容性'));
       compatibility.type = 'button';
       compatibility.addEventListener('click', showCompatibility);
-      menu.append(bal, addr, compatibility);
+      var backup = el('button', 'menu-extra', t('保存备用地址'));
+      backup.id = 'dsh-lite-backup-settings'; backup.type = 'button';
+      backup.addEventListener('click', function () { if (backupRecovery) backupRecovery.show(); });
+      menu.append(bal, addr, backup, compatibility);
       // C8 三种语言的切换入口。放在设置里：它不是每天要用的东西，
       // 但"猜错了还改不回来"比"猜错"更让人恼火，所以必须有个地方能改。
       if (window.DshI18n && typeof window.DshI18n.makeSwitcher === 'function') {
@@ -3667,6 +3926,7 @@
         readiness === 'pending' ? t('加密待验证') : t('加密未就绪');
       node.textContent = (readiness === 'on' ? '🔒 ' : readiness === 'pending' ? '◷ ' : '⚠️ ') + title;
       node.setAttribute('aria-label', title);
+      if (backupRecovery) backupRecovery.update();
     }
     function explainCrypto() {
       var readiness = encryptionReadiness();
@@ -3686,6 +3946,11 @@
         body.append(lan);
       });
     }
+    var backupConnectionEpoch = 0;
+    var backupRecovery = createBackupRecovery({ t: t, overlay: overlay, opener: refs.railSettings,
+      context: function () { return backupConnectionEpoch; },
+      ready: function () { return encryptionReadiness() === 'on'; } });
+    mountCleanups.push(function () { backupRecovery.dispose(); });
     (function installCryptoChip() {
       updateCryptoChip();
       if (refs.cryptoChip) {
