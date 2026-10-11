@@ -2,8 +2,15 @@ name: Windows installer
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packaging/windows/**'
+      - 'scripts/test-windows-installer.js'
   push:
     tags: ['v*']
+
+permissions:
+  contents: read
 
 jobs:
   windows-x64:
