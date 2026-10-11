@@ -264,4 +264,45 @@ check('real staging rejects each missing new required module and excludes privat
   }
 });
 
+check('installed smoke injects synthetic egress before imports and refuses unexpected network without changing payload', () => {
+  const preload = builder.match(/\$preloadSource = @'\r?\n([\s\S]*?)\r?\n'@/)?.[1];
+  assert(preload, 'builder must define its actual test-only preload');
+  const base = 'C:\\owned install with spaces', work = 'C:\\owned build with spaces';
+  const cfg = {}, refusals = [], calls = [];
+  let captured;
+  function Socket() {}
+  Socket.prototype.connect = function (...args) { calls.push(args); return 'loopback'; };
+  const sandbox = { __dirname: work, process: { cwd: () => base }, cfg,
+    capture(value) { captured = JSON.parse(JSON.stringify(value)); },
+    require(name) {
+      if (name === 'node:path') return path.win32;
+      if (name === 'node:net') return { Socket };
+      if (name === 'node:fs') return {
+        readFileSync(file) { assert.equal(file, path.win32.join(base, 'installer-test.flag')); return 'temporary installer smoke test'; },
+        appendFileSync(file, value) { assert.equal(file, path.win32.join(work, 'installer-network-refusals.txt')); refusals.push(value); }
+      };
+      assert.equal(name, path.win32.join(base, 'scripts', 'config.js'));
+      return cfg;
+    }
+  };
+  vm.runInNewContext(preload + '\ncfg.probeEgress().then(value => capture(value));', sandbox, { microtaskMode: 'afterEvaluate' });
+  assert.deepEqual(captured, { ipv4: '198.51.100.10', ipv6: '2001:db8::10', errors: [] });
+  const socket = new Socket();
+  assert.equal(socket.connect({ host: '127.0.0.1', port: 1 }), 'loopback');
+  assert.equal(socket.connect(1, '::1'), 'loopback');
+  assert.equal(socket.connect([{ host: '127.0.0.1', port: 1 }]), 'loopback');
+  for (const args of [[{ host: '198.51.100.1', port: 1 }], [{ host: 'example.invalid', port: 1 }], [1]])
+    assert.throws(() => socket.connect(...args), /refused unexpected network/);
+  assert.throws(() => sandbox.fetch('https://example.invalid'), /refused unexpected network/);
+  assert.equal(calls.length, 3, 'blocked attempts never reach native connect or DNS');
+  assert.equal(refusals.length, 4, 'swallowed refusals remain visible to the builder');
+  assert.match(builder, /\$networkPreload = Join-Path \$work 'installer-network\.cjs'/);
+  assert.match(builder, /-ArgumentList @\('--require', \('\"' \+ \$networkPreload \+ '\"'\), 'scripts\\mobile-proxy\.js'\)/);
+  assert(builder.indexOf('WriteAllText($networkPreload') < builder.indexOf('$gateway = Start-Process'));
+  assert(builder.indexOf('if (Test-Path -LiteralPath $networkRefusals)') > builder.indexOf('$gateway.WaitForExit'));
+  assert.match(builder, /Installed smoke did not use the exact synthetic egress probe/);
+  assert.match(builder, /\$env:DSH_HOME = \$savedDshHome/);
+  assert.match(builder, /\$env:DSH_GW_NO_NOTIFY = \$savedNoNotify/);
+});
+
 console.log(`Passed ${passed} Windows installer source contracts; no build/install/runtime acceptance was run.`);

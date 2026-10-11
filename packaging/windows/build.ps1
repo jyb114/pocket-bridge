@@ -205,11 +205,46 @@ try {
     $listener.Stop()
     $savedGatewayPort = $env:DSH_GW_PORT
     $savedCredentials = $env:DSH_CREDENTIALS_FILE
+    $savedDshHome = $env:DSH_HOME
+    $savedNoNotify = $env:DSH_GW_NO_NOTIFY
     $env:DSH_GW_PORT = [string]$testPort
     $env:DSH_CREDENTIALS_FILE = Join-Path $work 'no-dsh-credentials.yaml'
+    $env:DSH_HOME = Join-Path $work 'no-dsh-home'
+    $env:DSH_GW_NO_NOTIFY = '1'
+    # Test-only preload lives outside the installed payload. Keep every installed
+    # production byte unchanged while preventing import-time IP-service probes.
+    $networkPreload = Join-Path $work 'installer-network.cjs'
+    $networkRefusals = Join-Path $work 'installer-network-refusals.txt'
+    $preloadSource = @'
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+const base = process.cwd();
+if (fs.readFileSync(path.join(base, 'installer-test.flag'), 'utf8') !== 'temporary installer smoke test') {
+  throw Error('Installer network fixture requires its owned install marker');
+}
+function refuse(kind) {
+  fs.appendFileSync(path.join(__dirname, 'installer-network-refusals.txt'), kind + '\n');
+  throw Error('Installer fixture refused unexpected network activity: ' + kind);
+}
+globalThis.fetch = () => refuse('fetch');
+const connect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0];
+  const host = first && typeof first === 'object' ? first.host :
+    typeof args[1] === 'string' ? args[1] : null;
+  if (host !== '127.0.0.1' && host !== '::1') return refuse('non-loopback TCP');
+  return connect.apply(this, args);
+};
+require(path.join(base, 'scripts', 'config.js')).probeEgress = async () => ({
+  ipv4: '198.51.100.10', ipv6: '2001:db8::10', errors: []
+});
+'@
+    [IO.File]::WriteAllText($networkPreload, $preloadSource, [Text.UTF8Encoding]::new($false))
     $gateway = $null
     try {
-      $gateway = Start-Process -FilePath $installedNode -ArgumentList 'scripts\mobile-proxy.js' `
+      $gateway = Start-Process -FilePath $installedNode -ArgumentList @('--require', ('"' + $networkPreload + '"'), 'scripts\mobile-proxy.js') `
         -WorkingDirectory $testInstall -WindowStyle Hidden -PassThru
       $healthy = $false
       for ($attempt = 0; $attempt -lt 30; $attempt++) {
@@ -228,6 +263,15 @@ try {
       }
       $env:DSH_GW_PORT = $savedGatewayPort
       $env:DSH_CREDENTIALS_FILE = $savedCredentials
+      $env:DSH_HOME = $savedDshHome
+      $env:DSH_GW_NO_NOTIFY = $savedNoNotify
+    }
+    if ($gateway -and -not $gateway.HasExited) { throw 'Owned installer gateway shutdown was not confirmed' }
+    if (Test-Path -LiteralPath $networkRefusals) { throw 'Installed smoke attempted unexpected application network activity' }
+    $egress = Get-Content -LiteralPath (Join-Path $testInstall 'logs\egress.json') -Raw | ConvertFrom-Json
+    if ($egress.value.ipv4 -cne '198.51.100.10' -or $egress.value.ipv6 -cne '2001:db8::10' -or
+        @($egress.value.errors).Count -ne 0 -or @($egress.value.PSObject.Properties).Count -ne 3) {
+      throw 'Installed smoke did not use the exact synthetic egress probe'
     }
     $testLog = Join-Path $testInstall 'logs'
     $testUploads = Join-Path $testInstall 'uploads'
