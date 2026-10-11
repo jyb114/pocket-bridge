@@ -87,7 +87,10 @@ async function main() {
     for (const [owned, proof] of [[primary, primaryProof], [backup, backupProof]]) {
       assert(proof, 'Native capture must succeed, not skip or substitute a mock');
       assert.equal(proof.pid, owned.child.pid);
-      assert.equal(proof.exe.toLowerCase(), fs.realpathSync(executable).toLowerCase());
+      // The adapter uses fs.promises.realpath/native canonicalization. On
+      // Windows the legacy sync resolver can retain RUNNER~1 while native
+      // CIM and the async resolver return the same expanded long path.
+      assert.equal(proof.exe.toLowerCase(), (await fs.promises.realpath(executable)).toLowerCase());
       assert.deepEqual(proof.args, owned.launch.args);
       assert.match(proof.birth, /^[1-9][0-9]{16,18}$/);
       assert.equal((await adapter.inspect(proof)).state, 'live');

@@ -43,7 +43,8 @@ $NodeExe = Join-Path $Base 'runtime\node.exe'; $ProxyJs = Join-Path $Base 'scrip
 $StopFlag = Join-Path $LogDir 'user-stopped.flag'; $TunnelExe = Join-Path $Base 'cloudflared\cloudflared.exe'
 $LeasePath = Join-Path $LogDir 'daemon-operation.lock'
 $Instance = '11111111-1111-4111-8111-111111111111'; $Boot = '22222222-2222-4222-8222-222222222222'
-$Birth = [datetime]'2026-10-01T01:02:03.456Z'
+# Explicit script scope avoids production helper locals such as $birth shadowing the synthetic clock.
+$script:FixtureBirth = [datetime]'2026-10-01T01:02:03.456Z'
 [void][IO.Directory]::CreateDirectory($LogDir)
 $script:passes = 0
 function Check($Label, [scriptblock]$Body) { & $Body; $script:passes++; Write-Output ('OK ' + $Label) }
@@ -61,7 +62,7 @@ function Save-PreviousManagedPair {
     $argv=Split-BridgeProcessArguments $info.CommandLine
     $slots[$role]=@{ role=$role; generation=$generation; targetPort=8080; proof=@{
       version=1; platform='win32'; role=$role; generation=$generation; pid=$info.ProcessId;
-      birth=$Birth.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture);
+      birth=$script:FixtureBirth.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture);
       exe=$TunnelExe; nativeExe=$TunnelExe; argv0=$TunnelExe; commandLine=$info.CommandLine;
       args=@($argv[1..10]); logFile=$log; configFile=$config } }
     if ($role -eq 'primary') { $script:ownTunnel=$info } else { $script:lateTunnel=$info }
@@ -82,9 +83,9 @@ function Reset {
   [IO.File]::WriteAllText((Join-Path $LogDir 'gateway-port.txt'), '8081')
   $script:ownHealth = [pscustomobject]@{ service='pocket-bridge-gateway'; instanceId=$Instance; bootId=$Boot; pid=101; port=8081 }
   $script:ownProcess = [pscustomobject]@{ ProcessId=101; Name='node.exe'; ExecutablePath=$NodeExe;
-    CommandLine=('"' + $NodeExe + '" "' + $ProxyJs + '"'); CreationDate=$Birth }
+    CommandLine=('"' + $NodeExe + '" "' + $ProxyJs + '"'); CreationDate=$script:FixtureBirth }
   $script:ownTunnel = [pscustomobject]@{ ProcessId=301; Name='cloudflared.exe'; ExecutablePath=$TunnelExe;
-    CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate'); CreationDate=$Birth }
+    CommandLine=('"' + $TunnelExe + '" tunnel --url http://127.0.0.1:8081 --no-autoupdate'); CreationDate=$script:FixtureBirth }
   $script:tunnelList = @($script:ownTunnel)
   $script:posted=$false; $script:mode='exit'; $script:responseMode='accepted'; $script:preChange=$false
   $script:ownHealthReads=0; $script:afterHealthReads=0; $script:clock=0
@@ -141,7 +142,7 @@ function Get-CimInstance { param($ClassName,$Filter,$ErrorAction)
   if ($Filter -eq 'ProcessId=101') {
     if (-not $script:posted) { return $script:ownProcess }
     if ($script:mode -in @('timeout','health-gone-alive')) { return $script:ownProcess }
-    if ($script:mode -eq 'reused-pid') { $changed=Clone $script:ownProcess; $changed.CreationDate=$Birth.AddDays(1); return $changed }
+    if ($script:mode -eq 'reused-pid') { $changed=Clone $script:ownProcess; $changed.CreationDate=$script:FixtureBirth.AddDays(1); return $changed }
     if ($script:mode -eq 'temporary' -and $script:afterHealthReads -le 1) { return $script:ownProcess }
     $script:events += 'gateway-physically-gone'; return $null
   }
@@ -174,7 +175,7 @@ function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$Tim
 function Get-Process { param($Id,$ErrorAction)
   if ($Id -eq 101) {
     $script:events += 'held-gateway-handle'
-    $start = if ($script:gatewayHandleBirthChanged) { $Birth.AddDays(1) } else { $Birth }
+    $start = if ($script:gatewayHandleBirthChanged) { $script:FixtureBirth.AddDays(1) } else { $script:FixtureBirth }
     $fake=[pscustomobject]@{ Id=$Id; Handle=1; StartTime=$start }
     $fake | Add-Member ScriptProperty HasExited {
       if ($script:forceHeldGatewayAlive) { return $false }
@@ -186,8 +187,8 @@ function Get-Process { param($Id,$ErrorAction)
   }
   Assert ($Id -in @(301,302)) 'Unverified native process lookup'
   $script:events += 'held-tunnel-handle'
-  $start = if ($script:tunnelHandleMode -eq 'changed-birth') { $Birth.AddDays(1) } else { $Birth }
-  if ($script:tunnelHandleMode -eq 'changed-sub-ms') { $start = $Birth.AddTicks(1) }
+  $start = if ($script:tunnelHandleMode -eq 'changed-birth') { $script:FixtureBirth.AddDays(1) } else { $script:FixtureBirth }
+  if ($script:tunnelHandleMode -eq 'changed-sub-ms') { $start = $script:FixtureBirth.AddTicks(1) }
   $fake=[pscustomobject]@{ Id=$Id; Handle=1; StartTime=$start }
   $fake | Add-Member ScriptMethod Kill {
     $script:killed += $this.Id; $script:events += 'held-tunnel-kill'
@@ -361,7 +362,7 @@ Check 'previous-port managed proof rejects altered installation slot and native 
     if ($kind -eq 'target') { $slot.targetPort=9999 }
     if ($kind -eq 'argv') { $slot.proof.args[2]='http://127.0.0.1:9999' }
     if ($kind -eq 'executable') { $slot.proof.exe=$TunnelExe + '.other' }
-    if ($kind -eq 'birth') { $slot.proof.birth=$Birth.AddTicks(1).ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture) }
+    if ($kind -eq 'birth') { $slot.proof.birth=$script:FixtureBirth.AddTicks(1).ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture) }
     if ($kind -eq 'pid') { $slot.proof.pid=999 }
     if ($kind -eq 'command') { $slot.proof.commandLine += ' --unknown' }
     if ($kind -eq 'log') { $slot.proof.logFile=$slot.proof.logFile + '.other' }
@@ -481,7 +482,7 @@ Check 'lease appearing before final result prevents a completed stop claim' {
   Assert (-not $result.ok -and $result.code -eq 'shutdown-pending' -and $result.tunnelsStopped -eq 1) 'Final lease race counted as complete'
 }
 Check 'another exact owned gateway startup without health prevents completion and later Start' {
-  Reset; $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$Birth.AddSeconds(1)
+  Reset; $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$script:FixtureBirth.AddSeconds(1)
   $script:otherGatewayList=@($startup); $result=Stop-Gateway; Start-Gateway
   Assert ($result.code -eq 'shutdown-pending' -and $script:killed.Count -eq 0 -and $script:fakeStartCount -eq 0) 'Unhealthy owned startup was ignored'
   Assert ((Test-Path -LiteralPath $StopFlag) -and $script:tunnelScans -eq 0) 'Startup refusal lost stop intent'
@@ -603,7 +604,7 @@ Check 'a different healthy gateway cannot replace a still-live pending original 
   Reset; $script:mode='handle-alive'; $null=Stop-Gateway
   $script:forceHeldGatewayAlive=$true; $script:mode='health-stale'
   $script:ownHealth.pid=102
-  $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$Birth.AddSeconds(1)
+  $startup=Clone $script:ownProcess; $startup.ProcessId=102; $startup.CreationDate=$script:FixtureBirth.AddSeconds(1)
   $script:otherGatewayList=@($startup); $result=Stop-Gateway
   Assert ($result.code -eq 'shutdown-pending' -and $script:requestCount -eq 1 -and $script:killed.Count -eq 0) 'New health displaced a held live original'
   Assert ($script:PendingGatewayStopHandle -and $script:PendingGatewayStopProof.processId -eq 101 -and

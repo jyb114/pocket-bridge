@@ -230,11 +230,22 @@ async function checkStartupPublication() {
     const context = {
       cfg: { LOG_DIR: logDir, ensureInstanceIdentity: () => ({ instanceId: 'fixture-instance' }),
         loadConfig: () => ({ gatewayPort: 13245, enableLanAccess: true }) },
-      fs, path, server: {}, INSTANCE_ID: null, GATEWAY_BOOT_ID: 'fixture-boot',
+      fs, path, BASE: dir, LOG_DIR: logDir, server: {}, INSTANCE_ID: null, GATEWAY_BOOT_ID: 'fixture-boot',
+      tunnelWatchdog: null, tunnelState: { readTunnelState: () => null },
+      desktopLifecycle: { status: () => ({ phase: 'running' }) },
       gatewayListeners: null, PORT: 13245, TARGET_PORT: 13246, INTERNAL_HOST: 'fixture.local',
       process: { pid: 12345, env: {}, exit(code) { throw Object.assign(Error('fixture-startup-exit'), { exitCode: code }); } },
       refreshDshRuntime: async () => {},
       require(name) {
+        if (name === './tunnel-watchdog.js') return { createTunnelWatchdog(value) {
+          events.push('create-tunnel-watchdog');
+          assert.equal(value.base, dir);
+          assert.deepEqual(JSON.parse(JSON.stringify(value.context())), {
+            config: { gatewayPort: 13245, enableLanAccess: true }, managed: false,
+            phase: 'running', port: 13245, bootId: 'fixture-boot', instanceId: 'fixture-instance', pid: 12345
+          });
+          return { start() { events.push('tunnel-watchdog'); } };
+        } };
         assert.equal(name, './gateway-listener.js', 'startup cannot import or run a native helper in this fixture');
         return { bindGateway(value) { options = value; events.push('binding'); bindingStarted(); return bound; } };
       },
@@ -262,7 +273,8 @@ async function checkStartupPublication() {
   options.onPortBound(13245);
   ok('onPortBound 已执行但真实监听健康检查尚未确认时，不写端口或配对码、不记录启动成功',
     !fs.existsSync(pending.portFile) && !fs.existsSync(pending.pairFile) &&
-      !pending.events.includes('write-pair') && !pending.events.includes('startup-log'));
+      !pending.events.includes('write-pair') && !pending.events.includes('startup-log') &&
+      !pending.events.includes('create-tunnel-watchdog'));
   pending.resolveBind({ port: 13245, ipv6: true });
   await pending.completion;
   const events = pending.events;
@@ -271,6 +283,8 @@ async function checkStartupPublication() {
       events.indexOf('write-pair') < events.indexOf('current-pair') &&
       events.indexOf('current-pair') < events.indexOf('startup-log') &&
       events.indexOf('startup-log') < events.indexOf('dsh-watchdog') &&
+      events.indexOf('dsh-watchdog') < events.indexOf('create-tunnel-watchdog') &&
+      events.indexOf('create-tunnel-watchdog') < events.indexOf('tunnel-watchdog') &&
       !events.includes('codex-watchdog'));
 
   const rejected = fixture('rejected');
@@ -282,7 +296,8 @@ async function checkStartupPublication() {
   ok('监听健康检查失败时退出，不写新端口、不动原配对码或签发时间、不记录成功',
     !fs.existsSync(rejected.portFile) && fs.readFileSync(rejected.pairFile, 'utf8') === '222222' &&
       fs.statSync(rejected.pairFile).mtimeMs === originalMtime && !rejected.events.includes('write-pair') &&
-      !rejected.events.includes('startup-log') && !rejected.events.includes('dsh-watchdog'));
+      !rejected.events.includes('startup-log') && !rejected.events.includes('dsh-watchdog') &&
+      !rejected.events.includes('create-tunnel-watchdog'));
 }
 
 (async () => {
