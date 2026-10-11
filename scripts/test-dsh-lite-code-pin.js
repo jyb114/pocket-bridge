@@ -17,7 +17,7 @@ const manifestBlock = gateway.match(/if \(u\.pathname === '\/code-manifest\.json
 assert.ok(manifestBlock, 'gateway must expose its code-fingerprint manifest');
 const listed = [...manifestBlock[1].matchAll(/'([^']+)'/g)].map((item) => item[1]);
 const liteFiles = ['/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js',
-  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js',
+  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js', '/dsh-lite-switch.js',
   // C8：界面文案（中/英/西）和决定语言的机制都在名单里 ——
   // 它们决定界面"说什么话"，不钉住就等于留了一个没人看着的口子。
   '/i18n.js', '/dsh-lite-lang.js'];
@@ -201,7 +201,7 @@ const sha = (body) => createHash('sha256').update(body).digest('hex');
   await tick();
   current.emit({ type: 'dsh-pin-status-result', pinned: true, files: 8,
     paths: ['/e2ee.js', '/dsh-lite-pin.js', '/dsh-lite-adapter.js',
-      '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js',
+      '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js',
       '/i18n.js', '/dsh-lite-lang.js'] });
   assert.equal(current.nodes.size, 0);
   assert.equal(current.requests.length, 0);

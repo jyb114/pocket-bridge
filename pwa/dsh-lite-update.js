@@ -109,7 +109,7 @@
   var resultTimer = null;
   var buildFiles = ['/dsh-lite-ui.js', '/dsh-lite-adapter.js', '/dsh-lite-pin.js', '/e2ee.js'];
   var requiredFiles = buildFiles.concat(['/dsh-lite-legacy.js', '/dsh-lite-router.js',
-    '/dsh-lite-switch.js', '/i18n.js', '/dsh-lite-lang.js']);
+    '/dsh-lite-switch.js', '/dsh-backup-prepare.js', '/i18n.js', '/dsh-lite-lang.js']);
 
   function waitForActivation(registration) {
     var incoming = registration.installing || registration.waiting ||

@@ -77,6 +77,38 @@ const DSH_LAZY_IMAGE_DIR = path.join(LOG_DIR, 'dsh-onboarding-images');
 const dshDirectories = require('./dsh-directories.js').createDirectoryService({ defaultPath: BASE });
 const serveDshDirectoriesE2ee = e2eeWrap(dshDirectories.handle);
 const serveDshLiteAddressesE2ee = e2eeWrap(serveDshLiteAddresses);
+// Capabilities are kept only in this gateway boot. Readiness and both key
+// versions are re-read for every mint, redeem, completion and source status.
+function backupPreparationContext() {
+  const config = cfg.loadConfig();
+  const tunnels = tunnelState.publicTunnelState(tunnelState.readTunnelState(LOG_DIR), {
+    config, now: Date.now(), instanceId: INSTANCE_ID, port: PORT, bootId: GATEWAY_BOOT_ID });
+  const secret = e2eeSecretOrNull();
+  const version = value => value ? crypto.createHash('sha256').update(value).digest('hex') : '';
+  return { ...tunnels, instanceId: INSTANCE_ID, bootId: GATEWAY_BOOT_ID, port: PORT,
+    accessVersion: version(ACCESS_KEY), e2eeVersion: version(secret) };
+}
+function verifiedBackupPreparationDevice(req) {
+  try {
+    if (!hasAuthCookie(req)) return null;
+    const token = readDeviceToken(req);
+    const verified = sessions.verify(token, { authority: String(req.headers.host || '') });
+    if (!verified.ok || !verified.device || !authProvenAt(verified.device.id)) return null;
+    // Legacy general-session validation tolerates movement between authorities.
+    // Preparation specifically requires the receiving origin's issued cookie.
+    const payload = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
+    if (payload.a !== req.headers.host) return null;
+    return { id: verified.device.id, proven: true };
+  } catch (_) { return null; }
+}
+const backupPreparation = require('./backup-preparation.js').createBackupPreparation({
+  readContext: backupPreparationContext, isDeviceActive: id => sessions.isActive(id),
+  reissueDevice: (id, authority) => sessions.reissue(id, authority)
+});
+const backupPreparationHttp = require('./backup-preparation-http.js').createBackupPreparationHttp({
+  preparation: backupPreparation, readContext: backupPreparationContext,
+  receiverHtml: () => fs.readFileSync(path.join(PWA_DIR, 'backup-prepare.html'), 'utf8'), authCookies
+});
 const dshLiteAttachment = require('./dsh-lite-attachment.js');
 const dshRuntimeIdentity = require('./dsh-runtime-identity.js').runtimeIdentity;
 // Tiny mobile DSH UI uses only four fixed unary RPCs. The browser never
@@ -1476,6 +1508,8 @@ const PWA_ROUTES = {
   '/dsh-lite-legacy.js': { file: 'dsh-lite-legacy.js', type: 'application/javascript; charset=utf-8', noCache: true },
   '/dsh-lite-router.js': { file: 'dsh-lite-router.js', type: 'application/javascript; charset=utf-8', noCache: true },
   '/dsh-lite-pin.js': { file: 'dsh-lite-pin.js', type: 'application/javascript; charset=utf-8', noCache: true },
+  '/dsh-backup-prepare.js': { file: 'dsh-backup-prepare.js', type: 'application/javascript; charset=utf-8', noCache: true },
+  '/backup-prepare.css': { file: 'backup-prepare.css', type: 'text/css; charset=utf-8', noCache: true },
   '/dsh-lite-switch.js': { file: 'dsh-lite-switch.js', type: 'application/javascript; charset=utf-8', noCache: true },
   // 更新提示脚本。**名字必须是新的**：指纹名单按路径匹配，旧名单里没有这个名字，
   // 所以它一定加载得出来 —— 而旧名字（dsh-lite-pin.js）已经被旧指纹拒掉了，
@@ -2717,7 +2751,7 @@ const BOOTSTRAP_PATHS = new Set([
   '/', '/index.html', '/dsh-lite',
   '/polyfill.js', '/compat.js', '/dsh-directory-picker.js', '/i18n.js', '/dsh-lite-lang.js', '/e2ee.js', '/voice.js', '/route.js', '/boot.js',
   '/dsh-lite.css', '/dsh-lite-pin.js', '/dsh-lite-ui.js', '/dsh-lite-adapter.js',
-  '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-switch.js', '/dsh-lite-update.js',
+  '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-switch.js', '/dsh-lite-update.js', '/dsh-backup-prepare.js', '/backup-prepare.css',
   // ★ 这个漏了会**静默失效**：它在认证之前就要能取到（第一次打开时手机还没
   //   转正）。漏掉的表现是「横幅时有时无」，而且只在真机上、只在第一次出现 ——
   //   最难查的那种。
@@ -4314,7 +4348,7 @@ const E2EE_CONTENT_PATHS = new Set([
   '/api/session/uploadFileBinary',
   // C17 地址面板。回的是**访问密钥所在的地址**，所以和上面那些一样必须加密：
   // 控制台能明文拿到它是因为它只认回环，手机这条走中继。
-  '/__dsh/lite-addresses'
+  '/__dsh/lite-addresses', '/__dsh/backup-prepare'
 ]);
 
 // 加密请求体的上限。上传那边的业务上限是 20MB，密文多 28 字节，
@@ -4541,6 +4575,11 @@ function handleRequestInner(req, res, proofDeadline) {
     servePwa(req, res, route);
     return;
   }
+
+  // The new window initially carries no credential. Redemption is a strict
+  // same-origin POST and can only consume a current boot-bound capability.
+  if (u.pathname === '/__backup/prepare') { backupPreparationHttp.landing(req, res, u); return; }
+  if (u.pathname === '/__backup/redeem') { backupPreparationHttp.redeem(req, res); return; }
 
   // These files are stock DSH onboarding art, never user content. Their names
   // are complete SHA-256 digests produced only by the verified rc.2 module
@@ -5294,7 +5333,7 @@ function handleRequestInner(req, res, proofDeadline) {
     const files = ['/polyfill.js', '/compat.js', '/dsh-directory-picker.js', '/e2ee.js', '/i18n.js', '/voice.js', '/route.js', '/boot.js',
       // Lite 页在手机上处理加密消息；官方页注入的入口也可能携带 /k/ 与 #k=。
       // 这些脚本必须与其它桥脚本受同一份 Service Worker 指纹约束。
-      '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js',
+      '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js', '/dsh-backup-prepare.js',
       '/dsh-lite-legacy.js', '/dsh-lite-router.js',
       // ★ 轻量版的三套文案。和 i18n.js 同一类：它决定界面显示什么语言、
       //   说什么话，每个页面都要加载 —— 不钉住就等于留了一个没人看着的口子。
@@ -5376,6 +5415,12 @@ function handleRequestInner(req, res, proofDeadline) {
 
   if (u.pathname === '/__dsh/directories') {
     serveDshDirectoriesE2ee(req, res);
+    return;
+  }
+
+  if (u.pathname === '/__dsh/backup-prepare') {
+    e2eeWrap((decrypted, response) => backupPreparationHttp.protectedAction(decrypted, response,
+      verifiedBackupPreparationDevice(decrypted)))(req, res);
     return;
   }
 

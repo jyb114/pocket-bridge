@@ -22,6 +22,7 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 function fixture(options = {}) {
   const ids = new Map(), events = new Map(), documentEvents = new Map(), copies = [], opened = [], storage = new Map();
   const reads = [], timers = new Map(); let tick = now, clockId = 0, connection = 1, ready = options.ready !== false, overlays = 0, externalOverlay = false;
+  let preparations = 0;
   let next = options.data || healthy(), responsePatch = {}, pending = null;
   if (options.previous) storage.set('dsh-lite-backup-generation', options.previous);
   function node(tag) {
@@ -49,6 +50,7 @@ function fixture(options = {}) {
     open: (...args) => opened.push(args),
     setTimeout: fn => { timers.set(++clockId, fn); return clockId; }, clearTimeout: id => timers.delete(id),
     addEventListener: (type, fn) => listen(events, type, fn), removeEventListener: (type, fn) => events.get(type)?.delete(fn),
+    PocketBridgeBackupPrepare: { createSource: () => ({ begin() { preparations++; }, busy: () => false, result: () => null, update() {}, cancel() {}, dispose() {} }) },
     DshE2EE: { encryptedFetch: async (secret, url, init) => {
       assert.equal(secret, context.__dshE2eeSecret); assert.equal(url, '/__dsh/lite-addresses');
       assert.equal(init.method, 'POST'); assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.body, '{}');
@@ -69,7 +71,7 @@ function fixture(options = {}) {
   }
   const control = mount();
   return { context, control, mount, ids, reads, copies, opened, storage, timers, document,
-    get overlays() { return overlays; }, get pending() { return pending; },
+    get preparations() { return preparations; }, get overlays() { return overlays; }, get pending() { return pending; },
     setReady(value) { ready = value; }, nextConnection() { connection++; }, setData(value) { next = value; }, patchResponse(value) { responsePatch = value; },
     hold() { let resolve; pending = { promise: new Promise(r => { resolve = r; }), resolve: () => { resolve(); pending = null; } }; return pending; },
     tick(ms) { tick += ms; }, external(value) { externalOverlay = value; },
@@ -129,7 +131,9 @@ function fixture(options = {}) {
     assert.equal(f.ids.get('dsh-lite-backup-address').value, ''); assert.equal(f.copies.length, 0);
   }
   {
-    const f = fixture(); f.control.update(); await flush(); f.ids.get('dsh-lite-backup-copy').click(); await flush();
+    const f = fixture(); f.control.update(); await flush();
+    f.ids.get('dsh-lite-backup-prepare').click(); assert.equal(f.preparations, 1, 'actual Prepare button calls controller, not the explanatory paragraph');
+    f.ids.get('dsh-lite-backup-copy').click(); await flush();
     assert.deepEqual(f.copies, [origin + '/dsh-lite']); assert.equal(f.reads.length, 2, 'copy rechecks the current address');
     f.ids.get('dsh-lite-backup-open').click(); assert.deepEqual(f.opened, [[origin + '/dsh-lite', '_blank', 'noopener,noreferrer']]);
     assert.doesNotMatch(JSON.stringify([...f.storage.values()]), /SECRET|#|\/k\//);

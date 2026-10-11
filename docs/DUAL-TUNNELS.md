@@ -46,8 +46,37 @@ storage, service worker and PWA state. The six-digit pairing code registers a
 device but does not itself deliver the encryption key. The alternate origin
 must have both login and encryption-key setup, and be tested before relying
 on its saved bare address. Copying this address alone does not perform that
-setup. This feature adds no automatic cross-origin credential transfer or
-one-click preparation flow, and makes no claim that a browser is prepared.
+setup.
+
+Choose **Prepare backup** and confirm the disclosure to open a new window.
+Popup blocking stops the operation with an instruction to allow that popup;
+there is no credential-link fallback. The original window opens only a bare
+receiver URL, immediately severs its opener, and matches the exact destination,
+window and per-attempt nonces. It first transfers a one-use, 60-second ticket.
+The destination must redeem that ticket and return a fresh server receipt,
+which the original window verifies through its authenticated encrypted channel,
+before any encryption key is sent. The credential phase uses a MessagePort
+owned by that receiver document, so a replacement document cannot inherit it.
+Neither the ticket, receipt nor key goes into a navigation URL or the clipboard.
+
+Preparation is bound to the current installation, gateway boot, port, backup
+origin/generation, active device and current access/encryption key versions.
+Expiry, reuse, device revocation, disabling the backup or replacing that tuple
+invalidates outstanding capabilities. The destination has to use its own
+issued cookie and protected encrypted completion, then write and read back its
+browser storage. Only then does it report that this browser origin is verified
+and saved now. A failed attempt leaves untouched keys alone and attempts to roll back only
+its own writes. Browser storage failures can prevent restoration; the page
+does not claim successful saving unless readback succeeds. If a pinned old encryption component is present,
+complete the page's normal update before retrying; preparation does not bypass
+code pins. It never runs automatically on a refresh or background event.
+
+This is not a guarantee that future browser storage, connectivity or DSH tasks
+will remain available. Use the same browser context in which preparation
+succeeded. The code-pinning trust-on-first-use and trusted-endpoint boundaries
+in SECURITY.md still apply. Saving the key trusts that browser origin; the
+receipt verifies the current gateway, not perpetual ownership of a temporary
+hostname.
 
 When a hostname is replaced, prepare the new origin again and save its current
 bare address. A previously saved address can stop working; storage clearing,
@@ -82,5 +111,6 @@ and [bundled-version Quick Tunnel implementation](https://github.com/cloudflare/
 Isolated tests use synthetic process queries, children, clocks and public-probe
 responses, plus owned local HTTP fixtures for the probe contract. These tests
 do not establish Windows native process behavior, a live provider endpoint,
-real-phone recovery or cross-origin pairing acceptance. Those remain separate
+real-phone recovery or browser-to-browser preparation acceptance. The preparation
+protocol, storage failure and document-replacement tests use synthetic data. Those remain separate
 acceptance steps requiring the appropriate environment and authorization.

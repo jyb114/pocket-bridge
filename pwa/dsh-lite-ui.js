@@ -192,6 +192,10 @@
     }
     var disposed = false, loading = false, serial = 0, panel = null, nodes = null, snapshot = null;
     var lastRead = 0, autoValue = null, changed = false, previous = '', storageKey = 'dsh-lite-backup-generation';
+    var preparation = win.PocketBridgeBackupPrepare && win.PocketBridgeBackupPrepare.createSource({
+      t: t, ready: ready, read: read, context: function () { return options.context ? options.context() : null; },
+      active: function () { return !!(panel && panel.isConnected); }, onState: function () { render(); }
+    });
     var MAX_AGE = 180000;
     try { previous = win.localStorage.getItem(storageKey) || ''; } catch (_) {}
     function t(value) { return options.t(value); }
@@ -248,9 +252,14 @@
       nodes.address.hidden = !valid;
       nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading;
       nodes.check.disabled = loading || !ready();
+      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === win.location.origin;
       nodes.warning.hidden = !changed;
       nodes.using.hidden = !(valid && win.location && new URL(snapshot.url).origin === win.location.origin);
-      nodes.status.textContent = t(message || (loading ? '正在检查当前备用地址…' :
+      var preparationResult = preparation && preparation.result();
+      var preparedHere = valid && preparationResult && preparationResult.phase === 'prepared' &&
+        preparationResult.origin === new URL(snapshot.url).origin && preparationResult.generation === snapshot.generation;
+      nodes.status.textContent = t(message || (preparedHere ? preparationResult.message :
+        preparationResult && preparationResult.phase !== 'prepared' && !loading ? preparationResult.message : loading ? '正在检查当前备用地址…' :
         !ready() ? '请先完成当前页面的登录与加密验证。' :
         snapshot && snapshot.code === 'tunnel-migration-unconfirmed' ? '当前主通道的管理归属未确认，备用启动已暂停以保留现有连接。请在电脑上先“停止桥接”，确认停止后再“启动桥接”，然后重新检查；期间手机连接会中断。' :
         snapshot && !snapshot.supported ? '当前连接方式不支持备用隧道。' :
@@ -321,6 +330,7 @@
       var valid = usable();
       nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading;
       nodes.check.disabled = loading || !ready();
+      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === win.location.origin;
     }
     function show(initial) {
       if (disposed) return;
@@ -345,6 +355,7 @@
           var node = element('button', 'screen-action', text); node.id = id; node.type = 'button';
           node.addEventListener('click', fn); actions.append(node); return node;
         }
+        var prepare = button('dsh-lite-backup-prepare', '准备备用入口', function () { if (usable() && preparation) preparation.begin(); });
         var copy = button('dsh-lite-backup-copy', '复制当前备用地址', function () { refresh(true); });
         var select = button('dsh-lite-backup-select', '选择地址以手动复制', function () {
           if (!usable()) { snapshot = null; render(); return; }
@@ -357,11 +368,11 @@
         var check = button('dsh-lite-backup-check', '重新检查备用地址', function () { refresh(false); });
         var using = element('p', 'backup-warning', '此页面正在使用备用通道。保存此地址不会增加另一条可切换的通道。');
         using.id = 'dsh-lite-backup-using'; using.hidden = true;
-        var preparation = element('p', 'panel-line', '首次使用此备用地址，需要在同一手机浏览器中单独配对登录并配置端到端加密。主地址的登录状态不会自动共享；复制地址不会完成这些设置。');
-        preparation.id = 'dsh-lite-backup-preparation';
+        var preparationNote = element('p', 'panel-line', '首次使用请点击“准备备用入口”，在新窗口完成此浏览器的登录与加密验证。只有你主动点击并确认后才会传递凭据；复制地址始终不含凭据。');
+        preparationNote.id = 'dsh-lite-backup-preparation';
         var risk = element('p', 'panel-line', '主备通道仍依赖同一台电脑、网络和 Cloudflare，不能保证在这些服务故障时可用。');
-        body.append(explanation, status, warning, using, address, actions, preparation, risk);
-        nodes = { status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check };
+        body.append(explanation, status, warning, using, address, actions, preparationNote, risk);
+        nodes = { status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check, prepare: prepare };
       }, options.opener);
       render();
       if (!initial) refresh(false);
@@ -385,6 +396,7 @@
     }
     function update() {
       if (disposed) return;
+      if (preparation) preparation.update();
       if (!ready() || doc.hidden) { serial++; loading = false; snapshot = null; autoValue = null; render(); return; }
       if (panel && panel.isConnected) {
         render();
@@ -400,6 +412,7 @@
       if (event.persisted) { backupDocumentState.eligible = false; invalidate(); }
     }
     function invalidate() {
+      if (preparation) preparation.cancel();
       serial++; loading = false; snapshot = null; autoValue = null;
       if (panel && panel.isConnected && panel.__liteClose) panel.__liteClose(false);
       panel = null; nodes = null;
@@ -409,6 +422,7 @@
     win.addEventListener('pagehide', invalidate);
     doc.addEventListener('visibilitychange', visibility);
     return { show: function () { show(); }, update: update, dispose: function () {
+      if (preparation) preparation.dispose();
       disposed = true; invalidate();
       win.removeEventListener('pageshow', restore); win.removeEventListener('pagehide', invalidate);
       doc.removeEventListener('visibilitychange', visibility);

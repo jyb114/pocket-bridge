@@ -102,6 +102,10 @@ const SUITE = [
   ['test-dsh-lazy-images.js', [], '已验证 DSH 模块的内嵌图片改为按需取，版本不匹配则原样放行'],
   ['test-dsh-lazy-image-store.js', [], '图片内容哈希、磁盘边界与官方入口改写'],
   ['test-dsh-lite-rpc.js', [], '轻量 DSH RPC 只接受已知方法、加密请求与正确协议参数'],
+  ['test-backup-preparation.js', [], 'Boot-bound one-time backup capabilities, receiver receipts, expiry and revocation (synthetic)'],
+  ['test-backup-preparation-http.js', [], 'Preparation origin/device/proof/E2EE gates, recipient receipt and protected completion (synthetic)'],
+  ['test-backup-preparation-browser.js', [], 'Real Chromium synthetic cross-origin popup, receipt-before-key MessagePort, storage rollback and navigation fencing'],
+  ['test-backup-preparation-ui.js', [], 'Explicit preparation click, document-owned message channel, receipt-before-key, storage rollback and truthful readiness (synthetic DOM)'],
   ['test-backup-tunnel-api.js', [], 'Backup tunnel desktop opt-in gates, explicit configuration and current gateway-bound safe DTO wiring (synthetic)'],
   ['test-backup-tunnel-console.js', [], 'Default-off backup setting, dormant unsupported opt-in, confirmation and credential-free/stale copy controls (synthetic DOM)'],
   ['test-dsh-lite-backup.js', [], 'Full-refresh-only mobile backup prompt, proof gating, safe generations, clipboard fallback and cancellation (synthetic DOM)'],
@@ -168,7 +172,7 @@ for (const [file, args, why, environment] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js', 'test-dsh-lite-backup-browser.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js', 'test-dsh-lite-backup-browser.js', 'test-backup-preparation-browser.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;

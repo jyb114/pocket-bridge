@@ -17,10 +17,14 @@ requires a tap, and there is no automatic failover navigation or message resend.
 
 The copied address contains no access key, encryption fragment or recovery
 token. A different hostname has separate browser cookies and encryption-key
-storage. It must already have login and encryption-key setup and be tested
-before its saved bare address can be relied on. Copying is not preparation, and
-this feature does not transfer credentials automatically. A replaced hostname
-needs setup again. Both paths still share the PC, internet connection, gateway
+storage. The explicit **Prepare backup** action asks for confirmation, opens a
+new window, and verifies an origin-bound one-use ticket/receiver receipt before
+transferring the encryption key through a document-owned MessagePort. The
+receiving origin must complete its own authenticated encrypted check and browser
+storage readback before it reports success. No credential enters a navigation
+URL or copied address. A blocked popup, old pinned component, changed key or
+stale backup fails closed with guidance; there is no automatic transfer.
+A replaced hostname needs preparation again. Both paths still share the PC, internet connection, gateway
 and Cloudflare; they cannot cover failure of those shared dependencies.
 
 Older single-tunnel sessions are not adopted without ownership proof. Enabling
@@ -82,7 +86,9 @@ available.
 Dual-tunnel regressions use synthetic children, process queries, clocks and
 public-probe responses. Mobile reminders, clipboard handling, stale results,
 visibility and credential-context changes use controlled browser/DOM fixtures.
-These do not establish a working public backup on a real phone.
+Preparation admission, recipient receipts, MessagePort document ownership and
+storage rollback have synthetic unit/DOM coverage. These do not establish a
+working public backup or preparation on a real phone.
 
 The new offline regression runs the actual exporter with synthetic credentials,
 device records and logs in an owned temporary directory. It covers public and
