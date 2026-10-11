@@ -20,9 +20,9 @@ function channelFactory(posts) {
 }
 const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 function base(origin) {
-  const listeners = new Map(), timers = new Map(), elements = new Map(); let n = 0, bytes = 0;
+  const listeners = new Map(), timers = new Map(), elements = new Map(); let n = 0, bytes = 0, clockTime = now;
   const win = { URL, Uint8Array, Array, Object, JSON, Number, Promise, Error, AbortController,
-    Date: class extends Date { static now() { return now; } },
+    Date: class extends Date { static now() { return clockTime; } },
     location: { origin }, history: { replaceState(_a, _b, value) { win.historyValue = value; } },
     document: { getElementById: id => elements.get(id) || null },
     crypto: { getRandomValues(value) { value.fill(++bytes); return value; } },
@@ -31,7 +31,7 @@ function base(origin) {
     removeEventListener(type, fn) { listeners.set(type, (listeners.get(type) || []).filter(f => f !== fn)); }
   };
   win.window = win; vm.createContext(win); vm.runInContext(source, win);
-  return { win, elements, timers, fire(type, value) { for (const fn of listeners.get(type) || []) fn(value); } };
+  return { win, elements, timers, advance(ms) { clockTime += ms; }, runTimers() { const pending = [...timers.values()]; timers.clear(); for (const fn of pending) fn(); }, fire(type, value) { for (const fn of listeners.get(type) || []) fn(value); } };
 }
 function response(value, extra = {}) { return { ok: true, redirected: false,
   headers: { get: name => name === 'x-dsh-e2ee-decrypted' ? '1' : null }, json: async () => value, ...extra }; }
@@ -158,6 +158,25 @@ function receiverFixture(options = {}) {
       f.ack({ ...hello, preparationId }); await flush(); // New same-origin document only has WindowProxy.
     }
     assert.equal(f.posts.some(p => p.data.key), false, 'no key for ' + proof);
+  }
+  {
+    const f = sourceFixture(); await f.control.begin(); f.ack(); await flush(); f.ack(); await flush();
+    f.proveReceipt(); await flush(); f.portAck(); await flush();
+    assert.equal(f.control.result().phase, 'verifying');
+    // Browser teardown may discard pagehide's failure notice. WindowProxy
+    // survives reload and the replacement document does not inherit its port.
+    const admission = f.posts.find(p => p.data.type.endsWith('admit')).data;
+    f.channel.port2.close(); assert.equal(f.child.closed, false);
+    f.fire('message', { origin: backup, source: f.child, data: { ...admission, type: 'pocket-bridge-backup-complete' } });
+    f.advance(12001); f.runTimers(); await flush();
+    assert.equal(f.control.busy(), true, '12-second fixture wait is shorter than the existing capability deadline');
+    assert.equal(f.control.result().phase, 'verifying');
+    assert.equal(f.requests.some(r => r.action === 'status'), false, 'a replacement window cannot report completion');
+    f.advance(47999); f.runTimers(); await flush();
+    assert.equal(f.control.busy(), false); assert.equal(f.control.result().phase, 'failed', 'lost unload notice fails at original 60-second deadline');
+    assert.equal(f.states.some(s => s.phase === 'prepared'), false);
+    assert.equal(f.child.closed, true); assert.equal(f.channel.port1.closed, true);
+    assert.equal(f.requests.at(-1).action, 'revoke');
   }
   {
     const f = receiverFixture(); assert.equal(f.win.historyValue, '/__backup/prepare');

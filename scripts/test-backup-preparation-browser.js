@@ -25,8 +25,9 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const read = name => fs.readFileSync(path.join(root, 'pwa', name), 'utf8');
 async function run() {
   let mainOrigin, backupOrigin, browser, scenario = 'success', heldConfirm = null, heldComplete = null;
-  let issueCount = 0, proofCount = 0, replacementKeys = 0;
-  const records = new Map(), unexpected = [];
+  let issueCount = 0, proofCount = 0, replacementKeys = 0, documentSerial = 0;
+  let sourcePage = null, lastReceiver = null;
+  const records = new Map(), unexpected = [], handlerErrors = [];
   const sourceScript = read('dsh-backup-prepare.js'), originFunction = extractFunction(sourceScript, 'origin');
   assert.ok(originFunction && sourceScript.split(originFunction).length === 2, 'replace exactly one origin predicate');
   function script() { return sourceScript.replace(originFunction,
@@ -72,9 +73,9 @@ ${scenario === 'storage-failure' ? `const set=Storage.prototype.setItem;Storage.
       if (url.pathname === '/fixture-receiver.js' && receiver) { res.writeHead(200, { ...headers, 'content-type': 'application/javascript' }); res.end(receiverPrelude()); return; }
       if (url.pathname === '/__backup/prepare' && receiver) { const config = { origin: backupOrigin, source: url.searchParams.get('source'), nonce: url.searchParams.get('nonce'), bootId: BOOT };
         res.writeHead(200, { ...headers, 'content-type': 'text/html', 'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'" });
-        res.end(read('backup-prepare.html').replace('__PB_PREPARATION_CONTEXT__', JSON.stringify(config)).replace('<script src="/e2ee.js"', '<script src="/fixture-receiver.js" defer></script><script src="/e2ee.js"')); return; }
+        res.end(read('backup-prepare.html').replace('<head>', '<head><meta name="fixture-document" content="' + (++documentSerial) + '">').replace('__PB_PREPARATION_CONTEXT__', JSON.stringify(config)).replace('<script src="/e2ee.js"', '<script src="/fixture-receiver.js" defer></script><script src="/e2ee.js"')); return; }
       if (url.pathname === '/replacement' && receiver) { res.writeHead(200, { ...headers, 'content-type': 'text/html' });
-        res.end('<!doctype html><p>Replacement document</p><script src="/fixture-replacement.js"></script>'); return; }
+        res.end('<!doctype html><meta name="fixture-document" content="' + (++documentSerial) + '"><p>Replacement document</p><script src="/fixture-replacement.js"></script>'); return; }
       if (url.pathname === '/fixture-replacement.js' && receiver) { res.writeHead(200, { ...headers, 'content-type': 'application/javascript' });
         res.end("addEventListener('message',event=>{if(event.data&&event.data.key)fetch('/fixture-observation',{method:'POST',body:'{}'});});"); return; }
       if (url.pathname === '/storage' && receiver) { res.writeHead(200, { ...headers, 'content-type': 'text/html' }); res.end('<!doctype html><p>Owned storage check</p>'); return; }
@@ -122,26 +123,53 @@ ${scenario === 'storage-failure' ? `const set=Storage.prototype.setItem;Storage.
     }
     unexpected.push(url.pathname); res.writeHead(404); res.end();
   }
-  function server(receiver) { return http.createServer((req, res) => { route(req, res, receiver).catch(() => {
+  function server(receiver) { return http.createServer((req, res) => { route(req, res, receiver).catch(error => {
+    const pathname = new URL(req.url, receiver ? backupOrigin : mainOrigin).pathname;
+    handlerErrors.push({ receiver, route: ['/__auth/verify', '/__backup/redeem', '/__dsh/backup-prepare'].includes(pathname) ? pathname : 'other', kind: error instanceof assert.AssertionError ? 'assertion' : 'exception' });
     unexpected.push('fixture-handler-failed'); if (!res.headersSent) send(res, { ok: false }, false, 500); else res.end(); }); }); }
   const main = server(false), backup = server(true);
   await new Promise(resolve => main.listen(0, '127.0.0.1', resolve)); mainOrigin = 'http://127.0.0.1:' + main.address().port;
   await new Promise(resolve => backup.listen(0, '127.0.0.1', resolve)); backupOrigin = 'http://127.0.0.1:' + backup.address().port;
-  async function until(fn, description) { const end = Date.now() + 12000; while (Date.now() < end) { if (await fn()) return; await sleep(40); } throw Error('Timed out: ' + description); }
+  // Deliberately enumerate safe fields. Never serialize requests, tuples, CDP
+  // errors, storage contents or message payloads into a CI failure report.
+  async function diagnostics() {
+    let source = 'unavailable', receiver = 'unavailable';
+    try { if (sourcePage) source = await sourcePage.eval("({phases:(window.__states||[]).map(s=>s.phase),busy:!!window.__prepare?.busy(),childClosed:window.__child?window.__child.closed:null})", 1000); } catch (_) {}
+    try { if (lastReceiver) receiver = await lastReceiver.eval("({document:Number(document.querySelector('meta[name=fixture-document]')?.content)||0,ready:document.readyState,openVisible:!!document.getElementById('backup-prepare-open')&&!document.getElementById('backup-prepare-open').hidden,hasKey:!!window.__dshE2eeSecret})"); } catch (_) {}
+    return { scenario, source, receiver, issueCount, proofCount, replacementKeys, recordPhases: [...records.values()].map(r => r.phase), handlerErrors, unexpectedCount: unexpected.length };
+  }
+  async function until(fn, description, timeoutMs = 12000) { const end = Date.now() + timeoutMs; while (Date.now() < end) { if (await fn()) return; await sleep(40); } throw Error('Timed out: ' + description + ' ' + JSON.stringify(await diagnostics())); }
+  const documentMarker = "Number(document.querySelector('meta[name=fixture-document]')?.content)||0";
+  async function documentBoundary(target, previous) {
+    let boundary = '';
+    await until(async () => {
+      // A delivered pagehide failure can make the source close its child before
+      // a new document commits. That is also a verified safe teardown boundary.
+      if (await sourcePage.eval('!!window.__child?.closed')) { boundary = 'closed'; return true; }
+      try { const current = await target.eval(documentMarker); if (current > 0 && current !== previous) { boundary = 'replaced'; return true; } } catch (_) {}
+      return false;
+    }, 'receiver document replaced or owned child closed');
+    return boundary;
+  }
   async function receiverPage() {
     let target; await until(async () => { target = (await browser.send('Target.getTargets')).targetInfos.find(t => t.type === 'page' && t.url.startsWith(backupOrigin + '/__backup/prepare')); return !!target; }, 'owned receiver popup');
     const { sessionId } = await browser.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
-    return { targetId: target.targetId, send: (method, params = {}) => browser.send(method, params, sessionId),
+    return lastReceiver = { targetId: target.targetId, send: (method, params = {}) => browser.send(method, params, sessionId),
       eval: async expression => { const value = await browser.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, sessionId);
         if (value.exceptionDetails) throw Error('Receiver fixture evaluation failed'); return value.result?.value; } };
   }
   try {
     browser = await Browser.launch(['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1']);
-    const page = await browser.newPage();
-    async function start(kind) { scenario = kind; heldConfirm = heldComplete = null; issueCount = proofCount = replacementKeys = 0; records.clear();
+    const page = sourcePage = await browser.newPage();
+    async function start(kind) { scenario = kind; heldConfirm = heldComplete = null; issueCount = proofCount = replacementKeys = 0; records.clear(); lastReceiver = null; console.log('SCENARIO ' + kind);
       await page.goto(mainOrigin + '/app?' + kind, 150); await until(() => page.eval('!!window.__prepare'), 'source fixture ready'); }
     async function click() { await page.send('Runtime.evaluate', { expression: "document.getElementById('prepare').click()", userGesture: true }); }
-    async function phase(value) { await until(() => page.eval(`document.getElementById('state').textContent===${JSON.stringify(value)}`), 'source phase ' + value); }
+    async function phase(value, timeoutMs = 12000, forbidPrepared = false) {
+      await until(async () => {
+        if (forbidPrepared) assert.equal(await page.eval("window.__states.some(s=>s.phase==='prepared')"), false, 'interrupted preparation never reports prepared');
+        return page.eval(`document.getElementById('state').textContent===${JSON.stringify(value)}`);
+      }, 'source phase ' + value, timeoutMs);
+    }
     async function closeReceivers() { for (const t of (await browser.send('Target.getTargets')).targetInfos) if (t.type === 'page' && t.url.startsWith(backupOrigin)) await browser.send('Target.closeTarget', { targetId: t.targetId }); }
     await start('success'); await page.eval('window.__pauseReady=true'); await click(); const child = await receiverPage();
     await until(() => page.eval('!!window.__lastReady'), 'real receiver ready');
@@ -161,10 +189,25 @@ ${scenario === 'storage-failure' ? `const set=Storage.prototype.setItem;Storage.
     assert.equal(await storage.eval("localStorage.getItem('dsh-e2ee-secret-persist-v1')==='" + OLD + "'"), true, 'write-then-fail restores existing browser storage');
     await closeReceivers();
     await start('replace'); await click(); const replaced = await receiverPage(); await until(() => !!heldConfirm, 'receipt validation held before key');
-    await replaced.send('Page.navigate', { url: backupOrigin + '/replacement' }).catch(error => { if (!/closed|No session|No target|Session with given id not found/i.test(error.message)) throw error; }); heldConfirm(); await sleep(300);
+    const replacedDocument = await replaced.eval(documentMarker); assert.ok(replacedDocument);
+    await replaced.send('Page.navigate', { url: backupOrigin + '/replacement' }).catch(error => { if (!/closed|No session|No target|Session with given id not found/i.test(error.message)) throw error; }); await documentBoundary(replaced, replacedDocument); heldConfirm(); await sleep(300);
     assert.equal(proofCount, 0); assert.equal(replacementKeys, 0, 'replacement document receives no key'); await closeReceivers();
     await start('reload'); await click(); const reloaded = await receiverPage(); await until(() => !!heldComplete, 'encrypted completion held');
-    await reloaded.send('Page.reload').catch(error => { if (!/closed|No session|No target|Session with given id not found/i.test(error.message)) throw error; }); heldComplete(); await phase('failed');
+    const reloadedDocument = await reloaded.eval(documentMarker); assert.ok(reloadedDocument);
+    await reloaded.send('Page.reload').catch(error => { if (!/closed|No session|No target|Session with given id not found/i.test(error.message)) throw error; }); const boundary = await documentBoundary(reloaded, reloadedDocument);
+    assert.notEqual(await page.eval("document.getElementById('state').textContent"), 'prepared', 'teardown before completion cannot report prepared');
+    if (boundary === 'replaced') {
+      let inheritedKey;
+      try { inheritedKey = await reloaded.eval('!!window.__dshE2eeSecret'); }
+      catch (_) { assert.equal(await page.eval('window.__child.closed'), true, 'receiver evaluation can disappear only after the owned child closes'); }
+      assert.notEqual(inheritedKey, true, 'new receiver document inherits no transferred key');
+    }
+    heldComplete();
+    // Unloading may discard the old document's MessagePort failure notice. Its
+    // WindowProxy stays open, so the source intentionally fails at the original
+    // 60-second capability deadline. Observe that bound without changing it,
+    // and reject even a transient prepared claim throughout the wait.
+    await phase('failed', 65000, true);
     assert.notEqual(await page.eval("document.getElementById('state').textContent"), 'prepared', 'reload cannot resume a prepared claim');
     assert.equal([...records.values()].some(r => r.phase === 'pending'), false);
     assert.deepEqual(unexpected, []);
