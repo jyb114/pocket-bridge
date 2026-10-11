@@ -39,6 +39,9 @@ const DEFAULTS = {
   dshWebEntry: '',          // 使用 Node 时填写 @deepseek-ai/dsh 的 CLI 入口
   dshWebArguments: ['web', '--no-open'], // 参数数组；不经过 shell、不自动联网安装
   tunnelProvider: 'auto',   // none | auto | cloudflare (mode-selected) | cloudflare-quick | cloudflare-named
+  // Explicit opt-in. Windows Quick tunnels only; never changes private/none
+  // policy or silently publishes a second address for existing installations.
+  tunnelBackup: { enabled: false },
   enableLanAccess: true,    // 是否提供内网直连入口
   dshPort: 0,               // 0 = 自动发现；显式指定则优先
   // Optional private tailnet HTTPS. Provision Serve explicitly outside Bridge;

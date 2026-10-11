@@ -93,7 +93,18 @@ function fixture({ statusOnly = false, realTunnel = false } = {}) {
   const context = contextFor(daemonSource, 'gateway-daemon.js', {
     http, child_process: { spawn, execFileSync: () => assert.fail('No real process lookup') }, './config.js': cfg, './tunnel.js': provider,
     './webpush-notify.js': { sendStored: async () => assert.fail('No notification') }, './ws-e2ee-bridge.js': {},
-    './runtime-requirements.js': { assertSupportedRuntime() {} }
+    './runtime-requirements.js': { assertSupportedRuntime() {} },
+    './tunnel-state.js': { ...require('./tunnel-state.js'),
+      backupPolicy: config => require('./tunnel-state.js').backupPolicy(config, 'win32'),
+      publicTunnelState: (value, options) => require('./tunnel-state.js').publicTunnelState(value, { ...options, platform: 'win32' }) },
+    './tunnel-runtime.js': { createTunnelRuntime(options) {
+      state.dualOptions = options;
+      return { async reconcile(args) { state.dualCalls = (state.dualCalls || 0) + 1;
+        state.dualArgs = args;
+        options.admission.beforeMutation();
+        if (state.dualReconcile) return state.dualReconcile(args, options);
+        return { state: { version: 1, instanceId: INSTANCE, port: 8081, slots: {} } }; } };
+    } }
   });
   context.fixtureState = state;
   vm.runInContext(`findRunningGateway = async expected => { fixtureState.calls.push(expected);
@@ -109,6 +120,57 @@ function fixture({ statusOnly = false, realTunnel = false } = {}) {
     clock(value) { state.timerControl = value.set; state.timerClear = value.clear; } };
 }
 async function run() {
+  await check('opt-in managed branch never enters legacy broad stop or single-tunnel discovery', async () => {
+    const f = fixture(); f.state.config = { tunnelProvider: 'cloudflare-quick', tunnelBackup: { enabled: true } };
+    await f.run(); assert.equal(f.state.dualCalls, 1); assert.equal(f.state.stopTunnels, 0);
+    assert.equal(f.state.tunnelCreates, 0); assert.equal(f.state.tunnelLookups || 0, 0);
+    assert.equal(f.state.dualOptions.bootId, BOOT); assert.equal(f.state.dualOptions.instanceId, INSTANCE);
+    assert.equal(f.state.dualOptions.port, 8081); assert.equal(f.fakeProcess.exitCode, 0);
+    assert.equal(f.state.dualArgs.allowPrimaryStart, true);
+  });
+  await check('managed read-only status does not run reconciliation or acquire a lease', async () => {
+    const f = fixture({ statusOnly: true }); f.state.config = { tunnelProvider: 'cloudflare-quick', tunnelBackup: { enabled: true } };
+    await f.run(); assert.equal(f.state.dualCalls || 0, 0); assert.equal(f.state.spawns.length, 0);
+    assert.equal(f.state.writes.length, 0); assert.equal(fs.existsSync(f.directory), false);
+  });
+  await check('repair-only invocation is bound to exact current gateway and cannot start one', async () => {
+    for (const valid of [true, false]) {
+      const f = fixture(); f.state.config = { tunnelProvider: 'cloudflare-quick', tunnelBackup: { enabled: true } };
+      f.fakeProcess.argv.push('--repair-tunnels', '--port', '8081', '--expected-instance', INSTANCE,
+        '--expected-boot', BOOT, '--expected-pid', '501', '--refresh-slot', 'backup');
+      f.state.healthByPort.set(8081, { ...f.state.gateway.info, bootId: valid ? BOOT : INSTANCE });
+      f.state.dualReconcile = async (args, options) => { assert.equal(args.refreshRole, 'backup');
+        assert.equal(args.allowPrimaryStart, false);
+        assert.equal(await options.verifyGateway(), true); return { state: { version: 1, instanceId: INSTANCE, port: 8081, slots: {} } }; };
+      await f.run(); assert.equal(f.state.identityCreates, 0); assert.equal(f.state.spawns.length, 0);
+      assert.equal(f.state.dualCalls || 0, valid ? 1 : 0); assert.equal(f.state.stopTunnels, 0);
+      assert.equal(f.fakeProcess.exitCode, valid ? 0 : 1);
+    }
+  });
+  await check('disabled managed single-primary startup requires explicit Start or primary refresh', async () => {
+    for (const mode of ['start', 'retire', 'refresh']) {
+      const f = fixture(); f.state.config = { tunnelProvider: 'cloudflare-quick', tunnelBackup: { enabled: false } };
+      fs.writeFileSync(path.join(f.logs, 'tunnels.json'), JSON.stringify({ version: 1, instanceId: INSTANCE, port: 8081, slots: {} }));
+      if (mode !== 'start') {
+        f.fakeProcess.argv.push('--repair-tunnels', '--port', '8081', '--expected-instance', INSTANCE,
+          '--expected-boot', BOOT, '--expected-pid', '501');
+        f.state.healthByPort.set(8081, f.state.gateway.info);
+      }
+      if (mode === 'refresh') f.fakeProcess.argv.push('--refresh-slot', 'primary');
+      await f.run(); assert.equal(f.state.dualCalls, 1);
+      assert.equal(f.state.dualArgs.allowPrimaryStart, mode !== 'retire');
+      assert.equal(f.state.stopTunnels, 0); assert.equal(f.state.tunnelCreates, 0);
+    }
+  });
+  await check('blocked managed migration preserves an existing primary status instead of broad cleanup', async () => {
+    const f = fixture(); f.state.config = { tunnelProvider: 'cloudflare-quick', tunnelBackup: { enabled: true } };
+    fs.writeFileSync(path.join(f.logs, 'status.json'), JSON.stringify({ tunnel: { url: 'https://old-synthetic.trycloudflare.com' } }));
+    f.state.dualReconcile = async () => { throw Object.assign(Error('synthetic private native details'), { code: 'tunnel-migration-unconfirmed' }); };
+    await f.run(); const written = f.state.writes.at(-1);
+    assert.equal(written.tunnel.url, 'https://old-synthetic.trycloudflare.com');
+    assert.equal(written.tunnelRepairError, 'tunnel-migration-unconfirmed'); assert(!JSON.stringify(written).includes('private native'));
+    assert.equal(f.state.stopTunnels, 0); assert.equal(f.state.tunnelCreates, 0);
+  });
   await check('none policy skips tunnel discovery, probes, startup and stop for absent or existing tunnels', async () => {
     for (const statusOnly of [false, true]) for (const tunnelUp of [false, true]) {
       const f = fixture({ statusOnly, realTunnel: true });

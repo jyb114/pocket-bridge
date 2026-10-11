@@ -50,12 +50,12 @@ function readStatus() {
 
 async function isolatedProbeChecks() {
   const ownedSockets = new Set();
-  let status = 204, mode = 'status';
+  let status = 204, mode = 'status', probeBoot = null;
   const server = http.createServer((req, res) => {
     if (req.url !== '/__probe') { res.writeHead(500); res.end(); return; }
     if (mode === 'reset') { req.socket.destroy(); return; }
     if (mode === 'silent') return;
-    res.writeHead(status);
+    res.writeHead(status, probeBoot ? { 'x-pocket-bridge-boot': probeBoot } : {});
     if (mode === 'endless-body') { res.write('owned foreign response'); return; }
     res.end();
   });
@@ -69,6 +69,14 @@ async function isolatedProbeChecks() {
         value.ok === (status === 204) && value.status === status &&
         (status === 204 ? value.error === null : typeof value.error === 'string' && value.error.length > 0));
     }
+    status = 204; probeBoot = '11111111-1111-4111-8111-111111111111';
+    ok('managed public probe binds the current gateway boot',
+      (await tunnel.probeUrl(origin, 1000, { expectedBootId: probeBoot })).ok === true);
+    ok('another gateway returning 204 is not the intended managed origin',
+      (await tunnel.probeUrl(origin, 1000, { expectedBootId: '22222222-2222-4222-8222-222222222222' })).ok === false);
+    probeBoot = null;
+    ok('generic 204 without gateway identity cannot advertise a managed slot',
+      (await tunnel.probeUrl(origin, 1000, { expectedBootId: '11111111-1111-4111-8111-111111111111' })).ok === false);
     mode = 'reset';
     const reset = await tunnel.probeUrl(origin, 1000);
     ok('owned peer reset is a bounded unreachable outcome', reset.ok === false && reset.status === 0 && !!reset.error);

@@ -339,6 +339,7 @@ function probeGateway(port, timeoutMs = 1500, expected = {}) {
             const j = JSON.parse(body);
             finish(j && j.service === 'pocket-bridge-gateway' && j.port === port && Number.isSafeInteger(j.pid) && j.pid > 0 &&
               (!expected.instanceId || j.instanceId === expected.instanceId) &&
+              (!expected.bootId || j.bootId === expected.bootId) &&
               (!expected.pid || j.pid === expected.pid) ? j : null);
           } catch (err) {
             finish(null);
@@ -556,9 +557,14 @@ function writeStatus(status) {
 // ── 主流程 ────────────────────────────────────────────────────────────────────
 async function runDaemon() {
   const wantStatusOnly = process.argv.includes('--status');
+  const repairOnly = process.argv.includes('--repair-tunnels');
+  const argument = name => { const at = process.argv.indexOf(name); return at < 0 ? null : process.argv[at + 1]; };
+  const repairExpected = repairOnly ? { instanceId: argument('--expected-instance'), bootId: argument('--expected-boot'),
+    pid: Number(argument('--expected-pid')), port: Number(argument('--port')) } : null;
   let admission = null, identity = null, stopped = false;
   let publicTunnelPreference;
   let publicTunnelActive = false;
+  let managedCycle = false;
   const checkpoint = () => {
     if (admission) admission.checkpoint();
     if (publicTunnelActive && cfg.loadConfig().tunnelProvider !== publicTunnelPreference) {
@@ -567,6 +573,10 @@ async function runDaemon() {
   };
   const tunnelAdmission = { beforeMutation: checkpoint, observeSpawn: (child, kind) => admission.observeSpawn(child, kind) };
   try {
+    if (repairOnly && (wantStatusOnly || !/^[a-f0-9-]{36}$/i.test(repairExpected.instanceId || '') ||
+        !/^[a-f0-9-]{36}$/i.test(repairExpected.bootId || '') || !Number.isSafeInteger(repairExpected.pid) ||
+        repairExpected.pid < 1 || !Number.isSafeInteger(repairExpected.port) || repairExpected.port < 1 || repairExpected.port > 65535))
+      throw Object.assign(Error('invalid-tunnel-repair-target'), { code: 'invalid-tunnel-repair-target' });
     const tunnelPreference = cfg.loadConfig().tunnelProvider;
     const initialTunnelPolicy = tunnel.providerPolicy(tunnelPreference);
     if (initialTunnelPolicy.code) throw Object.assign(Error(initialTunnelPolicy.reason), { code: initialTunnelPolicy.code });
@@ -576,7 +586,7 @@ async function runDaemon() {
       checkpoint();
     }
     // 0. 本机身份：换机器就作废旧密钥
-    identity = wantStatusOnly ? JSON.parse(fs.readFileSync(path.join(LOG_DIR, 'instance.json'), 'utf8')) : cfg.ensureInstanceIdentity();
+    identity = wantStatusOnly || repairOnly ? JSON.parse(fs.readFileSync(path.join(LOG_DIR, 'instance.json'), 'utf8')) : cfg.ensureInstanceIdentity();
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity?.instanceId || '')) throw Error('daemon-installation-unverified');
     admission?.bindInstallation(identity.instanceId);
     checkpoint();
@@ -584,7 +594,13 @@ async function runDaemon() {
     else if (identity.isNewMachine) log('检测到换机器，旧密钥已作废，将重新签发');
 
     // 1. 中间层
-    let gateway = await findRunningGateway({ instanceId: identity.instanceId });
+    if (repairOnly && identity.instanceId !== repairExpected.instanceId) throw Object.assign(Error('daemon-gateway-identity-changed'), { code: 'daemon-gateway-identity-changed' });
+    let gateway;
+    if (repairOnly) {
+      const info = await probeGateway(repairExpected.port, 1500, repairExpected);
+      if (!info) throw Object.assign(Error('daemon-gateway-identity-changed'), { code: 'daemon-gateway-identity-changed' });
+      gateway = { port: repairExpected.port, info };
+    } else gateway = await findRunningGateway({ instanceId: identity.instanceId });
     checkpoint();
     if (gateway) {
       log(`· 中间层已在运行，端口 ${gateway.port}`);
@@ -609,6 +625,56 @@ async function runDaemon() {
     if (tunnelPolicy.code) throw Object.assign(Error(tunnelPolicy.reason), { code: tunnelPolicy.code });
     publicTunnelActive = tunnelPolicy.enabled;
     checkpoint();
+
+    // Opt-in dual mode has its own slot-scoped process evidence. Never let the
+    // legacy all-installation rebuild path operate on a managed pair, even if
+    // the opt-in is later switched off. none still skips all public work.
+    const dualConfig = cfg.loadConfig();
+    const managedStateExists = fs.existsSync(path.join(LOG_DIR, 'tunnels.json'));
+    if (tunnelPolicy.enabled && (dualConfig.tunnelBackup?.enabled === true || managedStateExists)) {
+      managedCycle = true;
+      const stateApi = require('./tunnel-state.js');
+      const policy = stateApi.backupPolicy(dualConfig);
+      if (!policy.supported) {
+        // A named/fixed or unsupported platform must not silently fall back to
+        // a second Quick tunnel, nor broad-kill managed children.
+        if (managedStateExists || repairOnly) throw Object.assign(Error(policy.code), { code: policy.code });
+      } else {
+        let result;
+        if (wantStatusOnly) result = { state: stateApi.readTunnelState(LOG_DIR) };
+        else {
+          const info = gateway?.info;
+          if (!info || !/^[a-f0-9-]{36}$/i.test(info.bootId || '')) throw Object.assign(Error('daemon-gateway-identity-changed'), { code: 'daemon-gateway-identity-changed' });
+          const runtime = require('./tunnel-runtime.js').createTunnelRuntime({ logDir: LOG_DIR,
+            instanceId: identity.instanceId, bootId: info.bootId, port, admission: tunnelAdmission,
+            loadConfig: () => cfg.loadConfig(), discoverExecutable: () => cfg.detectTunnelProviders().cloudflared,
+            verifyGateway: async () => !!await probeGateway(port, 1500, { instanceId: identity.instanceId, bootId: info.bootId, pid: info.pid }) });
+          const refreshRole = argument('--refresh-slot');
+          result = await runtime.reconcile({ refreshRole, allowPrimaryStart: !repairOnly || refreshRole === 'primary' });
+        }
+        const primary = result.state && !result.state.invalid ? result.state.slots?.primary : null;
+        const age = Date.now() - Number(primary?.checkedAt);
+        const healthy = primary?.phase === 'ready' && primary.reachable === true && primary.targetPort === port &&
+          primary.verifiedBootId === gateway?.info?.bootId && age >= 0 && age <= stateApi.FRESHNESS_MS;
+        const url = healthy ? stateApi.quickOrigin(primary.origin) : null;
+        const key = readAccessKey();
+        let secret = ''; try { secret = fs.readFileSync(path.join(LOG_DIR, 'e2ee-secret.txt'), 'utf8').trim(); } catch (_) {}
+        const fragment = secret ? '#k=' + secret : '';
+        const lan = collectLanAddresses();
+        checkpoint();
+        if (!wantStatusOnly) writeStatus({ updatedAt: new Date().toISOString(), instanceId: identity.instanceId,
+          platform: process.platform, hostname: os.hostname(), gateway: { port, running: !!gateway, healthUrl: `http://127.0.0.1:${port}/__health` },
+          tunnel: { provider: primary ? 'cloudflare-quick' : null, url, disabled: false,
+            running: !!primary?.proof, reachable: healthy, probeMs: null, probeError: healthy ? null : 'public-probe-unconfirmed', probeFails: primary?.failures || 0 },
+          tunnels: stateApi.publicTunnelState(result.state, { config: dualConfig, instanceId: identity.instanceId, port, bootId: gateway?.info?.bootId }),
+          entries: { lan: lan.map(ip => key ? `http://${ip}:${port}/k/${key}${fragment}` : `http://${ip}:${port}/`),
+            wan: url && key ? `${url}/k/${key}${fragment}` : url,
+            pairPage: url ? url + '/pair' : null } });
+        log('Managed Quick tunnel reconciliation finished; per-slot verified state was preserved.');
+        return;
+      }
+    }
+    if (repairOnly) { log('Tunnel repair is disabled by the current policy; no gateway or tunnel was started.'); return; }
 
     // 2. 隧道
     let tunnelUrl = null;
@@ -822,7 +888,15 @@ async function runDaemon() {
     stopped = err.code === 'daemon-stop-requested';
     log(stopped ? '· Stop intent observed; no further daemon startup is admitted.' : `✗ 异常: ${err.message}`);
     const anotherOperation = !admission && err.code === 'daemon-operation-pending';
-    if (!wantStatusOnly && !stopped && !anotherOperation) writeStatus({ updatedAt: new Date().toISOString(), error: err.message });
+    if (!wantStatusOnly && !stopped && !anotherOperation) {
+      if (managedCycle) {
+        // A blocked migration/reconciliation must not erase a still-working
+        // primary's existing entry. New slot availability is read separately
+        // from its fail-closed state projection.
+        let previous = {}; try { previous = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8')); } catch (_) {}
+        writeStatus({ ...previous, updatedAt: new Date().toISOString(), tunnelRepairError: err.code || 'tunnel-repair-unavailable' });
+      } else writeStatus({ updatedAt: new Date().toISOString(), error: err.message });
+    }
     process.exitCode = stopped || anotherOperation ? 0 : 1;
   } finally {
     if (admission) {

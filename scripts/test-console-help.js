@@ -146,7 +146,7 @@ function runRenderEntries(targets, opts) {
     sandbox.onLangChange = sandbox.refreshConsoleLanguage;
     sandbox.tabs = tabs;
   }
-  for (const fn of ['dshLiteAddress', 'entryList', 'bestEntry', 'maskedEntry', 'render']) {
+  for (const fn of ['managedPrimaryGuard', 'dshLiteAddress', 'entryList', 'bestEntry', 'maskedEntry', 'render']) {
     vm.runInContext(extractFunction(html, fn), sandbox, { filename: fn });
   }
   vm.runInContext(extractFunction(html, 'renderEntries'), sandbox, { filename: 'renderEntries' });

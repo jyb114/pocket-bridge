@@ -108,6 +108,7 @@
   .target .nm .dot.ok{background:var(--ok)} .target .nm .dot.off{background:#4a4a52}
   .target .ds{font-size:12.5px; color:var(--dim2); margin-top:2px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .target .ds.inventory-error{white-space:normal}
   .target .btns{display:flex; gap:7px; flex:none}
 
   button{
@@ -673,12 +674,34 @@ function tunnelLabel(t) {
 }
 
 // ── 渲染 ─────────────────────────────────────────────────────────────────────
+// Capture the rendered primary context. Every WAN copy/open surface uses this
+// same guard, including top shortcuts that can survive a failed status read.
+function managedPrimaryGuard(data) {
+  var tunnels = data && data.tunnels, entries = data && data.entries;
+  var managed = entries && entries.publicTunnelManaged === true || tunnels &&
+    (tunnels.managed === true || (tunnels.requested === true && tunnels.supported === true));
+  var initial = tunnels && tunnels.primary, generation = initial && initial.generation, origin = initial && initial.origin;
+  return function (targetUrl) {
+    if (state.data !== data) return false;
+    if (!managed) return true;
+    var current = state.data && state.data.tunnels, slot = current && current.primary;
+    try { if (targetUrl && (!slot || new URL(targetUrl).origin !== slot.origin)) return false; } catch (_) { return false; }
+    return current === tunnels && current.supported === true &&
+      !(state.data.entries && state.data.entries.publicTunnelDisabled === true) && slot && slot.generation === generation && slot.origin === origin &&
+      slot.phase === 'ready' && slot.reachable === true && typeof slot.checkedAt === 'number' &&
+      slot.checkedAt <= Date.now() + 5000 && Date.now() - slot.checkedAt <= 180000 &&
+      /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(slot.origin || '') && slot.url === slot.origin + '/dsh-lite';
+  };
+}
+
 function render(data, options) {
   state.data = data;
   var gw = data.gateway || {};
   var targets = data.targets || [];
   var running = targets.filter(function (t) { return t.id === 'dsh' && t.installed && t.running; });
   var best = bestEntry(data.entries || {});
+  var primaryGuard = managedPrimaryGuard(data);
+  if (best && best.kind === 'wan' && !primaryGuard(best.phoneUrl)) best = null;
 
   // 顶部结论：一句话说清现在能不能用
   var hero = $('hero'), title = $('heroTitle'), text = $('heroText');
@@ -717,11 +740,18 @@ function render(data, options) {
       waiting.textContent = t('正在更换地址，请稍候…');
       acts.appendChild(waiting);
     } else if (best) {
-      acts.appendChild(mkBtn(t('复制手机地址'),
-        'primary', function () { if (!addressChanging) copy(best.phoneUrl, t('手机地址')); }));
+      var copyPhone = mkBtn(t('复制手机地址'), 'primary', function () {
+        if (!addressChanging && (best.kind !== 'wan' || primaryGuard(best.phoneUrl))) copy(best.phoneUrl, t('手机地址'));
+      });
+      if (best.kind === 'wan') copyPhone.__primaryGuard = primaryGuard;
+      acts.appendChild(copyPhone);
       var lite = dshLiteAddress(best.url);
       if (lite && targets.some(function (target) { return target.id === 'dsh' && target.installed; })) {
-        acts.appendChild(mkBtn(t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging) copy(lite, t('DSH 轻量版地址')); }));
+        var copyLite = mkBtn(t('复制 DSH 轻量版地址'), '', function () {
+          if (!addressChanging && (best.kind !== 'wan' || primaryGuard(lite))) copy(lite, t('DSH 轻量版地址'));
+        });
+        if (best.kind === 'wan') copyLite.__primaryGuard = primaryGuard;
+        acts.appendChild(copyLite);
       }
     }
   }
@@ -767,6 +797,10 @@ function renderTargets(list) {
     var card = document.createElement('div');
     card.className = 'card target';
     var ico = desktopIcon('layers');
+    // Translate from fixed keys so cached status also follows live language changes.
+    var inventoryNote = t.noteKey === 'dshInventoryTimeout' ? tr('DSH 进程检测在 8 秒后超时，尚无法确认是否正在运行。请刷新重试。')
+      : t.noteKey === 'dshInventoryError' ? tr('DSH 进程检测失败，尚无法确认是否正在运行。请刷新重试。') : null;
+    var inventoryFailed = inventoryNote !== null;
     var state = !t.installed ? tr('没装')
       // 状态标签统一用「运行中 / 未运行」。
       //
@@ -783,7 +817,7 @@ function renderTargets(list) {
       esc(t.short) + '</div>' +
       // note / blurb 是服务端给的（scripts/targets.js），也过一遍 tr()：
       // 词典里有就用译文，没有就原样显示中文 —— 不会变成空白。
-      '<div class="ds">' + esc(t.installed ? (t.running ? tr(t.note) : tr(t.blurb)) : tr('没有找到，装好之后刷新')) + '</div>' +
+      '<div class="ds' + (inventoryFailed ? ' inventory-error' : '') + '">' + esc(inventoryFailed ? inventoryNote : t.installed ? (t.running ? tr(t.note) : tr(t.blurb)) : tr('没有找到，装好之后刷新')) + '</div>' +
       '</div>';
 
     var btns = document.createElement('div');
@@ -833,7 +867,7 @@ function entryList(e) {
     var privatePhoneUrl = dshLiteAddress(e.privateHttps);
     out.push({ url: e.privateHttps, phoneUrl: privatePhoneUrl, usable: !!privatePhoneUrl, kind: 'privateHttps', plain: false, title: t('私有 HTTPS'), note: t('通过已配置的私有网络连接；请在手机上验证连通性。') });
   }
-  if (e.wan && !e.publicTunnelDisabled) {
+  if (e.wan && !e.publicTunnelDisabled && (!e.publicTunnelManaged || e.publicTunnelVerified === true)) {
     var phoneUrl = dshLiteAddress(e.wan);
     out.push({ url: e.wan, phoneUrl: phoneUrl, usable: !!phoneUrl, kind: 'wan', plain: false, title: t('在外面用'),
       note: t('经 Cloudflare，任何网络都能连；内容是加密的') });
@@ -876,6 +910,10 @@ function renderEntries(e) {
   box.innerHTML = '';
   var items = entryList(e);
   var tunnelState = (state.data && state.data.tunnel) || {};
+  var managedTunnels = e.publicTunnelManaged === true || !!(state.data && state.data.tunnels &&
+    (state.data.tunnels.managed === true || (state.data.tunnels.requested === true && state.data.tunnels.supported === true)));
+  var currentManagedPrimary = managedPrimaryGuard(state.data);
+  items = items.filter(function (item) { return item.kind !== 'wan' || currentManagedPrimary(item.phoneUrl); });
   var publicDisabled = e.publicTunnelDisabled === true || tunnelState.disabled === true;
   if (publicDisabled) items = items.filter(function (item) { return item.kind !== 'wan'; });
   function card(kind, title, subtitle, url, state, note) {
@@ -901,10 +939,10 @@ function renderEntries(e) {
   function addButton(el, label, tone, fn) { el.appendChild(mkBtn(label, tone || '', fn)); }
   function addEntryButtons(el, phoneUrl, label) {
     var copyButton = mkBtn(t('复制链接'), phoneUrl ? 'primary' : '', function () {
-      if (phoneUrl && !addressChanging) copy(phoneUrl, label);
+      if (phoneUrl && !addressChanging && (phoneUrl !== wanLite || currentManagedPrimary(phoneUrl))) copy(phoneUrl, label);
     });
     var openButton = mkBtn(t('打开'), '', function () {
-      if (phoneUrl && !addressChanging) window.open(phoneUrl, '_blank', 'noopener,noreferrer');
+      if (phoneUrl && !addressChanging && (phoneUrl !== wanLite || currentManagedPrimary(phoneUrl))) window.open(phoneUrl, '_blank', 'noopener,noreferrer');
     });
     copyButton.disabled = openButton.disabled = !phoneUrl || addressChanging;
     el.appendChild(copyButton);el.appendChild(openButton);
@@ -931,15 +969,73 @@ function renderEntries(e) {
     publicDisabled ? t('公网隧道的启动和探测已禁用。这不代表已有隧道已停止，也不会撤销旧链接的访问权限。') : wanUrl && !wanLite ? t('手机需要带有效密钥的 HTTPS 隧道链接。请刷新地址；仍不可用时，换新地址和密钥。') :
       t('无需注册即可在外网使用。地址不是永久的，重建后旧地址会失效。'));
   var notice = document.createElement('div'); notice.className = 'tunnel-notice';
-  notice.innerHTML = t('<b>地址变更后：</b>手机已开启系统通知的，会自动收到新的恢复链接；没开启的，在手机页面点一次“开启系统通知”。');
+  if (managedTunnels) notice.textContent = t('主备通道自动修复时不会推送新的恢复链接。请在手机上保存已验证的备用地址；地址变更后，请在电脑控制台检查当前地址并重新保存。');
+  else notice.innerHTML = t('<b>地址变更后：</b>手机已开启系统通知的，会自动收到新的恢复链接；没开启的，在手机页面点一次“开启系统通知”。');
   if (!publicDisabled) wanCard.appendChild(notice);
   var wanActs = document.createElement('div'); wanActs.className = 'access-actions';
   addEntryButtons(wanActs, wanLite, t('外网临时通道'));
-  if (wanLite) addButton(wanActs, t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging) copy(wanLite, t('DSH 轻量版地址')); });
+  if (wanLite) addButton(wanActs, t('复制 DSH 轻量版地址'), '', function () { if (!addressChanging && currentManagedPrimary(wanLite)) copy(wanLite, t('DSH 轻量版地址')); });
   addButton(wanActs, t('刷新当前地址'), '', function () { homeOperation(t('正在刷新当前外网地址…')); load(); });
   addButton(wanActs, t('更换密钥'), '', function () { homeMutate('key'); });
   if (!publicDisabled) addButton(wanActs, t('换新地址和密钥'), '', function () { homeMutate('renew'); });
   wanCard.appendChild(wanActs); box.appendChild(wanCard);
+  // Optional second public connection. Do not infer reachability or phone
+  // preparation from an existing primary cookie or a running child process.
+  var tunnels = state.data && state.data.tunnels;
+  if (tunnels) {
+    var backupSlot = tunnels.backup || {}, backupUrl = '';
+    var backupRequested = tunnels.requested === true || tunnels.enabled === true;
+    var renderedGeneration = backupSlot.generation, renderedUrl = backupSlot.url, renderedEnabled = tunnels.enabled, renderedSupported = tunnels.supported;
+    function currentBackupCard() {
+      var current = state.data && state.data.tunnels;
+      return current === tunnels && current.enabled === renderedEnabled && current.supported === renderedSupported &&
+        (current.requested === true || current.enabled === true) === backupRequested &&
+        current.backup && current.backup.generation === renderedGeneration && current.backup.url === renderedUrl;
+    }
+    try {
+      var parsedBackup = new URL(backupSlot.url);
+      if (tunnels.enabled === true && tunnels.supported === true && backupSlot.phase === 'ready' && backupSlot.reachable === true &&
+          Number.isFinite(backupSlot.checkedAt) && backupSlot.checkedAt <= Date.now() + 5000 && Date.now() - backupSlot.checkedAt <= 180000 &&
+          /^[a-z0-9-]+\.trycloudflare\.com$/.test(parsedBackup.hostname) && parsedBackup.protocol === 'https:' &&
+          !parsedBackup.port && !parsedBackup.username && !parsedBackup.password && !parsedBackup.search && !parsedBackup.hash &&
+          parsedBackup.pathname === '/dsh-lite' && backupSlot.url === parsedBackup.origin + '/dsh-lite' &&
+          backupSlot.origin === parsedBackup.origin) backupUrl = backupSlot.url;
+    } catch (_) {}
+    var backupCard = document.createElement('article'); backupCard.className = 'access-card backup-card'; backupCard.id = 'backup-tunnel-card';
+    var backupHeading = document.createElement('h3'); backupHeading.textContent = t('备用外网通道');
+    var backupStatus = document.createElement('p'); backupStatus.className = 'access-note'; backupStatus.setAttribute('role', 'status');
+    backupStatus.textContent = t(tunnels.code === 'tunnel-migration-unconfirmed' ? '当前主通道的管理归属未确认，备用启动已暂停以保留现有连接。请在电脑上先“停止桥接”，确认停止后再“启动桥接”，然后重新检查；期间手机连接会中断。' :
+      !tunnels.supported ? '备用通道仅支持 Windows 上的动态 Cloudflare Quick 隧道。' :
+      !tunnels.enabled ? '备用通道默认关闭，可按需开启。' : backupUrl ? '备用通道已通过外部连通检查；手机登录与加密准备仍需单独完成。' :
+        '正在等待已验证可达的备用地址。');
+    var backupRisk = document.createElement('p'); backupRisk.className = 'access-note';
+    backupRisk.textContent = t('开启后会增加一条 Cloudflare 公网连接。主备仍共用电脑、网络和服务商，不能消除共同故障。');
+    var backupActions = document.createElement('div'); backupActions.className = 'access-actions';
+    var backupToggle = mkBtn(t(backupRequested ? '关闭备用通道' : '开启备用通道'), '', function () {
+      if (window.__dshBackupSettingBusy || !currentBackupCard()) return;
+      var enable = !backupRequested;
+      if (!confirm(t(enable ? '开启备用通道？这会新增一条 Cloudflare 公网连接。主备共用电脑、网络和服务商；首次打开备用地址仍需单独登录并设置加密。' :
+        '关闭备用通道？保存后将请求停止受管的备用连接。此操作不会撤销已配对设备或主通道访问。'))) return;
+      if (!currentBackupCard()) return;
+      window.__dshBackupSettingBusy = true; backupToggle.disabled = true;
+      Promise.resolve(action('set-backup-tunnel', t(enable ? '开启备用通道' : '关闭备用通道'), { enabled: enable }))
+        .finally(function () { window.__dshBackupSettingBusy = false; load(); });
+    });
+    backupToggle.setAttribute('role', 'switch'); backupToggle.setAttribute('aria-checked', String(backupRequested));
+    backupToggle.disabled = (!tunnels.supported && !backupRequested) || window.__dshBackupSettingBusy === true;
+    backupActions.appendChild(backupToggle);
+    var backupCopy = mkBtn(t('复制无凭据备用地址'), '', function () {
+      // An old rendered card must not keep copying an expired address.
+      if (currentBackupCard() && backupUrl && backupSlot.url === backupUrl && backupSlot.origin === new URL(backupUrl).origin && backupSlot.phase === 'ready' && backupSlot.reachable === true && Date.now() - backupSlot.checkedAt <= 180000) copy(backupUrl, t('备用外网通道'));
+      else load();
+    });
+    backupCopy.disabled = !backupUrl; backupActions.appendChild(backupCopy);
+    var backupNote = document.createElement('p'); backupNote.className = 'access-note';
+    backupNote.textContent = t('手机刷新页面后可保存当前备用地址。复制的是不含凭据的地址，不会自动准备该地址的登录与加密。');
+    backupCard.appendChild(backupHeading); backupCard.appendChild(backupStatus); backupCard.appendChild(backupRisk);
+    backupCard.appendChild(backupActions); backupCard.appendChild(backupNote); box.appendChild(backupCard);
+  }
+
   var privateEntry = items.filter(function (item) { return item.kind === 'privateHttps'; })[0];
   if (privateEntry) {
     var privateCard = card('private-card', t('私有 HTTPS'), t('私有网络'), privateEntry.url,
@@ -1137,7 +1233,11 @@ function renderNotify(nf) {
   //   网页推送这条（不用装任何东西）本来就写好并跑通了，问题在于
   //   控制台把「装 ntfy、抄主题名」当成主路，把这条挤成了括号里的一句提醒。
   //   现在：先说这条路，而且它就是任务完成通知本身（不再只是「地址变更」专用）。
-  if (nf.webPushDevices) {
+  var managedTunnels = state.data && state.data.tunnels &&
+    (state.data.tunnels.managed === true || (state.data.tunnels.requested === true && state.data.tunnels.supported === true));
+  if (managedTunnels) {
+    $('notify-hint').textContent = t('主备通道自动修复时不会推送新的恢复链接。请在手机上保存已验证的备用地址；地址变更后，请在电脑控制台检查当前地址并重新保存。');
+  } else if (nf.webPushDevices) {
     $('notify-hint').innerHTML = t('网页推送已开：这台手机上有 {n} 个浏览器订阅 —— 任务干完、连接地址变更都会直接弹到锁屏。', { n: nf.webPushDevices });
   } else {
     $('notify-hint').innerHTML = t('<b>推荐：不用装 App。</b>手机打开 HTTPS 地址点「开启提醒」，iPhone 先「添加到主屏幕」。\n任务完成、换地址都弹到锁屏。') +
@@ -1332,6 +1432,11 @@ function load() {
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(render)
     .catch(function (e) {
+      if (state.data && state.data.tunnels && (state.data.tunnels.managed || (state.data.tunnels.requested && state.data.tunnels.supported))) renderEntries(state.data.entries || {});
+      var heroActions = $('heroActs');
+      Array.prototype.forEach.call(heroActions && heroActions.children || [], function (button) {
+        if (button.__primaryGuard && !button.__primaryGuard()) button.disabled = true;
+      });
       if (!renderRestartWait()) {
         $('hero').className = 'hero bad';
         $('heroTitle').textContent = t('读不到状态');
@@ -1355,6 +1460,19 @@ function action(name, label, params) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body)
   }).then(function (r) { return r.json(); }).then(function (j) {
+    if (name === 'refresh-tunnel' && j && j.code === 'managed-primary-refresh-requested') {
+      j.message = t('已请求重建主通道。请等待连通性验证后在电脑控制台查看当前地址；不会自动推送恢复链接。');
+    }
+    if (name === 'set-backup-tunnel' && j) {
+      var backupMessages = {
+        'backup-enabled': '已请求启动备用通道，请等待外部连通检查。',
+        'backup-disabled': '已关闭备用设置，正在等待受管备用连接停止；设备授权未撤销。',
+        'backup-unsupported': '备用通道仅支持 Windows 上的动态 Cloudflare Quick 隧道。',
+        'backup-invalid-request': '备用设置请求无效，请从本机控制台重试。',
+        'backup-save-failed': '无法确认备用设置已保存，请刷新状态后重试。'
+      };
+      j.message = t(backupMessages[j.code] || '无法确认备用设置已保存，请刷新状态后重试。');
+    }
     // 服务端说「我在重启」时，不能立刻 load() —— 那几秒里服务确实不在，
     // 页面会跳到「读不到状态 / 服务可能刚重启」，看起来像点坏了。
     // 先等它回来，再刷新。
@@ -1507,7 +1625,9 @@ $('btn-logs').onclick = function () { action('open-logs', t('打开日志目录'
 $('btn-diagnostic').onclick = function () { action('export-diagnostic', t('导出诊断包')); };
 // 刷新隧道地址：**不可逆**（地址一定变），所以确认框要把后果说清楚
 $('btn-refresh-tunnel').onclick = function () {
-  if (!confirm(t('重建隧道、换一个新地址？\n\n· 新地址和现在这条**一定不一样**\n· 旧书签立刻失效；建好后自动推一条能直接点开的链接\n\n只是网卡了一下？等一会儿或刷新页面。\n确定要重建吗？'))) return;
+  var tunnels = state.data && state.data.tunnels;
+  var managed = tunnels && (tunnels.managed === true || (tunnels.requested === true && tunnels.supported === true));
+  if (!confirm(t(managed ? '请求重建主通道？主地址可能更换，手机连接会中断。请先保存并验证备用地址能在此手机使用；新地址需要在电脑控制台查看，不会自动推送恢复链接。' : '重建隧道、换一个新地址？\n\n· 新地址和现在这条**一定不一样**\n· 旧书签立刻失效；建好后自动推一条能直接点开的链接\n\n只是网卡了一下？等一会儿或刷新页面。\n确定要重建吗？'))) return;
   action('refresh-tunnel', t('刷新隧道地址'));
 };
 $('btn-tls-dir').onclick = function () { action('open-tls-dir', t('打开证书目录')); };
@@ -1825,6 +1945,26 @@ setInterval(load, 5000);
 //   · 日志正文（#logs）、地址、设备名、主机名：是数据，不是界面文案。
 if (window.DshI18n && window.DshI18n.register) {
   window.DshI18n.register({
+    "请求重建主通道？主地址可能更换，手机连接会中断。请先保存并验证备用地址能在此手机使用；新地址需要在电脑控制台查看，不会自动推送恢复链接。": {"en": "Request a primary tunnel rebuild? Its address may change and phone access will be interrupted. First save the backup address and verify that it works on this phone. Check the computer console for the new address; a recovery link will not be sent automatically.", "es": "¿Solicitar la reconstrucción del túnel principal? Su dirección puede cambiar y se interrumpirá el acceso desde el teléfono. Guarda primero la dirección de respaldo y verifica que funcione en este teléfono. Consulta la nueva dirección en la consola del ordenador; no se enviará automáticamente un enlace de recuperación."},
+    "已请求重建主通道。请等待连通性验证后在电脑控制台查看当前地址；不会自动推送恢复链接。": {"en": "Primary tunnel rebuild requested. Wait for verified reachability, then check the current address in the computer console. A recovery link will not be sent automatically.", "es": "Reconstrucción del túnel principal solicitada. Espera a que se verifique la accesibilidad y consulta la dirección actual en la consola del ordenador. No se enviará automáticamente un enlace de recuperación."},
+    "主备通道自动修复时不会推送新的恢复链接。请在手机上保存已验证的备用地址；地址变更后，请在电脑控制台检查当前地址并重新保存。": {"en": "Automatic main/backup tunnel repair does not send new recovery links. Save the verified backup address on your phone. After an address changes, check the current address in the computer console and save it again.", "es": "La reparación automática de los túneles principal y de respaldo no envía nuevos enlaces de recuperación. Guarda la dirección de respaldo verificada en el teléfono. Si una dirección cambia, comprueba la actual en la consola del ordenador y vuelve a guardarla."},
+    "当前主通道的管理归属未确认，备用启动已暂停以保留现有连接。请在电脑上先“停止桥接”，确认停止后再“启动桥接”，然后重新检查；期间手机连接会中断。": {"en": "Ownership of the current primary tunnel is unconfirmed, so backup startup is paused to preserve the existing connection. On the computer, use Stop bridge, confirm it has stopped, then use Start bridge and check again. Phone access will be interrupted during this process.", "es": "No se ha confirmado la propiedad del túnel principal, así que el inicio del respaldo está en pausa para conservar la conexión actual. En el ordenador, usa Detener puente, confirma que se haya detenido y luego usa Iniciar puente y vuelve a comprobar. El acceso desde el teléfono se interrumpirá durante este proceso."},
+    "备用外网通道": {"en": "Backup internet tunnel", "es": "Túnel de internet de respaldo"},
+    "备用通道仅支持 Windows 上的动态 Cloudflare Quick 隧道。": {"en": "Backup tunnels require Windows and dynamic Cloudflare Quick tunnels.", "es": "Los túneles de respaldo requieren Windows y túneles dinámicos de Cloudflare Quick."},
+    "备用通道默认关闭，可按需开启。": {"en": "The backup tunnel is off by default. Enable it if needed.", "es": "El túnel de respaldo está desactivado de forma predeterminada. Actívalo si lo necesitas."},
+    "备用通道已通过外部连通检查；手机登录与加密准备仍需单独完成。": {"en": "The backup tunnel passed an external reachability check. Phone sign-in and encryption setup must still be completed separately.", "es": "El túnel de respaldo superó una comprobación externa de accesibilidad. El inicio de sesión y la configuración del cifrado del teléfono aún deben completarse por separado."},
+    "正在等待已验证可达的备用地址。": {"en": "Waiting for a backup address with verified reachability.", "es": "Esperando una dirección de respaldo cuya accesibilidad esté verificada."},
+    "开启后会增加一条 Cloudflare 公网连接。主备仍共用电脑、网络和服务商，不能消除共同故障。": {"en": "Enabling this adds another public Cloudflare connection. Both tunnels share the same computer, network and provider, so shared failures remain possible.", "es": "Al activarlo se añade otra conexión pública de Cloudflare. Ambos túneles comparten ordenador, red y proveedor, por lo que pueden sufrir fallos comunes."},
+    "关闭备用通道": {"en": "Turn off backup tunnel", "es": "Desactivar túnel de respaldo"},
+    "开启备用通道": {"en": "Turn on backup tunnel", "es": "Activar túnel de respaldo"},
+    "开启备用通道？这会新增一条 Cloudflare 公网连接。主备共用电脑、网络和服务商；首次打开备用地址仍需单独登录并设置加密。": {"en": "Turn on the backup tunnel? This adds another public Cloudflare connection. Both tunnels share the computer, network and provider. Before first use, the backup address requires its own sign-in and encryption setup.", "es": "¿Activar el túnel de respaldo? Se añadirá otra conexión pública de Cloudflare. Ambos túneles comparten ordenador, red y proveedor. Antes del primer uso, la dirección de respaldo requiere su propio inicio de sesión y configuración del cifrado."},
+    "关闭备用通道？保存后将请求停止受管的备用连接。此操作不会撤销已配对设备或主通道访问。": {"en": "Turn off the backup tunnel? Saving requests shutdown of the managed backup connection. This does not revoke paired devices or access through the primary tunnel.", "es": "¿Desactivar el túnel de respaldo? Al guardar se solicita detener la conexión de respaldo administrada. Esto no revoca los dispositivos emparejados ni el acceso por el túnel principal."},
+    "复制无凭据备用地址": {"en": "Copy backup address without credentials", "es": "Copiar dirección de respaldo sin credenciales"},
+    "手机刷新页面后可保存当前备用地址。复制的是不含凭据的地址，不会自动准备该地址的登录与加密。": {"en": "After refreshing the phone page, save the current backup address. The copied address has no credentials and does not automatically set up sign-in or encryption.", "es": "Tras actualizar la página del teléfono, guarda la dirección de respaldo actual. La dirección copiada no contiene credenciales ni configura automáticamente el inicio de sesión o el cifrado."},
+    "已请求启动备用通道，请等待外部连通检查。": {"en": "Backup tunnel startup requested. Wait for the external reachability check.", "es": "Inicio del túnel de respaldo solicitado. Espera la comprobación externa de accesibilidad."},
+    "已关闭备用设置，正在等待受管备用连接停止；设备授权未撤销。": {"en": "Backup disabled. Waiting for the managed backup connection to stop; device authorization has not been revoked.", "es": "Respaldo desactivado. Esperando a que se detenga la conexión de respaldo administrada; la autorización de los dispositivos no se ha revocado."},
+    "备用设置请求无效，请从本机控制台重试。": {"en": "Invalid backup setting request. Try again from the local computer console.", "es": "Solicitud de configuración de respaldo no válida. Inténtalo desde la consola local del ordenador."},
+    "无法确认备用设置已保存，请刷新状态后重试。": {"en": "Saving the backup setting could not be confirmed. Refresh the status before retrying.", "es": "No se pudo confirmar que se guardara la configuración de respaldo. Actualiza el estado antes de volver a intentarlo."},
     // ── 顶栏 / 标签页 / 静态骨架 ──────────────────────────────────────────
     '手机连接': { en: 'Phone connection', es: 'Conexión del teléfono' },
     '正在检查…': { en: 'Checking…', es: 'Comprobando…' },
@@ -1964,6 +2104,8 @@ if (window.DshI18n && window.DshI18n.register) {
     '没装': { en: 'Not installed', es: 'No instalado' },
     '正在运行': { en: 'Running', es: 'En marcha' },
     '没在运行': { en: 'Not running', es: 'Parado' },
+    'DSH 进程检测在 8 秒后超时，尚无法确认是否正在运行。请刷新重试。': { en: 'DSH process discovery timed out after 8 seconds. Its running state could not be confirmed. Refresh to retry.', es: 'La detección de procesos de DSH agotó el tiempo de espera de 8 segundos. No se pudo confirmar si está en marcha. Actualiza para reintentar.' },
+    'DSH 进程检测失败，尚无法确认是否正在运行。请刷新重试。': { en: 'DSH process discovery failed. Its running state could not be confirmed. Refresh to retry.', es: 'Falló la detección de procesos de DSH. No se pudo confirmar si está en marcha. Actualiza para reintentar.' },
     '没有找到，装好之后刷新': { en: 'Not found — install it, then refresh', es: 'No encontrado; instálalo y actualiza' },
     '启动': { en: 'Start', es: 'Iniciar' },
     '启动 {name}': { en: 'Starting {name}', es: 'Iniciando {name}' },

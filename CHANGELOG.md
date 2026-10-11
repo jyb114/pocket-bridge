@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-preview.15 - Optional backup tunnels and safer diagnostics
+
+- Add an explicit, disabled-by-default primary/backup pair for Windows Cloudflare Quick Tunnels. Track each owned process separately, verify fresh current-boot readiness and repair only the affected slot with bounded retries; uncertain ownership blocks replacement.
+- Offer a copy-backup reminder on a full phone-page reload; first visits use an optional Settings entry and do not automatically open it. Never navigate or retry a message automatically. Copy only a bare verified alternate address; login and encryption-key setup at that other origin remain separate, explicit prerequisites.
+- Preserve existing single-tunnel, disabled-policy and private-HTTPS behavior. Document common PC/network/provider failure limits and the legacy-session stop/start step before a managed pair is established.
+- Export only fixed device/browser classifications in diagnostic device summaries. Omit free-form device labels, including unknown-device labels containing source IPv4 or IPv6 addresses, while preserving local device records and useful summary metadata.
+- Replace blanket diagnostic privacy assurances with the actual known-credential check and a manual-review warning. Document safe, minimal public bug reports and synthetic examples for redaction defects.
+- Distinguish an empty DSH process inventory from a timed-out or failed scan with bounded, redacted status. Keep the existing eight-second command deadline, runtime identity checks and fail-closed discovery behavior.
+- Show fixed timeout/error recovery notes in the existing target views in Chinese, English and Spanish, including cached console language changes, without granting actions to an unverified runtime.
+- Add synthetic offline stdout/file export coverage and inventory outcome/recovery regressions. Give the owned, never-executed runtime fixture executable permission where required for Linux discovery checks.
+- Isolate the cookie regression from public-IP services with a synthetic egress probe and a loopback-only child-network guard. Its checks must fail on unexpected network attempts, even if application code catches the error.
+- Preserve the existing Windows CI, package verification and compiled-installer release gates. These changes do not establish new physical-phone, cellular or model-provider acceptance.
+
 ## 1.0.0-preview.14 - Safer startup and clearer local controls
 
 - Explain missing or outdated genuine Node.js 24+ without assuming a Windows shortcut. Keep diagnostics read-only and distinguish unknown readiness from an observed startup failure.

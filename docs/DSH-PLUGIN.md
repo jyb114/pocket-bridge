@@ -20,6 +20,11 @@ npm publication is required. Preview.14's versioned release URL is:
 dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.14/pocket-bridge-1.0.0-preview.14.tgz
 ```
 
+This source branch prepares preview.15. Until its assets are published, the
+command above remains the published preview.14 example; do not infer that a
+new version is available from the source package version alone. Use the exact
+verified tarball URL from [Releases](https://github.com/jyb114/pocket-bridge/releases).
+
 That command targets an npm DSH Web profile. A desktop application's plugin
 manager owns its own profile: install the same tarball through that manager
 when supported, rather than assuming that `--profile web` changes the desktop

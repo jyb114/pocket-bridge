@@ -29,6 +29,7 @@ const { spawn, execFile } = require('child_process');
 
 const { sendWebPush } = require('./webpush.js');
 const cfg = require('./config.js');
+const tunnelState = require('./tunnel-state.js');
 const retiredTargets = require('./retired-targets.js');
 const dshPhoneSurface = require('./dsh-phone-surface.js');
 const requestOrigin = require('./request-origin.js');
@@ -2881,6 +2882,7 @@ function rotateCoolingDown() {
  * @returns {boolean} Whether controlled restart was accepted/scheduled. This
  * does not claim that drain, helper startup, or restart has completed.
  */
+let tunnelWatchdog = null;
 const desktopLifecycle = require('./gateway-lifecycle.js').createGatewayLifecycle({
   async spawnRestart(detail) {
     const args = [path.join(BASE, 'scripts', 'restart-gateway.js')];
@@ -2910,7 +2912,10 @@ const desktopLifecycle = require('./gateway-lifecycle.js').createGatewayLifecycl
     return new Promise(resolve => setTimeout(() => { process.exit(code); resolve(); }, 700));
   },
   onState(state) {
-    if (state.phase === 'draining') log('Controlled gateway shutdown: desktop admission stopped; waiting for owned actions.');
+    if (state.phase === 'draining') {
+      if (tunnelWatchdog) tunnelWatchdog.stop();
+      log('Controlled gateway shutdown: desktop admission stopped; waiting for owned actions.');
+    }
     if (state.phase === 'failed') log(`Controlled gateway shutdown blocked (${state.code}); ownership evidence retained, no forced exit.`);
   }
 });
@@ -3013,8 +3018,18 @@ async function buildConsoleStatus(lang) {
 
   const conf = cfg.loadConfig();
   const tunnelDisabled = conf.tunnelProvider === 'none' || status.tunnel?.disabled === true;
+  const tunnels = tunnelState.publicTunnelState(tunnelState.readTunnelState(LOG_DIR), { config: conf, now: Date.now(),
+    instanceId: INSTANCE_ID, port: PORT, bootId: GATEWAY_BOOT_ID });
+  const managedTunnels = tunnels.managed === true || (tunnels.requested === true && tunnels.supported === true);
+  const primary = managedTunnels ? tunnels.primary : null;
+  // A retained legacy status file cannot advertise managed readiness across a
+  // gateway boot, a failed repair, expiry, or an explicit policy change.
+  const primaryOrigin = tunnelDisabled ? null : managedTunnels
+    ? primary && primary.reachable === true && primary.url && primary.origin || null
+    : status.tunnel?.url || null;
   const entries = { lan: [], wan: null, pairPage: null, pairCode: currentPairCode(), lanHttps: [], encrypted: !!e2eeSecret,
-    lanDisabled: conf.enableLanAccess === false && !HTTPS_PORT, publicTunnelDisabled: tunnelDisabled, privateHttps: null };
+    lanDisabled: conf.enableLanAccess === false && !HTTPS_PORT, publicTunnelDisabled: tunnelDisabled,
+    publicTunnelManaged: managedTunnels, publicTunnelVerified: managedTunnels && !!primaryOrigin, privateHttps: null };
   const privateOrigin = conf.privateHttps?.enabled === true && privateHttpsStatus.normalizePrivateOrigin(conf.privateHttps.origin);
   if (privateOrigin) entries.privateHttps = `${privateOrigin.origin}/k/${ACCESS_KEY}${kfrag}`;
   for (const x of netInfo.lanV4) {
@@ -3027,15 +3042,15 @@ async function buildConsoleStatus(lang) {
     // 配对页**不带**密钥：它是给二维码用的，而且配对流程本来就会重新认证。
     entries.pairPage = `http://${netInfo.lanV4[0].address}:${PORT}/pair`;
   }
-  if (!tunnelDisabled && status.tunnel && status.tunnel.url) {
-    entries.wan = `${status.tunnel.url}/k/${ACCESS_KEY}${kfrag}`;
+  if (primaryOrigin) {
+    entries.wan = `${primaryOrigin}/k/${ACCESS_KEY}${kfrag}`;
   }
 
   const domainMode = conf.tunnelDomainMode || 'dynamic';
   // “已经选好下次用哪种”与“这一条正在跑的隧道是什么”不是同一件事。
   // 切换策略刻意不立即重启（不能惊吓式换掉手机书签），所以控制台必须
   // 同时给出这两个状态，不能把配置值冒充成当前公网入口。
-  const tunnelProvider = !tunnelDisabled && status.tunnel?.provider || null;
+  const tunnelProvider = !tunnelDisabled && (managedTunnels ? tunnels.supported && 'cloudflare-quick' : status.tunnel?.provider) || null;
   const activeDomainMode = tunnelProvider === 'cloudflare-named' ? 'fixed'
     : tunnelProvider ? 'dynamic' : null;
 
@@ -3071,7 +3086,7 @@ async function buildConsoleStatus(lang) {
     })(),
     tunnel: {
       disabled: tunnelDisabled,
-      url: !tunnelDisabled && status.tunnel?.url || null,
+      url: primaryOrigin,
       provider: tunnelProvider,
       // 「进程在不在」和「公网通不通」必须分开报给界面。
       //
@@ -3079,13 +3094,14 @@ async function buildConsoleStatus(lang) {
       // 于是界面只能写一句「已配置 · 可达性未验证」。而使用者真正会遇到的
       // 恰恰是那个中间态：cloudflared 进程活着、域名已被 Cloudflare 回收，
       // 电脑上看着一切正常，手机怎么都连不上。分开报才说得清。
-      running: !tunnelDisabled && typeof status.tunnel?.running === 'boolean' ? status.tunnel.running : null,
-      reachable: !tunnelDisabled && status.tunnel && typeof status.tunnel.reachable === 'boolean'
-        ? status.tunnel.reachable : null,      // null = 守护进程这轮还没探
-      probeMs: (status.tunnel && status.tunnel.probeMs) || null,
-      probeError: (status.tunnel && status.tunnel.probeError) || null,
-      checkedAt: status.updatedAt || null
+      running: !managedTunnels && !tunnelDisabled && typeof status.tunnel?.running === 'boolean' ? status.tunnel.running : null,
+      reachable: tunnelDisabled ? null : managedTunnels ? primary && primary.reachable === true :
+        status.tunnel && typeof status.tunnel.reachable === 'boolean' ? status.tunnel.reachable : null,      // null = 守护进程这轮还没探
+      probeMs: !managedTunnels && status.tunnel && status.tunnel.probeMs || null,
+      probeError: !managedTunnels && status.tunnel && status.tunnel.probeError || null,
+      checkedAt: managedTunnels ? primary && primary.checkedAt || null : status.updatedAt || null
     },
+    tunnels,
     devices: sessions.list(),
     // 语言得**当参数传进来**：这个函数没有 req。
     //
@@ -3122,6 +3138,37 @@ async function buildConsoleStatus(lang) {
   };
 }
 
+// This opt-in is invoked only by an explicit local console action. It changes
+// the setting and requests reconciliation, never reports a tunnel as ready.
+function setBackupTunnel(req, body) {
+  const invalid = () => ({ ok: false, code: 'backup-invalid-request', message: 'Backup setting requires an explicit desktop request.' });
+  if (!isLoopback(req) || req.method !== 'POST' || !body || typeof body.enabled !== 'boolean') return invalid();
+  const contentType = String(req.headers && req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const origin = req.headers && req.headers.origin;
+  let sameOrigin = true;
+  try {
+    if (origin) {
+      const parsed = new URL(origin);
+      sameOrigin = parsed.host === req.headers.host && parsed.protocol === (req.socket && req.socket.encrypted ? 'https:' : 'http:');
+    }
+  } catch (_) { sameOrigin = false; }
+  if (contentType !== 'application/json' || !sameOrigin || req.headers['sec-fetch-site'] === 'cross-site') return invalid();
+  try {
+    const conf = cfg.loadConfig();
+    if (body.enabled && !tunnelState.backupPolicy(conf).supported) {
+      return { ok: false, code: 'backup-unsupported', message: 'Dual tunnels require Windows and dynamic Cloudflare Quick tunnels.' };
+    }
+    conf.tunnelBackup = { ...(conf.tunnelBackup || {}), enabled: body.enabled };
+    cfg.saveConfig(conf);
+    if (tunnelWatchdog) tunnelWatchdog.request({ retireBackup: !body.enabled });
+    return { ok: true, code: body.enabled ? 'backup-enabled' : 'backup-disabled',
+      message: body.enabled ? 'Backup tunnel requested. Wait for externally verified reachability.' :
+        'Backup tunnel disabled. Owned backup shutdown is pending; existing device access has not been revoked.' };
+  } catch (_) {
+    return { ok: false, code: 'backup-save-failed', message: 'Backup setting could not be confirmed. Reload the status before retrying.' };
+  }
+}
+
 // Address URLs include the gateway access key in their path. This handler is
 // reached only after the normal device/proof gates and e2eeWrap decryption.
 function serveDshLiteAddresses(req, res) {
@@ -3142,7 +3189,9 @@ function serveDshLiteAddresses(req, res) {
       lan: Array.isArray(entries.lan) ? entries.lan.map(strip).filter(Boolean) : [],
       lanHttps: Array.isArray(entries.lanHttps) ? entries.lanHttps.map(strip).filter(Boolean) : [],
       wan: strip(entries.wan), pairPage: strip(entries.pairPage),
-      encrypted: entries.encrypted === true, needsKey: false });
+      encrypted: entries.encrypted === true, needsKey: false,
+      // Dedicated allowlisted DTO: this branch never constructs a credential URL.
+      tunnels: data && data.tunnels || null });
   }).catch((err) => {
     log(`地址面板读取失败: ${err.message}`);
     reply(500, { ok: false, error: 'addresses-unavailable' });
@@ -3282,7 +3331,7 @@ function handleConsole(req, res, u) {
           const out = `${r.stdout || ''}${r.stderr || ''}`;
           const m = out.match(/已写入\s+(\S+)/);
           if (r.status === 0 && m) {
-            result = { ok: true, message: `诊断包已生成：${m[1]}（已确认不含密钥与正文）` };
+            result = { ok: true, message: `诊断包已生成：${m[1]}（已检查已知凭据，分享前请检查私人内容）` };
           } else {
             // 非零退出意味着**自检搜到了不该有的东西，所以没有写出文件** ——
             // 这不是「生成失败」，是脱敏规则有漏洞，必须原样告诉使用者。
@@ -3315,6 +3364,7 @@ function handleConsole(req, res, u) {
         try {
           const conf = cfg.loadConfig();
           const fixedMode = conf.tunnelDomainMode === 'fixed';
+          const managedMode = tunnelState.readTunnelState(LOG_DIR) !== null || tunnelState.backupPolicy(conf).enabled;
           if (fixedMode && !(conf.fixedTunnel && conf.fixedTunnel.name && conf.fixedTunnel.hostname)) {
             throw new Error('固定隧道尚未配置，不能用临时地址替代。');
           }
@@ -3327,7 +3377,8 @@ function handleConsole(req, res, u) {
           result = {
             ok: true,
             restarting: true,   // 让控制台显示"正在重启"并等它回来
-            message: fixedMode
+            code: managedMode ? 'managed-primary-refresh-requested' : undefined,
+            message: managedMode ? 'Managed primary refresh requested. Check the computer console after reachability is verified; a recovery link will not be sent automatically.' : fixedMode
               ? '正在请求固定隧道重连（十几秒）。\n\n' +
                 '· 固定 hostname 不会改变\n' +
                 '· 若配置或 Cloudflare 凭据有问题，控制台会明确显示外网不可用，不会悄悄换成临时地址'
@@ -3655,6 +3706,8 @@ function handleConsole(req, res, u) {
         } catch (err) {
           result = { ok: false, message: `切换失败: ${err.message}` };
         }
+      } else if (body.action === 'set-backup-tunnel') {
+        result = setBackupTunnel(req, body);
       } else if (body.action === 'set-domain-mode') {
         const mode = body.mode === 'fixed' ? 'fixed' : 'dynamic';
         try {
@@ -4549,6 +4602,8 @@ function handleRequestInner(req, res, proofDeadline) {
   // 这一点信息量和「端口开着」是同级的，不构成泄露。
   if (u.pathname === '/__probe') {
     res.writeHead(204, {
+      // Ephemeral public boot nonce, not an authentication credential.
+      'x-pocket-bridge-boot': GATEWAY_BOOT_ID,
       'cache-control': 'no-store',
       'access-control-allow-origin': '*'
     });
@@ -6104,7 +6159,7 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function render(d){
   var box=document.getElementById('list');
   box.innerHTML='';
-  var shown=(d.targets||[]).filter(function(t){return t.id==='dsh'&&(t.installed||t.running)});
+  var shown=(d.targets||[]).filter(function(t){return t.id==='dsh'&&(t.installed||t.running||t.noteKey==='dshInventoryTimeout'||t.noteKey==='dshInventoryError')});
   if(!shown.length){
     box.innerHTML='<div class="card"><div class="name">'+L.none+'</div>'+
       '<div class="blurb">'+L.noneHint+'</div></div>';
@@ -6151,7 +6206,7 @@ function render(d){
         act(t.id,'stop',s);
       };
       acts.appendChild(s);
-    }else{
+    }else if(t.installed){
       var b=document.createElement('button');
       b.textContent=L.start;
       b.style.cssText='background:#2c5ce6;border-color:#2c5ce6;color:#fff;font-weight:600';
@@ -6267,6 +6322,14 @@ refresh();
     startHttpsIfEnabled();
     // DSH 重启会换端口，看门狗负责悄悄跟上，使用者不该感觉到
     startDshWatchdog();
+    tunnelWatchdog = require('./tunnel-watchdog.js').createTunnelWatchdog({
+      base: BASE,
+      context: () => ({ config: cfg.loadConfig(), managed: tunnelState.readTunnelState(LOG_DIR) !== null,
+        phase: desktopLifecycle.status().phase,
+        port: PORT, bootId: GATEWAY_BOOT_ID, instanceId: INSTANCE_ID, pid: process.pid }),
+      onError: code => log(code)
+    });
+    tunnelWatchdog.start();
     // Codex 挂了自动拉回来（但不主动启动没在用的它）
 
 

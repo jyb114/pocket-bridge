@@ -1,7 +1,8 @@
 'use strict';
 
-// Starts the unmodified gateway in its own directory and sends real HTTP
-// requests. It never contacts a production gateway, DSH, or Codex listener.
+// Starts the unmodified gateway with synthetic egress discovery in its own
+// directory. Child connections are restricted to literal loopback addresses;
+// no production gateway, DSH, public IP service or tunnel is contacted.
 const assert = require('assert/strict');
 const fs = require('fs');
 const http = require('http');
@@ -53,6 +54,45 @@ function responseCookies(response) {
   return (response.headers['set-cookie'] || []).map(value => value.split(';')[0]);
 }
 
+function isolatedNetworkPreload(base) {
+  const preload = path.join(base, 'fixture-network.cjs');
+  // routes.js warms the egress cache at import time. Inject before importing the
+  // gateway, rather than letting this cookie regression contact an IP service.
+  // The guard rejects unexpected fetches and non-loopback TCP before any DNS or
+  // connection. Record refusals so swallowed application errors still fail QA.
+  fs.writeFileSync(preload, `
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+function refuse(kind) {
+  fs.appendFileSync(path.join(__dirname, 'network-refusals.txt'), kind + '\\n');
+  throw new Error('Cookie fixture refused unexpected network activity: ' + kind);
+}
+globalThis.fetch = () => refuse('fetch');
+const connect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0];
+  const host = first && typeof first === 'object' ? first.host :
+    typeof args[1] === 'string' ? args[1] : null;
+  if (host !== '127.0.0.1' && host !== '::1') return refuse('non-loopback TCP');
+  return connect.apply(this, args);
+};
+require('./scripts/config.js').probeEgress = async () => ({
+  ipv4: '198.51.100.10', ipv6: '2001:db8::10', errors: []
+});
+`);
+  return preload;
+}
+
+function verifyNetworkIsolation(base) {
+  assert.equal(fs.existsSync(path.join(base, 'network-refusals.txt')), false,
+    'the fixture must not attempt any unexpected external network operation');
+  const egress = JSON.parse(fs.readFileSync(path.join(base, 'logs', 'egress.json'), 'utf8'));
+  assert.deepEqual(egress.value, { ipv4: '198.51.100.10', ipv6: '2001:db8::10', errors: [] },
+    'the gateway must use the injected synthetic egress probe');
+}
+
 async function exercise(mode) {
   const base = path.join(RUN, mode);
   fs.mkdirSync(base, { recursive: true });
@@ -66,7 +106,7 @@ async function exercise(mode) {
     fs.writeFileSync(credentials, 'refs:\nrecords:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      secret: ' + crypto.randomBytes(32).toString('base64url') + '\n');
   }
   const stdout = fs.openSync(path.join(base, 'process.log'), 'w');
-  const child = spawn(process.execPath, [path.join(base, 'scripts', 'mobile-proxy.js')], {
+  const child = spawn(process.execPath, ['--require', isolatedNetworkPreload(base), path.join(base, 'scripts', 'mobile-proxy.js')], {
     cwd: base, windowsHide: true,
     env: { ...process.env, DSH_GW_PORT: String(gatewayPort), DSH_GW_TARGET_PORT: String(unusedDshPort), DSH_CREDENTIALS_FILE: credentials, DSH_HOME: base, DSH_GW_NO_NOTIFY: '1' },
     stdio: ['ignore', stdout, stdout]
@@ -154,7 +194,7 @@ async function exercise(mode) {
     const secondPort = await freePort();
     fs.writeFileSync(path.join(secondBase, 'config.json'), JSON.stringify({ gatewayPort: secondPort, dshPort: unusedDshPort, dshMode: 'web', tunnelProvider: 'none', lanHttps: { enabled: false }, codex: { port: unusedCodexPort } }));
     const secondLog = fs.openSync(path.join(secondBase, 'process.log'), 'w');
-    const second = spawn(process.execPath, [path.join(secondBase, 'scripts', 'mobile-proxy.js')], {
+    const second = spawn(process.execPath, ['--require', isolatedNetworkPreload(secondBase), path.join(secondBase, 'scripts', 'mobile-proxy.js')], {
       cwd: secondBase, windowsHide: true,
       env: { ...process.env, DSH_GW_PORT: String(secondPort), DSH_GW_TARGET_PORT: String(unusedDshPort), DSH_CREDENTIALS_FILE: credentials, DSH_HOME: secondBase, DSH_GW_NO_NOTIFY: '1' },
       stdio: ['ignore', secondLog, secondLog]
@@ -184,6 +224,7 @@ async function exercise(mode) {
         second.kill(); await stopped;
       }
       fs.closeSync(secondLog);
+      check(mode + ': second gateway uses only synthetic egress and loopback connections', () => verifyNetworkIsolation(secondBase));
     }
     const blockedContent = await request(gatewayPort, '/__targets', remotePairs.join('; '), authority);
     check(mode + ': a key login still does not bypass fragment-key proof for content', () => {
@@ -197,6 +238,7 @@ async function exercise(mode) {
       await stopped;
     }
     fs.closeSync(stdout);
+    check(mode + ': first gateway uses only synthetic egress and loopback connections', () => verifyNetworkIsolation(base));
   }
 }
 

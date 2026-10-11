@@ -9,7 +9,8 @@ const { Worker } = require('worker_threads');
 const CACHE_TTL_MS = 5000;
 let installationCache = null;
 let installationPending = null, installationGeneration = 0;
-const INVENTORY_OPTIONS = { encoding: 'utf8', timeout: 8000, maxBuffer: 4 * 1024 * 1024,
+const INVENTORY_TIMEOUT_MS = 8000;
+const INVENTORY_OPTIONS = { encoding: 'utf8', timeout: INVENTORY_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
   windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] };
 const INSTALLATION_TIMEOUT_MS = 65000;
 // config's legacy finder has bounded synchronous process/registry/shortcut
@@ -90,10 +91,13 @@ function processQuery() {
   // Windows PowerShell otherwise writes the system code page to pipes. Node
   // decodes UTF-8, corrupting non-ASCII installation paths before validation.
   return '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; ' +
+    "$ErrorActionPreference = 'Stop'; " +
     'Get-CimInstance Win32_Process -Filter "' + filter + '" | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
 }
 
 function parseWindowsProcesses(out) {
+  // PowerShell emits no JSON when the successful query has no matches.
+  if (!String(out).trim()) return [];
   const raw = JSON.parse(out);
   return (Array.isArray(raw) ? raw : [raw]).filter(Boolean).map(p => ({
     pid: p.ProcessId, name: p.Name, executablePath: p.ExecutablePath, commandLine: p.CommandLine
@@ -111,15 +115,24 @@ function parsePosixProcesses(namesText, argsText) {
   });
 }
 
+function inventoryFailure(error) {
+  // Node reports synchronous deadlines as ETIMEDOUT, but execFile's own
+  // timeout normally has no exit code and a killed SIGTERM child. Do not copy
+  // Error fields: messages/cmd/stdout/stderr can contain private process data.
+  const timedOut = error && (error.code === 'ETIMEDOUT' ||
+    (error.code === null && error.killed === true && error.signal === 'SIGTERM'));
+  return { records: [], status: timedOut ? 'timeout' : 'error' };
+}
+
 function processInventory(deps = {}) {
   const exec = deps.execFileSync || execFileSync, platform = deps.platform || process.platform;
   try {
     if (platform === 'win32') {
-      return parseWindowsProcesses(exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', processQuery()], { ...INVENTORY_OPTIONS }));
+      return { records: parseWindowsProcesses(exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', processQuery()], { ...INVENTORY_OPTIONS })), status: 'ok' };
     }
-    return parsePosixProcesses(exec('ps', ['-ww', '-eo', 'pid=,comm='], { ...INVENTORY_OPTIONS }),
-      exec('ps', ['-ww', '-eo', 'pid=,args='], { ...INVENTORY_OPTIONS }));
-  } catch (_) { return []; }
+    return { records: parsePosixProcesses(exec('ps', ['-ww', '-eo', 'pid=,comm='], { ...INVENTORY_OPTIONS }),
+      exec('ps', ['-ww', '-eo', 'pid=,args='], { ...INVENTORY_OPTIONS })), status: 'ok' };
+  } catch (error) { return inventoryFailure(error); }
 }
 
 function executeFile(exec, file, args, options) {
@@ -131,25 +144,33 @@ function executeFile(exec, file, args, options) {
 async function processInventoryAsync(deps = {}) {
   const exec = deps.execFile || execFile, platform = deps.platform || process.platform;
   try {
-    if (platform === 'win32') return parseWindowsProcesses(await executeFile(exec, 'powershell',
-      ['-NoProfile', '-NonInteractive', '-Command', processQuery()], { ...INVENTORY_OPTIONS }));
+    if (platform === 'win32') return { records: parseWindowsProcesses(await executeFile(exec, 'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', processQuery()], { ...INVENTORY_OPTIONS })), status: 'ok' };
     const [names, args] = await Promise.all([
       executeFile(exec, 'ps', ['-ww', '-eo', 'pid=,comm='], { ...INVENTORY_OPTIONS }),
       executeFile(exec, 'ps', ['-ww', '-eo', 'pid=,args='], { ...INVENTORY_OPTIONS })
     ]);
-    return parsePosixProcesses(names, args);
-  } catch (_) { return []; }
+    return { records: parsePosixProcesses(names, args), status: 'ok' };
+  } catch (error) { return inventoryFailure(error); }
 }
 
-function scanProcesses(deps = {}) {
-  const records = deps.processes || processInventory(deps);
-  return records.map(p => classifyProcess(p, deps)).filter(Boolean).sort((a, b) => a.pid - b.pid);
+function classifyInventory(result, deps) {
+  const processes = result.records.map(p => classifyProcess(p, deps)).filter(Boolean).sort((a, b) => a.pid - b.pid);
+  return { processes, processInventory: { status: result.status === 'ok' && !processes.length ? 'empty' : result.status,
+    timeoutMs: INVENTORY_TIMEOUT_MS } };
 }
 
-async function scanProcessesAsync(deps = {}) {
-  const records = deps.processes || await processInventoryAsync(deps);
-  return records.map(p => classifyProcess(p, deps)).filter(Boolean).sort((a, b) => a.pid - b.pid);
+function scanProcessesWithDiagnostics(deps = {}) {
+  return classifyInventory(deps.processes ? { records: deps.processes, status: 'ok' } : processInventory(deps), deps);
 }
+
+async function scanProcessesWithDiagnosticsAsync(deps = {}) {
+  return classifyInventory(deps.processes ? { records: deps.processes, status: 'ok' } : await processInventoryAsync(deps), deps);
+}
+
+// Preserve the existing array-only exports for callers that only need identity.
+function scanProcesses(deps = {}) { return scanProcessesWithDiagnostics(deps).processes; }
+async function scanProcessesAsync(deps = {}) { return (await scanProcessesWithDiagnosticsAsync(deps)).processes; }
 
 function webArguments(config) {
   const args = Array.isArray(config.dshWebArguments) ? config.dshWebArguments : ['web', '--no-open'];
@@ -305,6 +326,19 @@ function publicCandidate(candidate) {
     httpEvidence: candidate.httpEvidence || null };
 }
 
+function serializeProcessInventory(inventory) {
+  // Rebuild from a closed vocabulary rather than spreading an OS result.
+  if (!inventory || !['ok', 'empty', 'timeout', 'error'].includes(inventory.status)) return null;
+  return { status: inventory.status, timeoutMs: INVENTORY_TIMEOUT_MS };
+}
+
+function inventoryReason(inventory) {
+  if (!inventory) return null;
+  if (inventory.status === 'timeout') return 'DSH process inventory timed out after 8000 ms. Runtime discovery is incomplete.';
+  if (inventory.status === 'error') return 'DSH process inventory failed. Runtime discovery is incomplete.';
+  return null;
+}
+
 function serializeRuntime(runtime, capabilityContext = {}) {
   if (!runtime) return null;
   return { running: Boolean(runtime.running), installed: Boolean(runtime.installed),
@@ -314,7 +348,7 @@ function serializeRuntime(runtime, capabilityContext = {}) {
     confidence: runtime.confidence || 'low', httpEvidence: runtime.httpEvidence || null,
     capabilities: { ...(runtime.capabilities || {}) },
     featureCapabilities: require('./dsh-feature-capabilities.js').buildFeatureCapabilities(runtime, capabilityContext), source: runtime.source || null,
-    reason: runtime.reason || null, candidates: (runtime.candidates || []).map(publicCandidate) };
+    reason: runtime.reason || null, processInventory: serializeProcessInventory(runtime.processInventory), candidates: (runtime.candidates || []).map(publicCandidate) };
 }
 
 /** Injectable OS, HTTP and time boundaries keep tests independent of installed apps. */
@@ -322,7 +356,7 @@ function createRuntimeResolver(deps = {}) {
   const now = deps.now || Date.now;
   const ttl = deps.ttlMs === undefined ? CACHE_TTL_MS : deps.ttlMs;
   const loadConfig = deps.loadConfig || (() => require('./config').loadConfig());
-  const scan = deps.scanProcesses || (() => scanProcessesAsync(deps));
+  const scan = deps.scanProcesses || (() => scanProcessesWithDiagnosticsAsync(deps));
   // Lazy import avoids discover -> runtime -> discover initialization cycles.
   const portsOf = deps.listeningPortsOf || ((pids, options) => require('./discover').listeningPortsOfAsync(pids, options, deps));
   const probe = deps.probeDshRuntime || ((input) => (deps.adapter || adapter()).probeDshRuntime(input, { fs: deps.fs || fs }));
@@ -330,7 +364,11 @@ function createRuntimeResolver(deps = {}) {
   let cached = null, cachedKey = null, cachedAt = 0, pending = null, pendingKey = null, previous = null, generation = 0;
 
   async function discover(config) {
-    const [installed, processes] = await Promise.all([installation(config), scan()]);
+    const [installed, scanned] = await Promise.all([installation(config), scan()]);
+    // Legacy injected scans may still return only the candidate array.
+    const processes = Array.isArray(scanned) ? scanned : scanned.processes;
+    const processInventory = Array.isArray(scanned) ? { status: processes.length ? 'ok' : 'empty', timeoutMs: INVENTORY_TIMEOUT_MS } :
+      serializeProcessInventory(scanned.processInventory);
     const owners = await portsOf(processes.map(record => record.pid), { withOwners: true });
     const byPid = new Map(processes.map(record => [record.pid, record]));
     const inputs = [];
@@ -369,7 +407,7 @@ function createRuntimeResolver(deps = {}) {
     if (chosen) {
       const launch = chosen.kind === 'desktop' ? installed.desktop && installed.desktop.launch :
         chosen.kind === 'cli' ? installed.cli && installed.cli.launch : installed.launch;
-      return { ...chosen, running: true, installed: true, launch: launch || null,
+      return { ...chosen, running: true, installed: true, launch: launch || null, processInventory,
         candidates: results.map(publicCandidate) };
     }
     // IPC desktop builds remain installed but are never treated as an HTTP server.
@@ -382,8 +420,8 @@ function createRuntimeResolver(deps = {}) {
       port: null, pid: null, version: installed.version || (processes[0] && processes[0].version) || null,
       versionSource: record && record.versionSource || null, ...profile,
       launch: installed.launch || null, confidence: processes.length ? 'medium' : 'low', httpEvidence: null,
-      source: installed.source || (processes.length ? 'process' : null), candidates: results.map(publicCandidate),
-      reason: profile.reason || (processes.length ? 'DSH was found without a confirmed HTTP listener.' : 'No running DSH web runtime was found.') };
+      source: installed.source || (processes.length ? 'process' : null), processInventory, candidates: results.map(publicCandidate),
+      reason: inventoryReason(processInventory) || profile.reason || (processes.length ? 'DSH was found without a confirmed HTTP listener.' : 'No running DSH web runtime was found.') };
   }
 
   async function resolveRuntime(config, options = {}) {
@@ -418,6 +456,7 @@ function createRuntimeResolver(deps = {}) {
 let singleton;
 function resolver() { return singleton || (singleton = createRuntimeResolver()); }
 module.exports = { CACHE_TTL_MS, classifyProcess, scanProcesses, scanProcessesAsync,
+  scanProcessesWithDiagnostics, scanProcessesWithDiagnosticsAsync,
   detectInstallation, detectInstallationAsync, serializeRuntime, createRuntimeResolver,
   resolveRuntime: (...args) => resolver().resolveRuntime(...args),
   peekRuntime: () => resolver().peekRuntime(), invalidateRuntime: () => resolver().invalidateRuntime() };

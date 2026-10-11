@@ -34,7 +34,55 @@ function log(msg) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Managed pairs may only refresh one identified slot. Never fall through to
+// the legacy all-installation cleanup if migration/state is uncertain.
+async function refreshManaged() {
+  const conf = require('./config.js').loadConfig();
+  const backup = require('./tunnel-state.js').backupPolicy(conf);
+  const managed = backup.enabled || fs.existsSync(path.join(LOG_DIR, 'tunnels.json'));
+  const policy = require('./tunnel.js').providerPolicy(conf.tunnelProvider);
+  if (!policy.enabled) { log('Public tunnel refresh is disabled by the current provider policy.'); return true; }
+  if (!managed) return false;
+  if (!backup.supported) { log('Managed tunnel refresh is unsupported; existing endpoints were left unchanged.'); return true; }
+  const slotAt = process.argv.indexOf('--slot');
+  const role = slotAt >= 0 ? process.argv[slotAt + 1] : 'primary';
+  if (!['primary', 'backup'].includes(role)) throw Error('invalid-tunnel-role');
+  if (!backup.enabled && role === 'backup') { log('Backup is disabled; no backup tunnel was started.'); return true; }
+  const rawPort = fs.readFileSync(path.join(LOG_DIR, 'gateway-port.txt'), 'utf8').trim();
+  const port = /^\d+$/.test(rawPort) ? Number(rawPort) : 0;
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw Error('gateway-port-unavailable');
+  const identity = JSON.parse(fs.readFileSync(path.join(LOG_DIR, 'instance.json'), 'utf8'));
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  if (!uuid.test(identity?.instanceId || '')) throw Error('gateway-identity-unconfirmed');
+  const health = await new Promise(resolve => {
+    let request, timer, done = false;
+    const finish = value => { if (done) return; done = true; clearTimeout(timer); request?.destroy(); resolve(value); };
+    timer = setTimeout(() => finish(null), 2000);
+    request = require('http').get({ host: '127.0.0.1', port, path: '/__health' }, response => {
+      if (response.statusCode !== 200) { finish(null); return; }
+      let body = '', bytes = 0;
+      response.on('data', data => { bytes += data.length; if (bytes > 16384) finish(null); else body += data; });
+      response.on('error', () => finish(null)); response.on('aborted', () => finish(null));
+      response.on('end', () => { try { finish(JSON.parse(body)); } catch (_) { finish(null); } });
+    });
+    request.on('error', () => finish(null));
+  });
+  if (!health || health.service !== 'pocket-bridge-gateway' || health.instanceId !== identity.instanceId || health.port !== port ||
+      !uuid.test(health.bootId || '') || !Number.isSafeInteger(health.pid) || health.pid < 1)
+    throw Error('gateway-identity-unconfirmed');
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(__dirname, 'gateway-daemon.js'), '--repair-tunnels', '--port', String(port),
+      '--expected-instance', health.instanceId, '--expected-boot', health.bootId, '--expected-pid', String(health.pid),
+      '--refresh-slot', role], { cwd: BASE, detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', reject); child.once('spawn', () => { child.unref(); resolve(); });
+  });
+  log('Requested a verified ' + role + ' tunnel repair; the other slot is preserved.');
+  return true;
+}
+
 (async () => {
+  try { if (await refreshManaged()) return; }
+  catch (_) { log('Managed tunnel refresh was blocked; no broad cleanup or fallback was attempted.'); process.exitCode = 1; return; }
   const FILE = path.join(LOG_DIR, 'last-tunnel-url.txt');
   let before = '';
   try { before = fs.readFileSync(FILE, 'utf8').trim(); } catch (err) { }
