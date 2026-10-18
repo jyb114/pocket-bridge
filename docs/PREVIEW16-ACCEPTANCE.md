@@ -25,10 +25,33 @@ DSH compatibility or complete desktop feature parity.
 | Phone HTTPS page | Loaded the real workspace catalog and the desktop-created conversation, with connected/encrypted state. |
 | Phone workspace and conversation | Browsed to the dedicated computer directory, added it as a workspace and created a new conversation through the actual phone controls. |
 | Phone model and permission controls | Selected the Account Flash model and Low reasoning. Changed to read-only through the visible permission panel and observed the independent current-permission readback. |
+| Phone message and reasoning | Submitted a no-tools prompt through the primary HTTPS entrance and observed the actual `PB16_PHONE_1017_OK` answer and reasoning record. |
+| Text file | Opened a workspace text preview and saved the 18-byte file. Its SHA256 matched the source. Uploaded that file through the visible chooser; the model read it and returned its exact `PB16_FILE_1017_OK` content. |
+| Image | Uploaded a synthetic image through the visible chooser. The model read it and returned `ORANGE 472`. Explicitly loaded the authorized tool image preview, staged its download, and used the Save link. The downloaded 2,717-byte PNG matched the source SHA256. |
+| Backup entrance | Used Prepare and the explicit confirmation, observed the receiver's successful login/encryption/storage verification, opened the verified backup entrance, selected the same conversation, and received the actual `PB16_BACKUP_1017_OK` reply. No task was replayed while opening the alternate entrance. |
+| Original plugin manager | Installed the local Preview.16 candidate archive through the original third-party installation dialog on native 0.2.1-rc.2, observed Installed, clicked Enable now, confirmed the enabled switch, and opened the real Pocket Bridge settings panel. |
+| Original plugin controls | Clicked Start bridge, refreshed until Running, and ran diagnostics. The actual target/runtime checks passed. This clean plugin-managed directory had no configured HTTPS entrance, so the panel correctly kept connection reveal unavailable rather than inventing a ready link. Used Stop bridge, its explicit confirmation and Refresh; observed Stopped while DSH remained open. |
 
-This record is updated with the remaining operated workflows before publication.
 An accepted send is not, on its own, a completed model reply. An uploaded file
 receipt is not, on its own, proof that the model read that file.
+
+## Live lost-receipt experiment
+
+A controlled browser network interception forwarded the real encrypted prompt
+to the real gateway and DSH, then held the real server response. The page was
+reloaded before that response was released to the old document. After closing
+the ordinary backup reminder and waiting for the conversation to load, the
+same draft was entered and Send was clicked again. The visible recovery panel
+reported Computer received. Confirming the receipt cleared that unchanged
+draft; the actual history contained one user submission and the completed
+`PB16_LOST_ACK_OK` reply. A later visit through the prepared backup entrance
+still showed only one such user submission.
+
+The first test driver tried to type before reload initialization and the
+backup reminder had finished; its Send click timed out on a disabled button.
+The subsequent recovery was operated after those visible controls settled.
+This is deterministic fault injection with an actual model response, not a
+claim of a naturally occurring cellular failure or every possible restart race.
 
 ## Receipt recovery boundaries
 
@@ -52,6 +75,13 @@ admission, revocation during asynchronous discovery, storage failure and
 late-UI-result checks use isolated fixtures. They do not constitute original
 DSH model replies or physical-phone acceptance. Test-browser cleanup is scoped
 to its owned connection, process and profile.
+
+The local formal Windows preflight completed 132 checks with zero failures
+and no whole-test skips. Six explicitly isolated test sections exclude live
+machine interactions; four browser fixtures use synthetic applications. The
+release workflow separately requires successful push CI for its exact main
+commit and repeats the isolated suite before building artifacts. A release is
+not established merely by this local preflight or by opening a draft PR.
 
 ## Not established by this release record
 
