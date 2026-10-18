@@ -71,8 +71,7 @@ try {
   const originalPackage = fs.readFileSync(packageFile);
   const fixturePackage = { ...JSON.parse(originalPackage), version: '1.0.0-preview.13',
     exports: { '.': './dsh-plugin/index.js', './client': './dsh-plugin/client.js' },
-    dsh: { bundle: { patch: './dsh-plugin/cordis.patch.yml' }, client: { platform: 'web' } },
-    peerDependencies: { '@deepseek-ai/schemastery': '*', '@deepseek-ai/dsh-home-paths': '*' } };
+    dsh: { bundle: { patch: './dsh-plugin/cordis.patch.yml' }, client: { platform: 'web' } } };
   put('package.json', JSON.stringify(fixturePackage, null, 2) + '\n');
   const sourceBefore = fs.readFileSync(packageFile);
   const secretMarker = 'ISOLATED_PRIVATE_DATA_DO_NOT_PACKAGE_6e01d3d54c9b';
@@ -95,6 +94,19 @@ try {
     assert.equal(accepted.manifest.exports['./client'], './dsh-plugin/client.js');
     assert.equal(accepted.manifest.dsh.bundle.patch, './dsh-plugin/cordis.patch.yml');
     assert.equal(JSON.parse(accepted.files.get('dsh-plugin/package.json')).type, 'module');
+  });
+  check('tarball preserves the exact DSH version gates for both current and older plugin loaders', () => {
+    // DSH 0.2.1 prioritizes engines.dsh; older loaders check dsh-* peers.
+    // Do not replace production peers with wildcards in this pack fixture:
+    // doing so previously concealed the 0.2.1 install rejection.
+    const manifest = JSON.parse(originalPackage);
+    const supported = ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2'];
+    const range = manifest.engines.dsh;
+    assert.equal(range, supported.join(' || '));
+    assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-home-paths'], range);
+    assert.equal(accepted.manifest.engines.dsh, range);
+    assert.equal(accepted.manifest.engines.node, manifest.engines.node);
+    assert.deepEqual(accepted.manifest.peerDependencies, manifest.peerDependencies);
   });
   check('system tar independently lists every real package member without private additions', () => {
     const list = execFileSync('tar', ['-tzf', result.artifactPath], { encoding: 'utf8', windowsHide: true })

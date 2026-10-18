@@ -158,6 +158,11 @@
           verifiedContext = null; stop('连接或密钥已更换。请重新准备备用入口。');
         }
       },
+      invalidateTarget: function () {
+        verifiedContext = null;
+        if (attempt) stop('备用地址已更换。请重新准备。');
+        else { result = null; options.onState(result); }
+      },
       cancel: function () { if (attempt) stop('准备已取消。'); },
       dispose: function () { if (attempt) stop('准备已取消。'); disposed = true; win.removeEventListener('message', message); } };
   }

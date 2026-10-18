@@ -6,6 +6,7 @@ require('./replay-isolated-fixture.js').install();
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const http = require('node:http');
+const { EventEmitter } = require('node:events');
 const { Readable } = require('node:stream');
 const { extractFunction, sliceBalanced } = require('./page-source');
 const e2ee = require('./e2ee');
@@ -21,9 +22,9 @@ async function invoke(handler, payload, options = {}) {
     'x-dsh-e2ee': options.encrypted === false ? '0' : '1',
     'content-length': String(bytes.length) };
   req.__dshE2eeDecrypted = options.decrypted !== false;
-  const res = { status: null, headers: null, text: '', writableEnded: false, destroyed: false,
+  const res = Object.assign(new EventEmitter(), { status: null, headers: null, text: '', writableEnded: false, destroyed: false,
     writeHead(status, headers) { this.status = status; this.headers = headers; },
-    end(text) { this.text = String(text); this.writableEnded = true; } };
+    end(text) { this.text = String(text); this.writableEnded = true; } });
   await handler(req, res);
   return { status: res.status, headers: res.headers, body: JSON.parse(res.text) };
 }
@@ -38,24 +39,29 @@ function isolatedScreen() {
     if (name === 'node:path') return path;
     if (name === 'node:os') return { tmpdir: () => 'D:\\isolated-screen-fixture' };
     if (name === 'node:fs') return {
+      mkdtempSync(prefix) { return prefix + String(writes.length); },
       writeFileSync(file, body) { writes.push(file); files.set(file, Buffer.from(body)); },
       statSync(file) { assert(files.has(file)); return { size: files.get(file).length }; },
       readFileSync(file) { assert(files.has(file)); return files.get(file); },
-      unlinkSync(file) { assert(files.delete(file)); }
+      rmSync(directory) { for (const file of files.keys()) if (path.dirname(file) === directory) files.delete(file); }
     };
-    if (name === 'node:child_process') return { execFileSync(command, args, options) {
+    if (name === 'node:child_process') return { spawn(command, args, options) {
       assert.equal(command, 'powershell');
-      assert.equal(options.windowsHide, true); assert.equal(options.timeout, 20000);
+      assert.equal(options.windowsHide, true);
+      assert.deepEqual(Array.from(options.stdio), ['ignore', 'pipe', 'ignore']);
       assert.equal(args[5], '-File');
       assert(files.get(args[6]).toString().startsWith('\uFEFF'));
       captures.push({ width: Number(args[7]), command, args: args.slice() });
       files.set(args[8], Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-      return 'RESULT=OK ' + args[7] + 'x720';
+      const child = new EventEmitter(); child.stdout = new EventEmitter();
+      setImmediate(() => { child.stdout.emit('data', Buffer.from('RESULT=OK ' + args[7] + 'x720')); child.emit('close', 0, null); });
+      child.kill = () => { throw Error('Unexpected synthetic capture cancellation'); };
+      return child;
     } };
     throw Error('Unexpected isolated screen dependency: ' + name);
   };
   vm.runInNewContext('(function(require,module,exports){' + source + '\n})',
-    { Buffer, process: { pid: 12345 } })(fixtureRequire, module, module.exports);
+    { Buffer, AbortController, setTimeout, clearTimeout, process: { pid: 12345 } })(fixtureRequire, module, module.exports);
   return { handler: module.exports.createDshLiteScreen(), captures, writes, files };
 }
 

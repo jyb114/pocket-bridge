@@ -36,6 +36,64 @@ const TO_STDOUT = process.argv.includes('--stdout');
 function readMaybe(p) { try { return fs.readFileSync(p, 'utf8').trim(); } catch (err) { return null; } }
 
 const SECRETS = [];
+
+// Both notification setters accept custom HTTP(S) servers. Treat the complete
+// configured destination as a credential, including short topics/keys, rather
+// than recognizing only the public providers' hostnames. The sender also uses
+// a queryless ntfy URL and strips trailing slashes from Bark URLs.
+function collectNotificationSecrets(name, value) {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) return;
+  const destinations = new Set([value, value.replace(/\/+$/, '')]);
+  let parsed;
+  try {
+    parsed = new URL(value);
+    destinations.add(parsed.href);
+  } catch (err) { /* An accepted but malformed setting is still private. */ }
+  for (const destination of [...destinations]) {
+    destinations.add(destination.split(/[?#]/)[0].replace(/\/+$/, ''));
+  }
+  const values = new Set();
+  const variants = input => {
+    values.add(input);
+    let decoded = input;
+    try { decoded = decodeURIComponent(input); values.add(decoded); } catch (err) { }
+    // The setters accept arbitrary strings after the scheme. URI encoding can
+    // reject an unpaired surrogate; retain the raw/canonical destination then.
+    try { values.add(encodeURIComponent(input)); } catch (err) { }
+    try { values.add(encodeURIComponent(decoded)); } catch (err) { }
+  };
+  for (const destination of destinations) variants(destination);
+  // Long path/query components can also appear separately in diagnostics.
+  // Do not replace a one-character topic globally: the full URL variants above
+  // protect it without destroying ordinary words, timestamps or status values.
+  if (parsed) {
+    for (const part of [parsed.username, parsed.password, ...parsed.pathname.split('/'),
+      ...parsed.searchParams.values()]) {
+      if (part.length >= 8) variants(part);
+    }
+    const lastPathPart = parsed.pathname.split('/').filter(Boolean).pop() || '';
+    for (const part of [parsed.username, parsed.password, lastPathPart]) {
+      if (part.length >= 4) variants(part);
+    }
+    for (const [key, part] of parsed.searchParams) {
+      if (/^(?:key|token|secret|password|auth|authorization)$/i.test(key) && part.length >= 4) variants(part);
+    }
+  }
+  // Preserve the previous standalone default-provider credential coverage,
+  // including 4–7-character values and a saved path/query representation.
+  const legacy = value.match(/(?:ntfy\.sh|api\.day\.app)\/(.+)$/);
+  if (legacy && legacy[1].length >= 4) variants(legacy[1]);
+  for (const item of [...values]) {
+    values.add(item.replace(/%[0-9a-f]{2}/gi, escape => escape.toLowerCase()));
+    values.add(item.replace(/%[0-9a-f]{2}/gi, escape => escape.toUpperCase()));
+  }
+  // A log line can itself be JSON. Its quoted/backslash credentials are already
+  // escaped before scrub sees them; the final bundle adds another escape layer.
+  // Collect the same representation for both replacement and final refusal.
+  for (const item of [...values]) values.add(JSON.stringify(item).slice(1, -1));
+  for (const item of values) if (item) SECRETS.push({ name, value: item });
+}
+
 {
   const k = readMaybe(path.join(LOG_DIR, 'access-key.txt'));
   if (k) SECRETS.push({ name: '访问密钥', value: k });
@@ -51,8 +109,8 @@ const SECRETS = [];
     if (!raw) continue;
     try {
       const j = JSON.parse(raw);
-      if (j.ntfy) { const m = String(j.ntfy).match(/ntfy\.sh\/(.+)$/); if (m) SECRETS.push({ name: 'ntfy 主题', value: m[1] }); }
-      if (j.bark) { const m = String(j.bark).match(/api\.day\.app\/(.+)$/); if (m) SECRETS.push({ name: 'Bark key', value: m[1] }); }
+      collectNotificationSecrets('通知凭据', j.ntfy);
+      collectNotificationSecrets('通知凭据', j.bark);
       if (j.privateKey) SECRETS.push({ name: 'Web Push 私钥', value: j.privateKey });
     } catch (err) { }
   }
@@ -65,6 +123,9 @@ const SECRETS = [];
     } catch (err) { }
   }
 }
+// Redact a complete destination before any shorter component, otherwise a
+// replacement in its path could prevent matching its remaining private query.
+SECRETS.sort((a, b) => b.value.length - a.value.length);
 
 // ── 脱敏 ────────────────────────────────────────────────────────────────────
 const HOME = os.homedir();
@@ -108,9 +169,15 @@ function scrub(value) {
   //   所以别只抹 home 和项目目录（那只能挡住自己想到的两种），
   //   直接认「绝对路径」这个形状，只保留扩展名（排查时够用：知道是张图）。
   //   `\b` 不能省：不加的话 `https://x` 里的 `s:/` 会被当成盘符路径。
-  s = s.replace(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s"'<>|]*/g, (m) => {
-    const ext = (m.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0];
-    return '<路径' + (ext ? ' ' + ext : '') + '>';
+  // Windows 路径可以有空格、单引号和括号，不能在这些字符处截断，
+  // 否则会留下用户名/项目名的后半段。未加引号的路径一直取到明确的
+  // 字段边界；同一字段里含糊的后续文字宁可一并隐藏。保留日志末尾标点。
+  // 控制字符也包括上面藏 URL 用的占位符，不能把后面的地址一起吞掉。
+  s = s.replace(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\x00-\x1f"<>|]*/g, (m) => {
+    const suffix = (m.match(/[\s'’”)\]}）,;，；]*$/u) || [''])[0];
+    const filename = m.slice(0, m.length - suffix.length);
+    const ext = (filename.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0];
+    return '<路径' + (ext ? ' ' + ext : '') + '>' + suffix;
   });
 
   // 还原 URL
@@ -131,7 +198,23 @@ function scrub(value) {
 function scrubJson(file) {
   const raw = readMaybe(file);
   if (!raw) return null;
-  try { return JSON.parse(scrub(raw)); } catch (err) { return { _解析失败: err.message }; }
+  // 先解析，再处理字段：JSON 的 \\ 转义不是 UNC 路径，修改原始 JSON
+  // 还可能破坏转义或数字字段。键名也可能包含路径或凭据，一并处理。
+  const visit = (value) => {
+    if (typeof value === 'string') return scrub(value);
+    if (typeof value === 'number') {
+      const redacted = scrub(String(value));
+      return redacted === String(value) ? value : redacted;
+    }
+    if (Array.isArray(value)) return value.map(visit);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [scrub(key), visit(item)]));
+    }
+    return value;
+  };
+  try { return visit(JSON.parse(raw)); }
+  // Node 的解析错误可能引用原始内容，不把异常消息带进分享包。
+  catch (err) { return { _解析失败: '无效 JSON' }; }
 }
 
 /** 取日志尾部若干行并脱敏。行数刻意取得少 —— 日志越多，漏一条的概率越大。 */
@@ -205,13 +288,17 @@ const leaks = [];
 for (const sec of SECRETS) {
   if (!sec.value) continue;
   if (sec.value.length >= 8) {
-    if (text.includes(sec.value)) leaks.push(sec.name);
+    // The assembled JSON can escape quotes/backslashes in a residual value.
+    const escaped = JSON.stringify(sec.value).slice(1, -1);
+    if (text.includes(sec.value) || text.includes(escaped)) leaks.push(sec.name);
   } else if (sec.value.length >= 4) {
     // 和 scrub() 用**同一套判据**：短凭据按数字边界找。
     // 两边判据必须一致 —— 否则要么漏检（自检说没有、其实有），
     // 要么自检永远红（脱敏换了、自检还在找原样）。
-    const esc = sec.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp('(?<![0-9])' + esc + '(?![0-9])').test(text)) leaks.push(sec.name);
+    for (const value of new Set([sec.value, JSON.stringify(sec.value).slice(1, -1)])) {
+      const esc = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp('(?<![0-9])' + esc + '(?![0-9])').test(text)) leaks.push(sec.name);
+    }
   }
 }
 // 顺带查几类不该出现的东西

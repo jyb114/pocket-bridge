@@ -1,12 +1,16 @@
 # DSH compatibility and actual test coverage
 
-Updated 2026-10-06 (UTC), preview.10. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime.
+Updated 2026-10-18 (UTC), preview.16. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime. Older rows below describe their original acceptance runs; they are not all rerun for each new release.
 
 Version detection selects an adapter after checking the local runtime and its observed protocol. A recognized version, a running service, or a successful automated fixture is not proof that every feature works. The exact distribution and the operated workflow matter.
 
 ## Desktop baseline
 
-The current Windows desktop baseline is **DSH 0.1.7-rc.2**, detected from its installed desktop package. Actual authenticated reads returned its session list, model catalog, presets and permission projection. Those read-only checks do not accept message delivery, uploads, approvals or every desktop state. Fresh public-browser operations for the release are recorded separately in [Manual acceptance](MANUAL-ACCEPTANCE.md).
+The preview.16 Windows desktop target is the official **DSH 0.2.1-rc.2** package. Its installer was checked against the official feed's SHA512 and Windows signature, then extracted and run in a separate D-drive home without replacing the existing installation. The original desktop UI selected the Account Flash-1017 model and returned the requested reply. The bridge separately checks the ASAR version, process/listener ownership and observed authenticated protocol before admitting the host. Current operated workflows are recorded in [Preview.16 acceptance](PREVIEW16-ACCEPTANCE.md).
+
+[DeepSeek recommends Harness 0.2.1-rc.1 or newer for Flash-1017](https://api-docs.deepseek.com/news/news261017/). This release admits the exact native 0.2.1-rc.2 build, not every version satisfying that minimum. The optional plugin declares the three exact host versions 0.1.7-rc.2, 0.2.0-rc.2 and 0.2.1-rc.2; that declaration is distinct from rerunning every workflow on each host.
+
+During the preceding local review, the original native 0.1.7-rc.2 UI and the phone both returned `DeepSeek Messages stream: event precedes message_start`. The newer native host returned a real Flash-1017 reply. Pocket Bridge does not fabricate a `message_start` event or suppress that upstream error. The older successful historical rows do not establish present Flash-1017 support in an old host.
 
 The original desktop application on the lost laptop has not been identified or tested. Old npm web packages do not establish compatibility with that executable, another desktop wrapper or an Electron IPC-only build.
 

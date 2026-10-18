@@ -5,6 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const crypto = require('node:crypto');
+const { createDshPromptState } = require('./dsh-prompt-state');
+const journalOutput = path.resolve(__dirname, '../../output'); fs.mkdirSync(journalOutput, { recursive: true });
+const journal = createDshPromptState({ directory: fs.mkdtempSync(path.join(journalOutput, 'adapter-schema-state-')) });
+const promptContext = { deviceId: 'owned-schema-device', runtimeId: 'owned-schema-runtime', secret: 'owned-schema-test-key-0123456789' };
 
 const sent = [];
 const rpcCalls = [];
@@ -92,7 +97,7 @@ const runtime = {
   setTimeout, clearTimeout,
   document: fakeDocument,
   location: { protocol: 'https:', host: 'fixture.test' },
-  crypto: { randomUUID: () => 'random-uuid', getRandomValues: bytes => bytes.fill(1) },
+  crypto: { randomUUID: () => crypto.randomUUID(), getRandomValues: bytes => bytes.fill(1) },
   __dshE2eeSecret: 'fixture-secret',
   DshE2EE: {
     available: () => true, prove: async () => true,
@@ -138,6 +143,16 @@ const runtime = {
       assert.equal(init.headers['content-type'], 'application/json; charset=utf-8');
       const request = JSON.parse(init.body);
       rpcCalls.push(request);
+      if (request.method === 'bridge/prompt-prepare' || request.method === 'bridge/prompt-state') {
+        const value = request.method === 'bridge/prompt-prepare' ?
+          { operation: journal.prepare(promptContext, request.request) } : journal.state(promptContext, request.request);
+        return { status: 200, ok: true, json: async () => ({ result: { ok: true, value } }) };
+      }
+      let promptOperation;
+      if (request.method === 'session/prompt') {
+        assert.equal(journal.begin(promptContext, request.request).dispatch, true);
+        promptOperation = journal.accepted(promptContext, request.request);
+      }
       if (request.method === 'session/prompt' && failPromptOnce) {
         failPromptOnce = false;
         throw new Error('fixture response lost after upstream acceptance');
@@ -168,7 +183,7 @@ const runtime = {
         { id: 'ptc', name: 'Code tool', description: 'run_code', isDefault: false,
           broken: 'PTC runtime missing' }
       ] };
-      if (request.method === 'session/prompt') value = { accepted: true };
+      if (request.method === 'session/prompt') value = { accepted: true, bridgeOperation: promptOperation };
       if (request.method === 'session/cancel') value = { accepted: true };
       if (request.method === 'session/page') value = { records: [
         { type: 'event', event: { type: 'user/message', seq: 8, data: {
@@ -330,14 +345,20 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-a
   assert.deepEqual(JSON.parse(JSON.stringify(await api.readSelection(session.id))),
     { agentPreset: null, modelSelection: null, lastUsedModel: null, plan: null, blank: true });
   await api.sendMessage({ sessionId: session.id, text: 'isolated text', attachments: [upload] });
-  assert.equal(rpcCalls.at(-1).request.content[0].text, 'isolated text');
-  assert.deepEqual(JSON.parse(JSON.stringify(rpcCalls.at(-1).request.content[1])),
+  const sentPrompt = rpcCalls.filter(call => call.method === 'session/prompt').at(-1);
+  assert.equal(sentPrompt.request.content[0].text, 'isolated text');
+  assert.deepEqual(JSON.parse(JSON.stringify(sentPrompt.request.content[1])),
     { type: 'file', receiptId: 'receipt-1' });
   failPromptOnce = true;
-  await assert.rejects(api.sendMessage({ sessionId: 'session-1', text: 'retry-safe' }));
-  const uncertainId = rpcCalls.at(-1).request.requestId;
-  await api.sendMessage({ sessionId: 'session-1', text: 'retry-safe' });
+  const recovered = await api.sendMessage({ sessionId: 'session-1', text: 'retry-safe' });
+  assert.equal(recovered.recovered, true, 'lost positive acceptance is read back without another dispatch');
+  const uncertainId = rpcCalls.filter(call => call.method === 'session/prompt').at(-1).request.requestId;
+  const dispatchCount = rpcCalls.filter(call => call.method === 'session/prompt').length;
   assert.equal(rpcCalls.at(-1).request.requestId, uncertainId);
+  assert.equal(rpcCalls.filter(call => call.method === 'session/prompt').length, dispatchCount, 'durable accepted recovery does not resend');
+  await api.sendMessage({ sessionId: 'session-1', text: 'retry-safe' });
+  assert.notEqual(rpcCalls.filter(call => call.method === 'session/prompt').at(-1).request.requestId, uncertainId,
+    'a later intentional identical prompt gets a fresh identity');
   await api.cancelSession('session-1');
   assert.equal(rpcCalls.at(-1).request.sessionId, 'session-1');
   instance.frame('lite-events', { type: 'waterfall', event: 'approval/request', eventId: 'approve-1',

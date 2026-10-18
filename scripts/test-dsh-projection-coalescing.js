@@ -26,7 +26,7 @@ function fixture() {
     window: null, Map, Promise, Uint8Array, DataView, TextEncoder, Blob,
     Event: class { constructor(type) { this.type = type; } },
     location: { protocol: 'https:', host: 'fixture.test' },
-    crypto: { randomUUID: () => 'fixture-request-id', getRandomValues: bytes => bytes.fill(1) },
+    crypto: { randomUUID: () => '11111111-1111-4111-8111-111111111111', getRandomValues: bytes => bytes.fill(1) },
     performance: { now: () => clock },
     Date: class extends Date { static now() { return dateClock; } },
     __dshE2eeSecret: 'fixture-key-one',
@@ -41,6 +41,12 @@ function fixture() {
         const body = JSON.parse(init.body);
         const call = { secret, body, init, settled: false };
         calls.push(call);
+        if (body.method === 'bridge/prompt-prepare' || body.method === 'bridge/prompt-state') {
+          const value = { operation: { requestId: body.request.requestId,
+            state: body.method === 'bridge/prompt-prepare' ? 'prepared' : 'accepted',
+            reviewed: body.method === 'bridge/prompt-state', contextChanged: false, createdAt: 1, updatedAt: 1 } };
+          return Promise.resolve({ status: 200, ok: true, json: async () => ({ result: { ok: true, value } }) });
+        }
         if (body.method === 'session/list') return Promise.resolve({ status: 200, ok: true,
           json: async () => ({ result: { ok: true, value: { items: [] } } }) });
         return new Promise((resolve, reject) => { call.resolve = resolve; call.reject = reject; });
@@ -66,6 +72,8 @@ function fixture() {
     pendingWrites() { return calls.filter(call => call.resolve && !call.settled && call.body.method !== 'session/projections'); },
     succeed(call, value = projection()) {
       assert.ok(call && call.resolve && !call.settled, 'only the admitted fixture request can settle');
+      if (call.body.method === 'session/prompt') value = { ...value, bridgeOperation: {
+        requestId: call.body.request.requestId, state: 'accepted', reviewed: false, contextChanged: false, createdAt: 1, updatedAt: 1 } };
       call.settled = true; call.decoded = value;
       call.resolve({ status: 200, ok: true, json: async () => ({ result: { ok: true, value } }) });
     },

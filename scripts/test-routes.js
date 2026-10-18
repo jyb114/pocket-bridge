@@ -183,7 +183,7 @@ function req(method, p, opts = {}) {
     {
       name: '隧道域名进来（Cloudflare 会带 x-forwarded-proto）',
       headers: {
-        host: 'stewart-epinions-holding-tel.trycloudflare.com',
+        host: 'fixture-route.trycloudflare.com',
         'x-forwarded-proto': 'https',
         'cf-connecting-ip': '1.2.3.4'
       },
@@ -213,14 +213,14 @@ function req(method, p, opts = {}) {
   // 隧道进来时，浏览器拦混合内容这件事必须被如实标注出来
   const tunnelReq = {
     headers: {
-      host: 'stewart-epinions-holding-tel.trycloudflare.com',
+      host: 'fixture-route.trycloudflare.com',
       'x-forwarded-proto': 'https', 'cf-connecting-ip': '1.2.3.4'
     },
     socket: { remoteAddress: '9.9.9.9' }
   };
   const viaTunnel = await routesMod.recommend(tunnelReq, {
     port: PORT, key: KEY, netInfo,
-    tunnelUrl: 'https://stewart-epinions-holding-tel.trycloudflare.com',
+    tunnelUrl: 'https://fixture-route.trycloudflare.com',
     ipv6Listening: true
   });
   ok('隧道进来 → scheme 认成 https', viaTunnel.arrival.scheme === 'https',

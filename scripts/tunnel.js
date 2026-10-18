@@ -101,7 +101,7 @@ function extractPublicUrl(text) {
   const patterns = [
     // ★ 必须排掉 api / www / dash 这些**服务主机**。
     //
-    //   正常快速隧道的地址是随机多段名（hybrid-store-blink-locations.trycloudflare.com），
+    //   正常快速隧道的地址是随机多段名（fixture-normal.trycloudflare.com），
     //   而 cloudflared 申请隧道失败时，报错正文里带的是 API 端点：
     //       failed to request quick Tunnel:
     //       Post "https://api.trycloudflare.com/tunnel": context deadline exceeded

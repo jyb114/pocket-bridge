@@ -121,6 +121,32 @@ function receiverFixture(options = {}) {
     assert.equal(f.requests.at(-1).action, 'status'); assert.equal(f.control.result().phase, 'prepared');
     f.change(); f.control.update(); assert.equal(f.control.result().phase, 'failed');
   }
+  {
+    const f = sourceFixture(); await f.control.begin(); f.ack(); await flush(); f.ack(); await flush();
+    f.proveReceipt(); await flush(); f.portAck(); await flush();
+    const transfer = f.posts.find(p => p.data.key).data;
+    f.sendPort({ ...transfer, type: 'pocket-bridge-backup-complete' }); await flush();
+    assert.equal(f.control.result().phase, 'prepared');
+    f.control.invalidateTarget(); assert.equal(f.control.result(), null);
+    f.control.update(); assert.equal(f.control.result(), null, 'a restored target does not revive an old prepared claim');
+  }
+  for (const phase of ['issue', 'receipt', 'status']) {
+    const f = sourceFixture(); await f.control.begin(); let held;
+    if (phase === 'issue') { held = f.hold(); f.ack(); }
+    else {
+      f.ack(); await flush(); f.ack(); await flush();
+      if (phase === 'receipt') { held = f.hold(); f.proveReceipt(); }
+      else {
+        f.proveReceipt(); await flush(); f.portAck(); await flush();
+        held = f.hold(); f.sendPort({ ...f.posts.find(p => p.data.key).data, type: 'pocket-bridge-backup-complete' });
+      }
+    }
+    await flush(); f.control.invalidateTarget(); held.resolve(); await flush();
+    assert.equal(f.control.busy(), false); assert.equal(f.child.closed, true);
+    assert.equal(f.states.some(s => s.phase === 'prepared'), false, 'late ' + phase + ' cannot prepare a changed target');
+    if (phase !== 'status') assert.equal(f.posts.some(p => p.data.key), false, 'target changes before key release: ' + phase);
+    if (phase !== 'issue') assert.equal(f.channel.port1.closed, true);
+  }
   for (const options of [{ issued: { origin: 'https://evil.example' } }, { issued: { generation: 'b'.repeat(32) } },
     { issued: { bootId: 'different-boot' } }, { issued: { expiresAt: now + 60001 } }, { issued: { expiresAt: now } },
     { fail: true }, { response: { redirected: true } }, { response: { url: 'https://evil.example' } },

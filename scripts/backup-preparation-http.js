@@ -1,8 +1,10 @@
 'use strict';
 
+const { selectPreparationRoute } = require('./backup-preparation.js');
+
 // Request plumbing is separate from the gateway so admission tests never start
 // a listener, discover public egress, or read a real device/credential store.
-function createBackupPreparationHttp({ preparation, readContext, receiverHtml, authCookies }) {
+function createBackupPreparationHttp({ preparation, readContext, receiverHtml, authCookies, now = Date.now }) {
   function requestOrigin(req) {
     const value = String(req.headers?.origin || '');
     try {
@@ -34,15 +36,12 @@ function createBackupPreparationHttp({ preparation, readContext, receiverHtml, a
   }
   function landing(req, res, url) {
     try {
-      const context = readContext(), slot = context.backup;
+      const context = readContext();
       const source = url.searchParams.get('source') || '', nonce = url.searchParams.get('nonce') || '';
-      const from = new URL(source);
-      if (req.method !== 'GET' || context.enabled !== true || context.supported !== true || !slot ||
-          slot.phase !== 'ready' || slot.reachable !== true || !slot.origin || new URL(slot.origin).host !== req.headers.host ||
-          from.origin !== source || !['http:', 'https:'].includes(from.protocol) ||
-          (from.protocol === 'http:' && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(from.hostname)) ||
+      const route = selectPreparationRoute(context, source, now());
+      if (req.method !== 'GET' || new URL(route.origin).host !== req.headers.host ||
           !/^[a-f0-9]{48}$/.test(nonce)) throw Error('unavailable');
-      const config = JSON.stringify({ origin: slot.origin, source, nonce, bootId: context.bootId }).replace(/</g, '\\u003c');
+      const config = JSON.stringify({ origin: route.origin, source, nonce, bootId: context.bootId }).replace(/</g, '\\u003c');
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
         'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
         'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" });
@@ -65,15 +64,14 @@ function createBackupPreparationHttp({ preparation, readContext, receiverHtml, a
       const input = await body(req), deviceId = device.id, origin = requestOrigin(req);
       let value;
       if (input.action === 'issue') {
-        if (input.origin === origin) throw Error('not-alternate');
-        value = preparation.mint({ deviceId, origin: input.origin, generation: input.generation, nonce: input.nonce, challenge: input.challenge });
+        value = preparation.mint({ deviceId, sourceOrigin: origin, origin: input.origin, generation: input.generation, nonce: input.nonce, challenge: input.challenge });
       } else if (input.action === 'confirm-receiver') {
-        value = preparation.confirmReceiver({ preparationId: input.preparationId, deviceId, receipt: input.receipt, nonce: input.nonce, challenge: input.challenge });
+        value = preparation.confirmReceiver({ preparationId: input.preparationId, deviceId, sourceOrigin: origin, receipt: input.receipt, nonce: input.nonce, challenge: input.challenge });
       } else if (input.action === 'complete') {
         if (input.origin !== origin) throw Error('wrong-origin');
         value = preparation.complete({ preparationId: input.preparationId, deviceId, origin, generation: input.generation, nonce: input.nonce, challenge: input.challenge });
-      } else if (input.action === 'status') value = preparation.status({ preparationId: input.preparationId, deviceId });
-      else if (input.action === 'revoke') value = preparation.revoke({ preparationId: input.preparationId, deviceId });
+      } else if (input.action === 'status') value = preparation.status({ preparationId: input.preparationId, deviceId, sourceOrigin: origin });
+      else if (input.action === 'revoke') value = preparation.revoke({ preparationId: input.preparationId, deviceId, sourceOrigin: origin });
       else throw Error('invalid-action');
       reply(res, 200, { ok: true, ...value });
     } catch (_) { reply(res, 403, { ok: false, code: 'backup-preparation-rejected' }); }

@@ -14,6 +14,7 @@ Other community phone clients and plugins exist, including [DSH Mobile Remote](h
 
 - Browse projects on the computer, add an existing directory, and create conversations.
 - Send messages and view streamed replies, exposed reasoning, tool activity, and queued messages.
+- Check computer-side submission receipts after a reload or a prepared entrance change. Uncertain instructions are never resent automatically; identical intentional questions remain possible after explicit review.
 - Select models and tool presets reported by the connected runtime. Check supported permission presets through a readback instead of assuming a command succeeded.
 - Handle approvals, choices, and questions when the runtime exposes that capability.
 - Upload attachments and browse, preview, or download permitted workspace files. Images load only when requested. Supported image references use the runtime's session-authorized attachment reader. A newly uploaded generic image also has a bounded, temporary preview on this page; it is cleared when the connection or conversation changes. Attachments without either source remain explicitly unavailable.
@@ -32,6 +33,8 @@ Capabilities depend on the installed DSH runtime, its plugins, and the connected
 6. Open the link on the phone. Select a project and conversation, or add a computer folder and create one. The host computer must remain awake and connected.
 
 The Windows installer bundles Node.js and cloudflared with their license texts. It does not bundle DSH. Temporary tunnel addresses can change after a restart; use the newly copied link when that happens. A tunnel that is unavailable or disconnected does not mean a message was accepted. Do not repeatedly send an instruction with an uncertain delivery result.
+
+For **DeepSeek-V4.1-Flash-1017**, [DeepSeek recommends Harness 0.2.1-rc.1 or newer](https://api-docs.deepseek.com/news/news261017/). Preview.16 adds exact native-desktop recognition and plugin version admission for **0.2.1-rc.2**. Model names and choices come from the connected runtime. A plugin version declaration does not establish compatibility with every newer or older build; consult the exact-version acceptance record.
 
 Phone content requires browser WebCrypto in a secure context. Use the HTTPS tunnel, or a local HTTPS entry whose certificate your phone trusts. Ordinary LAN HTTP does not provide this context and is not a supported plaintext fallback. The local console provides HTTPS setup guidance; certificate trust must be configured separately.
 
@@ -63,7 +66,7 @@ The supported phone content channels use authenticated encrypted requests and re
 
 The raw original DSH web interface is not exposed as a remote alternative in new releases. Open the original interface locally on the computer when needed. Encryption failures, missing keys, expired authorization, and unsupported capabilities must be reported without falling back to plaintext remote content.
 
-An optional [primary and backup Quick Tunnel pair](docs/DUAL-TUNNELS.md) is available for the Windows gateway and is off by default. A reload-only phone reminder can copy a verified alternate address. The copied address carries no credentials; that other origin needs its own login and encryption-key setup before it can be used. Both paths share the same PC, network and Cloudflare service, so they are not independent disaster recovery.
+An optional [primary and backup Quick Tunnel pair](docs/DUAL-TUNNELS.md) is available for the Windows gateway and is off by default. On each fresh phone-page visit or reload, a reminder offers the other reachable entry relative to the current address, with a separate explicit preparation step. The copied address carries no credentials; that other origin needs its own login and encryption-key setup before it can be used. Both paths share the same PC, network and Cloudflare service, so they are not independent disaster recovery.
 
 An optional [private Tailscale HTTPS entrance](docs/TAILSCALE-PRIVATE-HTTPS.md) can avoid serving the initial application through Cloudflare. It is disabled by default, preserves the bridge's device and encryption checks, and does not install or configure a VPN. Real phone enrollment and connectivity must be verified after the owner sets it up. The phone's Settings → Connection and compatibility panel shows the observed runtime and implemented interface coverage separately from release acceptance.
 

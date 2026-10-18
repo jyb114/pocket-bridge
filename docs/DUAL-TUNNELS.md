@@ -34,11 +34,50 @@ executable or apparent target matches.
 
 ## Saving and using the backup
 
-On a full mobile-page reload, the page can prompt you to copy the latest
-verified alternate address. Internal conversation changes, SPA navigation,
-reconnection and returning to a background tab do not trigger the same modal.
-First visits use an optional Settings entry and do not automatically open the
-reminder. Copy requires your tap.
+On each new mobile-page visit and full reload, after the current login and
+end-to-end encryption are verified, the page reminds you to check and save the
+other entry. Disabled installations stay quiet. The authenticated visible page
+continues checking after the reminder is closed. A newly observed other-entry
+origin or generation prompts once for that version, including a new generation
+at the same address. Closing one version does not suppress the next version.
+An already open panel updates in place; another active dialog is not replaced,
+and deferred changes are coalesced/rechecked before showing the latest value.
+Internal conversation changes, SPA navigation, reconnection and foreground
+restoration do not repeat a reminder for the same observed version. The Settings
+entry remains available for a manual check. Copy requires your tap.
+
+Checks reuse the visible page's existing ten-second heartbeat: normally at least
+20 seconds after a successful check, 60 seconds while disabled, and 20/40/80/120
+seconds after consecutive failures. These are scheduling targets, not a delivery
+SLA. Background/offline pages cannot receive real-time changes; returning to the
+foreground requires a fresh authenticated check. Each read has a ten-second
+deadline. Explicit browser preparation temporarily pauses automatic checks and
+has its own bounded deadline. No new background service, automatic navigation,
+credential preparation or daemon-role promotion is performed.
+
+The current page origin must exactly match one of the gateway's fresh,
+verified primary/backup entries. On the primary, the other entry is the backup;
+on the backup, it is the primary. The page labels the address you opened as the
+current entry, without swapping the daemon's slots or affecting other devices.
+An old or unknown origin is not guessed. The current address is never offered
+as its own fallback. When the other slot is unavailable, the page says there
+is no other reachable address. When that slot returns or rebuilds, the next
+successful check shows its current address; a new origin/generation gets a new
+reminder and still requires explicit preparation. A newly observed identity or unavailable state clears any
+previous preparation claim; returning to an old identity cannot restore it.
+Uncertain/failed status reads clear address candidates rather than presenting a
+cached address as current. Copy rechecks metadata; a changed or closed intent
+cannot display stale copy success or select an obsolete candidate. Browser
+clipboard acknowledgement is bounded separately and cannot block monitoring.
+An OS/browser clipboard write already started cannot be undone, and an address
+copied earlier may of course become obsolete after a later rebuild.
+
+Reachability alone does not verify the phone browser's login or stored key.
+The reminder claims preparation only after this page's explicit preparation
+flow completes. After a refresh, it cannot inspect another origin's browser
+storage, so it asks you to verify rather than claiming that saved credentials
+still work. No page visit, refresh or health check automatically prepares an
+entry or sends credentials to it.
 
 The copied address contains no access key, encryption fragment or recovery
 token. A different hostname has separate browser login cookies, encryption-key
@@ -59,8 +98,11 @@ before any encryption key is sent. The credential phase uses a MessagePort
 owned by that receiver document, so a replacement document cannot inherit it.
 Neither the ticket, receipt nor key goes into a navigation URL or the clipboard.
 
-Preparation is bound to the current installation, gateway boot, port, backup
-origin/generation, active device and current access/encryption key versions.
+Preparation is bound to the current installation, gateway boot, port, both
+source and destination slot roles/origins/generations, active device and current
+access/encryption key versions. Only the two current configured Quick Tunnel
+origins can prepare each other; local, old and unknown origins cannot guess an
+alternate. Both slots must remain fresh and reachable while preparation completes.
 Expiry, reuse, device revocation, disabling the backup or replacing that tuple
 invalidates outstanding capabilities. The destination has to use its own
 issued cookie and protected encrypted completion, then write and read back its
@@ -94,6 +136,25 @@ primary is reported unavailable and is not automatically rebuilt. The public
 public slot. As with the existing policy, `none` alone does not prove that a
 previous external process was stopped or revoke previously issued credentials.
 Use the verified desktop Stop control before relying on local-only operation.
+
+## Uncertain sends when changing pages
+
+Do not blindly resend after losing a receipt. An accepted task may still run
+without yet appearing in history or the queue. The current adapter retains an
+uncertain request ID only inside the same live page. A reload, a newly opened
+backup page or a rebuilt hostname starts fresh; manually sending again can
+create a new request ID and execute the task twice. No automatic resend occurs.
+
+Before a new page's first send to an existing conversation, a manual review
+panel shows recent loaded history and a fresh, bounded queue read. Missing or
+failed reads are not proof of non-execution. Return to the conversation to
+inspect older history, or verify the task on the computer. Cancel preserves
+text and attachments. Confirmation only returns to the composer; pressing Send
+again submits a new message which can still duplicate an earlier task.
+Changes to the draft, attachments, session or connection invalidate that review.
+A positively created empty conversation in this page and subsequent same-page
+sends do not require the extra step. This is a blind-retry warning, not reliable
+cross-origin deduplication or an exactly-once execution guarantee.
 
 ## Limits and verification
 

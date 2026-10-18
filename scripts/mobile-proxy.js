@@ -115,7 +115,11 @@ const dshRuntimeIdentity = require('./dsh-runtime-identity.js').runtimeIdentity;
 // supplies an upstream URL; this transport always targets the verified local
 // DSH listener and leaves the full desktop application untouched.
 function callDshLiteUpstream(call) {
+  if (call.verifyPromptContext && !call.verifyPromptContext())
+    return Promise.reject(Object.assign(Error('prompt-state-context-unavailable'), { code: 'prompt-state-context-unavailable' }));
   return refreshDshRuntimeState().then(state => {
+    if (call.verifyPromptContext && !call.verifyPromptContext())
+      throw Object.assign(Error('prompt-state-context-unavailable'), { code: 'prompt-state-context-unavailable' });
     if (!state.ready || DSH_UPSTREAM_AUTH_OK === false) throw new Error('dsh-unavailable');
     if (call.verifiedRuntime && dshRuntimeIdentity(call.verifiedRuntime) !== dshRuntimeIdentity(state.runtime))
       throw new Error('legacy-runtime-changed');
@@ -171,8 +175,29 @@ function callDshLiteUpstream(call) {
     });
   });
 }
+const dshPromptState = require('./dsh-prompt-state.js').createDshPromptState({
+  directory: path.join(LOG_DIR, 'prompt-operations')
+});
 const serveDshLiteRpcE2ee = e2eeWrap(require('./dsh-lite-rpc.js')
-  .createDshLiteRpc({ callUpstream: callDshLiteUpstream }));
+  .createDshLiteRpc({ callUpstream: callDshLiteUpstream, promptState: dshPromptState,
+    promptContext: async req => {
+      // Backup reissue preserves sessions' device ID. Hostname/cookie changes
+      // therefore do not erase uncertain operation identities.
+      const device = verifiedBackupPreparationDevice(req);
+      const secret = e2eeSecretOrNull();
+      const verifyPromptContext = () => {
+        const current = verifiedBackupPreparationDevice(req);
+        return !!device && !!current && current.id === device.id && !!secret &&
+          secret === req.__dshE2eeDecryptionKey && secret === e2eeSecretOrNull();
+      };
+      if (!verifyPromptContext())
+        throw Object.assign(Error('prompt-state-context-unavailable'), { code: 'prompt-state-context-unavailable' });
+      const state = await refreshDshRuntimeState();
+      if (!verifyPromptContext() || !state.ready || DSH_UPSTREAM_AUTH_OK === false)
+        throw Object.assign(Error('prompt-state-context-unavailable'), { code: 'prompt-state-context-unavailable' });
+      return { deviceId: device.id, runtimeId: dshRuntimeIdentity(state.runtime), secret,
+        verifiedRuntime: state.runtime, verifyPromptContext };
+    } }));
 const serveDshLiteUploadE2ee = e2eeWrap(require('./dsh-lite-upload.js')
   .createDshLiteUpload({ callUpstream: callDshLiteUpstream }));
 const serveDshLiteDownloadE2ee = e2eeWrap(require('./dsh-lite-download.js')
@@ -4496,6 +4521,9 @@ function e2eeWrap(handler, options) {
       // Only this in-process shim can carry successful decryption proof. A
       // client-supplied header alone must never authorize the Lite file routes.
       shim.__dshE2eeDecrypted = true;
+      // Bind sensitive writes to the key that actually decrypted this request.
+      // Non-enumerable, immutable, in-process only: never a client header or log.
+      Object.defineProperty(shim, '__dshE2eeDecryptionKey', { value: secret });
       shim.__dshRequireE2ee = req.__dshRequireE2ee === true;
       shim.socket = req.socket;
       privateHttpsAdmission.inheritRemote(req, shim);

@@ -174,26 +174,29 @@
     return node;
   }
 
-  // A document reload is distinct from route changes, reconnects, tab focus and
-  // back/forward restoration. Keep the latch outside individual UI mounts.
+  // A fresh document entry/reload is distinct from routes, reconnects, tab
+  // focus and back/forward restoration. Keep the latch across UI mounts.
   var backupDocumentState = null;
   function createBackupRecovery(options) {
-    var win = window, doc = document;
+    var win = window, doc = document, entryOrigin = window.location.origin;
     if (!backupDocumentState) backupDocumentState = win.__dshLiteBackupDocumentState || null;
     if (!backupDocumentState) {
-      var reload = false;
+      var eligible = false;
       try {
         var entries = win.performance && win.performance.getEntriesByType && win.performance.getEntriesByType('navigation');
-        reload = entries && entries.length ? entries[0].type === 'reload' :
-          !!(win.performance && win.performance.navigation && win.performance.navigation.type === 1);
-      } catch (_) { /* Unknown navigation is never treated as a refresh. */ }
-      backupDocumentState = { eligible: reload, consumed: false };
+        eligible = entries && entries.length ? ['navigate', 'reload'].indexOf(entries[0].type) >= 0 :
+          !!(win.performance && win.performance.navigation && [0, 1].indexOf(win.performance.navigation.type) >= 0);
+      } catch (_) { /* Unknown navigation cannot establish a fresh entry. */ }
+      backupDocumentState = { eligible: eligible, consumed: false, observed: false, notified: [] };
       win.__dshLiteBackupDocumentState = backupDocumentState;
     }
+    if (!Array.isArray(backupDocumentState.notified)) backupDocumentState.notified = [];
     var disposed = false, loading = false, serial = 0, panel = null, nodes = null, snapshot = null;
-    var lastRead = 0, autoValue = null, changed = false, previous = '', storageKey = 'dsh-lite-backup-generation';
+    var checking = null, nextCheck = 0, failures = 0, readSerial = 0, readCancels = new Set(), copyWaitCancel = null;
+    var targetIdentity = '';
+    var autoValue = null, changed = false, previous = '', storageKey = 'dsh-lite-backup-generation';
     var preparation = win.PocketBridgeBackupPrepare && win.PocketBridgeBackupPrepare.createSource({
-      t: t, ready: ready, read: read, context: function () { return options.context ? options.context() : null; },
+      t: t, ready: ready, read: readForPreparation, context: function () { return options.context ? options.context() : null; },
       active: function () { return !!(panel && panel.isConnected); }, onState: function () { render(); }
     });
     var MAX_AGE = 180000;
@@ -208,32 +211,79 @@
     function ready() { return !disposed && options.ready() === true; }
     function safeSlot(data) {
       var tunnels = data && data.tunnels;
-      var slot = tunnels && tunnels.backup;
       var result = { enabled: !!(tunnels && tunnels.enabled === true), supported: !!(tunnels && tunnels.supported === true),
-        phase: slot && typeof slot.phase === 'string' ? slot.phase : 'unavailable',
-        code: tunnels && tunnels.code === 'tunnel-migration-unconfirmed' ? tunnels.code : '', url: '', generation: '', checkedAt: 0 };
-      if (!result.enabled || !result.supported || !slot || slot.phase !== 'ready' || slot.reachable !== true) return result;
-      var generation = String(slot.generation == null ? '' : slot.generation);
-      var checkedAt = typeof slot.checkedAt === 'number' ? slot.checkedAt : Date.parse(slot.checkedAt || '');
-      if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(generation) || !Number.isFinite(checkedAt) ||
-          checkedAt > Date.now() + 5000 || Date.now() - checkedAt > MAX_AGE) return result;
-      try {
-        var url = new URL(slot.url);
-        // Only the app's bare origin/path may enter this UI, clipboard or window.
-        // Do not "fix" an accidental credential link by stripping its secrets.
-        if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash ||
-            !/^[a-z0-9-]+\.trycloudflare\.com$/.test(url.hostname) ||
-            (url.pathname !== '/' && url.pathname !== '/dsh-lite') ||
-            (slot.origin && slot.origin !== url.origin) ||
-            (slot.url !== url.origin && slot.url !== url.origin + url.pathname)) return result;
-        result.url = url.origin + '/dsh-lite';
-        result.generation = generation;
-        result.checkedAt = checkedAt;
-      } catch (_) {}
+        code: tunnels && tunnels.code === 'tunnel-migration-unconfirmed' ? tunnels.code : '',
+        currentRole: '', currentUrl: '', currentGeneration: '', url: '', generation: '', checkedAt: 0 };
+      if (!result.enabled || !result.supported) return result;
+      function checkedSlot(slot) {
+        if (!slot || slot.phase !== 'ready' || slot.reachable !== true || typeof slot.generation !== 'string' ||
+            !/^[a-f0-9]{32}$/.test(slot.generation) || typeof slot.checkedAt !== 'number' ||
+            !Number.isSafeInteger(slot.checkedAt) || slot.checkedAt <= 0 ||
+            slot.checkedAt > Date.now() + 5000 || Date.now() - slot.checkedAt > MAX_AGE) return null;
+        try {
+          var url = new URL(slot.url);
+          // Accept only the exact published bare origin/path. Never strip
+          // credentials or infer a role for an old, local or unknown origin.
+          if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash ||
+              !/^(?!(?:api|www|dash|developers)\.)[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com$/.test(url.hostname) ||
+              (url.pathname !== '/' && url.pathname !== '/dsh-lite') || slot.origin !== url.origin ||
+              (slot.url !== url.origin && slot.url !== url.origin + url.pathname)) return null;
+          return { origin: url.origin, url: url.origin + '/dsh-lite', generation: slot.generation, checkedAt: slot.checkedAt };
+        } catch (_) { return null; }
+      }
+      var primary = checkedSlot(tunnels.primary), backup = checkedSlot(tunnels.backup);
+      var fromPrimary = primary && primary.origin === entryOrigin;
+      var fromBackup = backup && backup.origin === entryOrigin;
+      // Ambiguous duplicate slots fail closed too. The current page is never
+      // offered as its own alternate, and visits never mutate daemon roles.
+      if (!!fromPrimary === !!fromBackup) return result;
+      result.currentRole = fromPrimary ? 'primary' : 'backup';
+      result.currentUrl = (fromPrimary ? primary : backup).url;
+      result.currentGeneration = (fromPrimary ? primary : backup).generation;
+      var other = fromPrimary ? backup : primary;
+      if (other && other.origin !== entryOrigin) {
+        result.url = other.url; result.generation = other.generation;
+        result.checkedAt = Math.min(other.checkedAt, (fromPrimary ? primary : backup).checkedAt);
+      }
       return result;
     }
+    function identityFor(value) {
+      return value && value.url ? [value.currentRole, value.currentUrl, value.currentGeneration, value.url, value.generation].join('|') : '';
+    }
+    function reminderIdentity(value) { return value && value.url ? value.url + '|' + value.generation : ''; }
+    function markNotified(value) {
+      var id = reminderIdentity(value);
+      if (id && backupDocumentState.notified.indexOf(id) < 0) backupDocumentState.notified.push(id);
+    }
+    function accept(value) {
+      var observed = backupDocumentState.observed, id = reminderIdentity(value);
+      backupDocumentState.observed = true;
+      snapshot = value; observeTarget(value); remember(value);
+      failures = 0; nextCheck = Date.now() + (value.enabled ? 20000 : 60000);
+      autoValue = null;
+      if (!value.enabled) { backupDocumentState.consumed = true; return; }
+      if (panel && panel.isConnected) { backupDocumentState.consumed = true; markNotified(value); return; }
+      if ((backupDocumentState.eligible && !backupDocumentState.consumed) ||
+          (observed && id && backupDocumentState.notified.indexOf(id) < 0)) autoValue = value;
+      else if (!observed) markNotified(value); // Restoration/unknown navigation establishes a quiet baseline.
+    }
+    function failedRead() {
+      snapshot = null; autoValue = null; observeTarget(null);
+      failures = Math.min(failures + 1, 4);
+      nextCheck = Date.now() + Math.min(120000, 20000 * Math.pow(2, failures - 1));
+    }
+    function cancelReads() {
+      readSerial++;
+      if (copyWaitCancel) copyWaitCancel();
+      Array.from(readCancels).forEach(function (cancel) { cancel(); });
+    }
+    function observeTarget(value) {
+      var identity = identityFor(value);
+      if (identity !== targetIdentity && preparation && typeof preparation.invalidateTarget === 'function') preparation.invalidateTarget();
+      targetIdentity = identity;
+    }
     function usable() {
-      return ready() && !doc.hidden && snapshot && snapshot.url && typeof snapshot.current === 'function' && snapshot.current() &&
+      return ready() && !doc.hidden && !checking && snapshot && snapshot.url && typeof snapshot.current === 'function' && snapshot.current() &&
         Date.now() - snapshot.checkedAt <= MAX_AGE && snapshot.checkedAt <= Date.now() + 5000;
     }
     function remember(value) {
@@ -250,37 +300,43 @@
       var valid = usable();
       nodes.address.value = valid ? snapshot.url : '';
       nodes.address.hidden = !valid;
-      nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading;
+      nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading || !!copyWaitCancel;
       nodes.check.disabled = loading || !ready();
-      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === win.location.origin;
+      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === entryOrigin;
       nodes.warning.hidden = !changed;
-      nodes.using.hidden = !(valid && win.location && new URL(snapshot.url).origin === win.location.origin);
+      nodes.using.hidden = !(snapshot && snapshot.currentRole === 'backup');
+      nodes.current.textContent = snapshot && snapshot.currentUrl ? t('当前使用入口：') + ' ' + snapshot.currentUrl : '';
+      nodes.current.hidden = !nodes.current.textContent;
       var preparationResult = preparation && preparation.result();
       var preparedHere = valid && preparationResult && preparationResult.phase === 'prepared' &&
         preparationResult.origin === new URL(snapshot.url).origin && preparationResult.generation === snapshot.generation;
       nodes.status.textContent = t(message || (preparedHere ? preparationResult.message :
-        preparationResult && preparationResult.phase !== 'prepared' && !loading ? preparationResult.message : loading ? '正在检查当前备用地址…' :
+        loading || checking ? '正在检查当前备用地址…' :
         !ready() ? '请先完成当前页面的登录与加密验证。' :
         snapshot && snapshot.code === 'tunnel-migration-unconfirmed' ? '当前主通道的管理归属未确认，备用启动已暂停以保留现有连接。请在电脑上先“停止桥接”，确认停止后再“启动桥接”，然后重新检查；期间手机连接会中断。' :
         snapshot && !snapshot.supported ? '当前连接方式不支持备用隧道。' :
         snapshot && !snapshot.enabled ? '备用隧道未开启。请在电脑控制台中选择是否启用。' :
-        valid ? '备用通道可达；此手机在该地址的登录与加密状态尚未验证。' :
-        '当前没有已验证可达的备用地址。请稍后重新检查。'));
+        snapshot && !snapshot.currentRole ? '当前地址不属于已确认的主备入口，无法安全选择另一条入口。请使用电脑提供的最新地址。' :
+        !valid ? '当前没有另一条已验证可达的备用地址。请稍后重新检查。' :
+        preparationResult && preparationResult.phase !== 'prepared' ? preparationResult.message :
+        '另一入口可达；此浏览器在该地址的登录与加密状态尚未验证。请先准备并验证，再保存备用地址。'));
     }
     async function read() {
       if (!ready()) throw new Error('not-ready');
       var e2ee = win.DshE2EE, secret = win.__dshE2eeSecret;
-      var connection = options.context ? options.context() : null;
+      var connection = options.context ? options.context() : null, sequence = ++readSerial;
       function current() { return ready() && win.DshE2EE === e2ee && win.__dshE2eeSecret === secret &&
         (!options.context || options.context() === connection); }
       if (!e2ee || typeof e2ee.encryptedFetch !== 'function' || !win.__dshE2eeSecret) throw new Error('not-ready');
       var aborter = typeof win.AbortController === 'function' ? new win.AbortController() : null;
-      var timer;
+      var timer, cancel;
       var deadline = new Promise(function (_resolve, reject) {
-        timer = win.setTimeout(function () {
+        cancel = function () {
           if (aborter) aborter.abort();
-          reject(new Error('address-timeout'));
-        }, 10000);
+          reject(new Error('address-cancelled'));
+        };
+        readCancels.add(cancel);
+        timer = win.setTimeout(cancel, 10000);
       });
       var operation = (async function () {
         var response = await e2ee.encryptedFetch(secret, '/__dsh/lite-addresses', {
@@ -292,35 +348,68 @@
             response.headers.get('x-dsh-e2ee') === '1') throw new Error('unverified-response');
         var data = await response.json();
         if (!data || data.ok !== true) throw new Error('unavailable');
-        if (!current()) throw new Error('connection-changed');
+        if (!current() || sequence !== readSerial) throw new Error('connection-changed');
         var value = safeSlot(data); value.current = current; return value;
       })();
       try { return await Promise.race([operation, deadline]); }
-      finally { win.clearTimeout(timer); }
+      finally { win.clearTimeout(timer); readCancels.delete(cancel); }
+    }
+    async function readForPreparation() {
+      var request = ++serial;
+      cancelReads(); checking = null;
+      var value = await read();
+      if (disposed || request !== serial || !panel || !panel.isConnected || !value.current()) throw new Error('preparation-changed');
+      var replaced = identityFor(value) !== targetIdentity;
+      accept(value); render();
+      // Consent was given while displaying the previous identity. Show the
+      // replacement, cancel this attempt, and require another explicit click.
+      if (replaced) throw new Error('preparation-target-changed');
+      return value;
     }
     async function refresh(copyAfter) {
-      if (disposed || loading || !ready()) return;
+      if (disposed || loading || !ready() || !panel || !panel.isConnected) return;
       var request = ++serial;
+      cancelReads(); checking = null;
       loading = true; snapshot = null; render();
       try {
         var value = await read();
         if (disposed || request !== serial || !ready() || !panel || !panel.isConnected) return;
-        snapshot = value; lastRead = Date.now(); remember(value);
+        accept(value);
         loading = false; render();
         if (!copyAfter || !usable()) return;
-        var url = snapshot.url;
-        loading = true; renderButtons();
+        var url = snapshot.url, copiedIdentity = identityFor(snapshot), copyTimer, cancelCopy;
+        // A browser clipboard permission prompt can outlive this document's
+        // intent. Do not let it suspend metadata checks or acknowledge an old
+        // address after a new one arrives. An already started OS write cannot
+        // be undone; this only bounds/cancels its UI acknowledgement.
+        var copyDeadline = new Promise(function (resolve) {
+          cancelCopy = function () { win.clearTimeout(copyTimer); resolve(false); };
+          copyTimer = win.setTimeout(cancelCopy, 5000);
+        });
+        copyWaitCancel = cancelCopy; loading = false; renderButtons();
         try {
           if (!win.navigator.clipboard || typeof win.navigator.clipboard.writeText !== 'function') throw new Error('manual-copy');
-          await win.navigator.clipboard.writeText(url);
-          if (request === serial && panel && panel.isConnected) render('已复制备用地址。请妥善保存，并先在此手机上完成该地址的登录与加密设置。');
+          var copied = await Promise.race([Promise.resolve(win.navigator.clipboard.writeText(url)).then(function () { return true; }), copyDeadline]);
+          if (request === serial && panel && panel.isConnected) {
+            if (usable() && identityFor(snapshot) === copiedIdentity) render(copied ?
+              '已复制备用地址。请妥善保存，并先在此手机上完成该地址的登录与加密设置。' :
+              '复制结果未能确认。请重新检查最新地址，再手动复制；之前已开始的浏览器复制操作无法撤回。');
+            else { snapshot = null; autoValue = null; observeTarget(null); nextCheck = 0; render('无法验证备用地址。请检查连接后重试。'); }
+          }
         } catch (_) {
-          if (request !== serial || !panel || !panel.isConnected || !usable()) return;
+          if (request !== serial || !panel || !panel.isConnected) return;
+          if (!usable() || identityFor(snapshot) !== copiedIdentity) {
+            snapshot = null; autoValue = null; observeTarget(null); nextCheck = 0;
+            render('无法验证备用地址。请检查连接后重试。'); return;
+          }
           nodes.address.focus(); nodes.address.select();
           render('浏览器未允许自动复制。地址已选中，请长按或使用复制快捷键。');
+        } finally {
+          win.clearTimeout(copyTimer);
+          if (copyWaitCancel === cancelCopy) copyWaitCancel = null;
         }
       } catch (_) {
-        if (request === serial && !disposed) { snapshot = null; loading = false; render('无法验证备用地址。请检查连接后重试。'); }
+        if (request === serial && !disposed) { failedRead(); loading = false; render('无法验证备用地址。请检查连接后重试。'); }
       } finally {
         if (request === serial && !disposed) { loading = false; renderButtons(); }
       }
@@ -328,21 +417,23 @@
     function renderButtons() {
       if (!nodes || !panel || !panel.isConnected) return;
       var valid = usable();
-      nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading;
+      nodes.copy.disabled = nodes.open.disabled = nodes.select.disabled = !valid || loading || !!copyWaitCancel;
       nodes.check.disabled = loading || !ready();
-      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === win.location.origin;
+      if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === entryOrigin;
     }
     function show(initial) {
       if (disposed) return;
-      serial++; loading = false; snapshot = initial || null;
-      if (initial) { lastRead = Date.now(); remember(initial); }
+      if (panel && panel.isConnected) { render(); return; }
+      backupDocumentState.consumed = true; autoValue = null;
+      serial++; cancelReads(); checking = null; loading = false; snapshot = initial || null;
+      if (initial) { observeTarget(initial); remember(initial); markNotified(initial); }
       panel = options.overlay(t('保存当前备用地址'), function (body, box) {
         box.id = 'dsh-lite-backup-dialog';
         var heading = box.querySelector('.screen-bar strong');
         if (heading) heading.setAttribute('data-i18n', '保存当前备用地址');
         var close = box.querySelector('.screen-bar button');
         if (close) close.setAttribute('data-i18n', '关闭');
-        var explanation = element('p', 'panel-line', '网页刷新后，请保存当前备用地址。主地址失效时，可尝试打开它。');
+        var explanation = element('p', 'panel-line', '每次进入或刷新页面，请检查并保存另一条入口。在线前台会定期检查，另一入口更新后会再次提醒；后台或离线无法实时通知。新地址仍需手动准备和验证。');
         var status = element('p', 'panel-line');
         status.id = 'dsh-lite-backup-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
         var warning = element('p', 'backup-warning', '备用地址已更换。旧地址可能失效；请在新地址重新完成登录与加密设置。');
@@ -358,66 +449,86 @@
         var prepare = button('dsh-lite-backup-prepare', '准备备用入口', function () { if (usable() && preparation) preparation.begin(); });
         var copy = button('dsh-lite-backup-copy', '复制当前备用地址', function () { refresh(true); });
         var select = button('dsh-lite-backup-select', '选择地址以手动复制', function () {
-          if (!usable()) { snapshot = null; render(); return; }
+          if (!usable()) { snapshot = null; observeTarget(null); nextCheck = 0; render(); return; }
           address.focus(); address.select(); render('地址已选中，请长按或使用复制快捷键。');
         });
         var open = button('dsh-lite-backup-open', '打开备用地址', function () {
-          if (!usable()) { snapshot = null; render(); return; }
+          if (!usable()) { snapshot = null; observeTarget(null); nextCheck = 0; render(); return; }
           win.open(snapshot.url, '_blank', 'noopener,noreferrer');
         });
         var check = button('dsh-lite-backup-check', '重新检查备用地址', function () { refresh(false); });
-        var using = element('p', 'backup-warning', '此页面正在使用备用通道。保存此地址不会增加另一条可切换的通道。');
+        var current = element('p', 'panel-line backup-current');
+        current.id = 'dsh-lite-backup-current';
+        var using = element('p', 'backup-warning', '你已从备用通道进入，当前页将它作为正在使用的入口。电脑上的主备槽位不会因此互换。');
         using.id = 'dsh-lite-backup-using'; using.hidden = true;
         var preparationNote = element('p', 'panel-line', '首次使用请点击“准备备用入口”，在新窗口完成此浏览器的登录与加密验证。只有你主动点击并确认后才会传递凭据；复制地址始终不含凭据。');
         preparationNote.id = 'dsh-lite-backup-preparation';
         var risk = element('p', 'panel-line', '主备通道仍依赖同一台电脑、网络和 Cloudflare，不能保证在这些服务故障时可用。');
-        body.append(explanation, status, warning, using, address, actions, preparationNote, risk);
-        nodes = { status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check, prepare: prepare };
+        body.append(explanation, current, status, warning, using, address, actions, preparationNote, risk);
+        nodes = { current: current, status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check, prepare: prepare };
       }, options.opener);
+      var closePanel = panel.__liteClose, openedPanel = panel;
+      panel.__liteClose = function (restoreFocus) {
+        if (!openedPanel.isConnected) return;
+        if (panel === openedPanel) {
+          serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null;
+          if (preparation && preparation.busy()) preparation.cancel();
+        }
+        closePanel(restoreFocus);
+      };
       render();
       if (!initial) refresh(false);
     }
-    async function maybePrompt() {
-      if (!backupDocumentState.eligible || backupDocumentState.consumed || !ready() || doc.hidden) return;
-      if (doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) return;
-      backupDocumentState.consumed = true;
-      var request = ++serial;
+    function maybePrompt() {
+      if (!autoValue || !ready() || doc.hidden || doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) return;
+      var pending = autoValue; autoValue = null;
+      if (pending.current && pending.current() && (!pending.url ||
+          (Date.now() - pending.checkedAt <= MAX_AGE && pending.checkedAt <= Date.now() + 5000))) show(pending);
+    }
+    async function monitor() {
+      if (!ready() || doc.hidden || loading || checking || (preparation && preparation.busy())) return;
+      var request = ++serial, check = {};
+      cancelReads(); checking = check; render();
       try {
         var value = await read();
-        if (disposed || request !== serial || !ready() || !backupDocumentState.eligible || doc.hidden) return;
-        // Disabled installations stay quiet. The settings entry is always there.
-        if (!value.enabled) return;
-        if (doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) { autoValue = value; return; }
-        show(value);
+        if (disposed || request !== serial || checking !== check || !ready() || doc.hidden) return;
+        checking = null; accept(value); render(); maybePrompt();
       } catch (_) {
-        // A failed read cannot establish opt-in. Do not interrupt an unrelated
-        // login/reconnect failure; the optional settings panel allows a retry.
-      }
+        if (!disposed && request === serial && checking === check) {
+          checking = null; failedRead(); render('无法验证备用地址。请检查连接后重试。');
+        }
+      } finally { if (checking === check) { checking = null; renderButtons(); } }
     }
     function update() {
       if (disposed) return;
       if (preparation) preparation.update();
-      if (!ready() || doc.hidden) { serial++; loading = false; snapshot = null; autoValue = null; render(); return; }
-      if (panel && panel.isConnected) {
-        render();
-        if (snapshot && !usable()) { snapshot = null; render(); }
-        if (!loading && Date.now() - lastRead > 15000) refresh(false);
+      if (!ready() || doc.hidden) {
+        serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null;
+        nextCheck = 0; observeTarget(null); render(); return;
       }
-      if (autoValue && backupDocumentState.eligible && !doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) {
-        var pending = autoValue; autoValue = null; if (pending.current && pending.current()) show(pending);
+      if (snapshot && (!snapshot.current() || (snapshot.url &&
+          (Date.now() - snapshot.checkedAt > MAX_AGE || snapshot.checkedAt > Date.now() + 5000)))) {
+        serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null;
+        nextCheck = 0; observeTarget(null);
       }
-      maybePrompt();
+      render();
+      if (Date.now() >= nextCheck) monitor();
+      else maybePrompt();
     }
     function restore(event) {
       if (event.persisted) { backupDocumentState.eligible = false; invalidate(); }
     }
     function invalidate() {
       if (preparation) preparation.cancel();
-      serial++; loading = false; snapshot = null; autoValue = null;
+      serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null; nextCheck = 0;
+      observeTarget(null);
       if (panel && panel.isConnected && panel.__liteClose) panel.__liteClose(false);
       panel = null; nodes = null;
     }
-    function visibility() { if (doc.hidden) { serial++; loading = false; snapshot = null; autoValue = null; render(); } }
+    function visibility() {
+      if (doc.hidden) { serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null; nextCheck = 0; observeTarget(null); render(); }
+      else update();
+    }
     win.addEventListener('pageshow', restore);
     win.addEventListener('pagehide', invalidate);
     doc.addEventListener('visibilitychange', visibility);
@@ -544,6 +655,7 @@
       //   也就是使用者说的"被强制跳回选择项目"。所以它必须先和**真实列表**核一遍。
       sessionId: '', tab: 'conversation', sending: false, uploading: false,
       drafts: new Map(), interactionDrafts: new Map(), interactionExpanded: new Set(),
+      reviewedSendSessions: new Set(), sendReview: null, sendRecovery: null, sendReviewGrant: null, sendReviewVersion: 0,
       uploads: [], downloadUrls: new Map(), recordElements: new Map(),
       creating: false, creatingKind: '', connecting: 0, running: false, runningKnown: null, stopping: false,
       hasMore: false, loadingOlder: false,
@@ -655,9 +767,9 @@
       return Promise.resolve(legacyCopy(text));
     }
     listen(document, 'visibilitychange', function () {
-      if (document.hidden) persistSelection();
+      if (document.hidden) { invalidateSendReview(); persistSelection(); }
     });
-    listen(window, 'pagehide', persistSelection);
+    listen(window, 'pagehide', function () { invalidateSendReview(); persistSelection(); });
     // 自测用的只读探针。故意只读：不提供任何"设置状态"的口子，
     // 免得它变成一个绕过界面逻辑改状态的暗门。
     window.__dshLiteState = function () {
@@ -711,6 +823,7 @@
       renderUploads();
     }
     function resetSessionExtras() {
+      invalidateSendReview();
       clearLocalUploadPreviews(false);
       state.contextVersion++;
       state.goalRequest++;
@@ -751,7 +864,7 @@
       refs.projectsToggle.setAttribute('aria-expanded', String(!!open));
     }
     function setStatus(value) {
-      if (state.connection !== value) backupConnectionEpoch++;
+      if (state.connection !== value) { backupConnectionEpoch++; invalidateSendReview(); }
       state.connection = value;
       // 状态**文案**单独记一份。为什么不复用 `state.connection`：
       // 它会被别处（比如适配器重连）改动，而"连接断开"那行字是使用者最后看到的事实。
@@ -1983,7 +2096,10 @@
       state.sessionLoad++;
       state.sessions = [];
       state.records = [];
-      restoreDraft('', '');
+      // Same-project refreshes retain the session ID, so keep its composer
+      // too. Otherwise selectSession saves an empty composer over this draft.
+      // Switching projects cleared sessionId above and still restores empty.
+      restoreDraft(state.projectId, state.sessionId);
       resetSessionExtras();
       state.hasMore = false; state.running = false; state.runningKnown = null; state.stopping = false;
       state.interactions.clear();
@@ -2182,7 +2298,10 @@
         renderSessions();
         clearPendingCreate(projectId);
         createStage('selected-new');
-        if (await selectSession(id, 'create')) clearError();
+        if (await selectSession(id, 'create')) {
+          clearError();
+          allowNewEmptySessionSend(projectId, id, returnedId, createError);
+        }
       } catch (error) { if (state.projectId === projectId) showError(error, '新建请求未能完成，请检查对话列表后重试。'); }
       finally {
         state.creating = false; state.creatingKind = '';
@@ -2365,14 +2484,254 @@
         }
       }
     }
+    // This is a manual review barrier, not an execution journal or an exactly-once
+    // guarantee. No review state, text, receipt or credential is persisted or
+    // transferred to another origin by this gate.
+    function invalidateSendReview() {
+      state.sendReviewVersion++;
+      state.sendReviewGrant = null;
+      if (state.sendReview && state.sendReview.box) state.sendReview.box.__liteClose();
+      if (state.sendRecovery && state.sendRecovery.box) state.sendRecovery.box.__liteClose();
+    }
+    function sendReviewSnapshot() {
+      return { projectId: state.projectId, sessionId: state.sessionId,
+        context: state.contextVersion, load: state.sessionLoad, connecting: state.connecting,
+        epoch: backupConnectionEpoch, revision: state.sendReviewVersion,
+        secret: window.__dshE2eeSecret, crypto: window.DshE2EE,
+        text: refs.input.value, uploads: state.uploads.slice(), receipts: JSON.stringify(state.uploads) };
+    }
+    function sendReviewMatches(snapshot) {
+      return !!snapshot && !state.disposed && state.connection === 'connected' &&
+        !state.uploading && snapshot.projectId === state.projectId && snapshot.sessionId === state.sessionId &&
+        snapshot.context === state.contextVersion && snapshot.load === state.sessionLoad &&
+        snapshot.connecting === state.connecting && snapshot.epoch === backupConnectionEpoch &&
+        snapshot.revision === state.sendReviewVersion && snapshot.secret === window.__dshE2eeSecret &&
+        snapshot.crypto === window.DshE2EE && snapshot.text === refs.input.value &&
+        snapshot.uploads.length === state.uploads.length &&
+        snapshot.uploads.every(function (upload, index) { return upload === state.uploads[index]; }) &&
+        snapshot.receipts === JSON.stringify(state.uploads);
+    }
+    function allowNewEmptySessionSend(projectId, id, returnedId, createError) {
+      // Inferred list additions and startup create-recovery are not proof that
+      // another page has not already sent. Only this call's positive new ID is eligible.
+      if (createError || id !== returnedId || state.projectId !== projectId || state.sessionId !== id ||
+          state.loadingSession || state.hasMore || state.records.length || typeof adapter.listQueued !== 'function') return;
+      var context = state.contextVersion, load = state.sessionLoad, epoch = backupConnectionEpoch,
+        connecting = state.connecting, secret = window.__dshE2eeSecret, crypto = window.DshE2EE;
+      Promise.resolve().then(function () { return adapter.listQueued(id); }).then(function (items) {
+        if (!state.disposed && state.connection === 'connected' && state.projectId === projectId && state.sessionId === id &&
+            state.contextVersion === context && state.sessionLoad === load && backupConnectionEpoch === epoch &&
+            state.connecting === connecting && window.__dshE2eeSecret === secret && window.DshE2EE === crypto &&
+            !state.loadingSession && !state.hasMore && !state.records.length && Array.isArray(items) && !items.length) {
+          state.reviewedSendSessions.add(draftKey(projectId, id));
+        }
+      }).catch(function () {});
+    }
+    function ensureSendReviewed() {
+      // The current protocol checks the computer's durable receipt journal.
+      // Ordinary sends need no generic fresh-page warning. Older adapters keep
+      // the manual barrier instead of claiming recovery they cannot perform.
+      if (typeof adapter.listPromptOperations === 'function' &&
+          typeof adapter.resolvePromptOperation === 'function') return true;
+      var key = draftKey(state.projectId, state.sessionId);
+      if (state.reviewedSendSessions.has(key)) return true;
+      if (sendReviewMatches(state.sendReviewGrant)) {
+        state.sendReviewGrant = null;
+        state.reviewedSendSessions.add(key);
+        return true;
+      }
+      state.sendReviewGrant = null;
+      if (state.sendReview && state.sendReview.box.isConnected) return false;
+      var review = { snapshot: sendReviewSnapshot(), timer: null, settled: false, box: null };
+      state.sendReview = review;
+      overlay(t('发送前先核对'), function (body, box) {
+        review.box = box;
+        var close = box.__liteClose;
+        box.__liteClose = function (restoreFocus) {
+          if (review.timer !== null) clearTimeout(review.timer);
+          review.timer = null;
+          if (state.sendReview === review) state.sendReview = null;
+          close(restoreFocus);
+        };
+        body.append(el('p', 'panel-line', t('这是本页首次向此对话发送。刷新或切换入口后，无法确认上一页的发送结果。请先核对历史和队列；即使未看到记录，也不代表任务未被接受。')));
+        body.append(el('p', 'panel-line', t('继续后仍作为新消息，可能重复执行。确认不会发送，请返回输入框再次按发送。')));
+        body.append(el('strong', '', t('当前已加载的最近内容（可能不完整）')));
+        var history = el('div', 'panel-line send-review-summary'); history.id = 'send-review-history-summary';
+        var rows = state.records.filter(function (row) { return row && (row.role === 'user' || row.role === 'assistant'); }).slice(-6);
+        rows.forEach(function (row) { history.append(el('p', '', label(row.text, '').slice(0, 1200))); });
+        if (!rows.length) history.textContent = t('当前没有已加载的消息；这不能证明此前未发送。');
+        body.append(history);
+        body.append(el('p', 'panel-line', t('这里只显示最近几条摘要，内容可能截断。请返回对话或电脑端进一步核对。')));
+        var inspect = el('button', 'screen-action', t('返回对话核对历史与队列'));
+        inspect.id = 'send-review-history'; inspect.type = 'button';
+        inspect.addEventListener('click', function () {
+          if (state.sendReview !== review) return;
+          box.__liteClose(); setTab('conversation');
+          refs.records.scrollTop = refs.records.scrollHeight;
+        });
+        body.append(inspect);
+        body.append(el('strong', '', t('本次读取的队列（也可能尚未反映已接受任务）')));
+        var queue = el('div', 'panel-line send-review-summary', t('正在读取…')); queue.id = 'send-review-queue-summary'; body.append(queue);
+        var status = el('p', 'panel-line'); status.id = 'send-review-status'; body.append(status);
+        var confirm = el('button', 'screen-action', t('已核对，接受新消息可能重复执行'));
+        confirm.id = 'send-review-confirm'; confirm.type = 'button'; confirm.disabled = true;
+        confirm.addEventListener('click', function () {
+          if (confirm.disabled || state.sendReview !== review || !box.isConnected) return;
+          if (!sendReviewMatches(review.snapshot)) {
+            box.__liteClose();
+            showError(null, '内容、会话或连接已变化，请重新核对后再发送。');
+            return;
+          }
+          state.sendReviewGrant = review.snapshot;
+          box.__liteClose(); refs.input.focus();
+          // Deliberately do not dispatch here. A separate Send gesture is required.
+        });
+        var cancel = el('button', 'screen-action', t('取消'));
+        cancel.id = 'send-review-cancel'; cancel.type = 'button';
+        cancel.addEventListener('click', function () { box.__liteClose(); });
+        body.append(confirm, cancel);
+        function finish(items) {
+          if (review.settled || state.sendReview !== review || !box.isConnected) return;
+          review.settled = true;
+          if (review.timer !== null) clearTimeout(review.timer);
+          review.timer = null;
+          if (!sendReviewMatches(review.snapshot)) {
+            box.__liteClose();
+            showError(null, '内容、会话或连接已变化，请重新核对后再发送。');
+            return;
+          }
+          queue.replaceChildren();
+          if (Array.isArray(items) && items.every(function (item) { return item && typeof item.text === 'string'; })) {
+            items.slice(-6).forEach(function (item) { queue.append(el('p', '', queueItemText(item).slice(0, 1200))); });
+            if (!items.length) queue.textContent = t('本次读取未见排队消息；这不能证明此前未发送。');
+          } else queue.textContent = t('队列未能读取，发送结果仍不确定。请在电脑端核对，或取消发送。');
+          status.textContent = t('继续后仍作为新消息，可能重复执行。确认不会发送，请返回输入框再次按发送。');
+          confirm.disabled = false;
+        }
+        review.timer = setTimeout(function () { finish(null); }, 5000);
+        Promise.resolve().then(function () {
+          if (state.sendReview !== review || !box.isConnected) return null;
+          return typeof adapter.listQueued === 'function' ? adapter.listQueued(review.snapshot.sessionId) : null;
+        }).then(finish, function () { finish(null); });
+      }, refs.send);
+      return false;
+    }
+    function showPromptRecovery(error, snapshot) {
+      if (!sendReviewMatches(snapshot)) {
+        showError(null, '连接或草稿已变化。请重新发送以检查电脑上的收件状态。');
+        return;
+      }
+      var operations = error && Array.isArray(error.operations) ? error.operations : [];
+      var recovery = { box: null, busy: false };
+      state.sendRecovery = recovery;
+      overlay(t('检查上次发送'), function (body, box) {
+        recovery.box = box;
+        var close = box.__liteClose;
+        box.__liteClose = function (restoreFocus) {
+          if (state.sendRecovery === recovery) state.sendRecovery = null;
+          close(restoreFocus);
+        };
+        body.append(el('p', 'panel-line', t('电脑保留了上次发送的收件状态。这里不会重发消息。')));
+        var inspect = el('button', 'screen-action', t('返回对话核对历史与队列'));
+        inspect.type = 'button'; inspect.id = 'prompt-recovery-history';
+        inspect.addEventListener('click', function () {
+          box.__liteClose(); setTab('conversation');
+          refs.records.scrollTop = refs.records.scrollHeight;
+        });
+        body.append(inspect);
+        var status = el('p', 'panel-line'); status.id = 'prompt-recovery-status';
+        var rows = el('div', 'prompt-recovery-rows');
+        body.append(rows, status);
+        var buttons = [];
+        function current() {
+          return state.sendRecovery === recovery && box.isConnected && sendReviewMatches(snapshot);
+        }
+        function render(items) {
+          if (!current()) return;
+          rows.replaceChildren(); buttons = [];
+          var known = items.filter(function (item) {
+            return item && typeof item.requestId === 'string' && item.requestId.length <= 512 &&
+              ['prepared', 'uncertain', 'accepted'].indexOf(item.state) >= 0 && !item.reviewed;
+          });
+          if (!known.length) {
+            status.textContent = t('没有待核对的请求。关闭后再次按发送，不会自动发送。');
+            return;
+          }
+          known.slice(0, 64).forEach(function (item) {
+            var row = el('section', 'send-review-summary');
+            var accepted = item.state === 'accepted';
+            var prepared = item.state === 'prepared';
+            row.append(el('strong', '', t(accepted ? '电脑已接收' : prepared ? '尚未发送到 DSH' : '发送结果仍不确定')));
+            row.append(el('p', 'panel-line', t(accepted ?
+              '电脑已确认接收，不需要重发。' : prepared ?
+              '这个请求还没有交给 DSH，可以取消后保留草稿。' :
+              '无法确认电脑是否已经接收。请先核对历史和队列；另发新消息仍可能重复执行。')));
+            if (item.contextChanged) row.append(el('p', 'panel-line', t('连接已变化。这里只处理旧请求的收件状态，当前草稿不会被清除。请勿重复发送已接收的旧指令。')));
+            var action = accepted ? 'acknowledge' : prepared ? 'cancel-prepared' : 'review-uncertain';
+            var button = el('button', 'screen-action', t(accepted ?
+              item.contextChanged ? '确认旧连接已接收，保留草稿' :
+              item.matchesDraft === true ? '确认已接收，清除此草稿' : item.matchesDraft === false ?
+              '确认已接收，保留新草稿' : '关闭后重新检查收件状态' :
+              prepared ? '取消未发送的请求，保留草稿' : '已核对，允许另发一条新消息'));
+            button.type = 'button'; button.dataset.requestId = item.requestId;
+            async function resolveOperation(keepDraft) {
+              if (recovery.busy || !current()) return;
+              if (accepted && !item.contextChanged && typeof item.matchesDraft !== 'boolean') {
+                // A receipt list does not establish which text it accepted.
+                // Keep the original identity pending; the next explicit Send
+                // can compare the draft without acknowledging or dispatching.
+                box.__liteClose();
+                showError(null, '草稿已保留。请再次按发送核对收件状态；不会自动重发。');
+                return;
+              }
+              recovery.busy = true; buttons.forEach(function (node) { node.disabled = true; });
+              status.textContent = t('正在检查…');
+              try {
+                var resolution = { sessionId: snapshot.sessionId, requestId: item.requestId, action: action };
+                if (action === 'review-uncertain') resolution.confirm = true;
+                await adapter.resolvePromptOperation(resolution);
+                if (!current()) return;
+                if (accepted && !item.contextChanged && item.matchesDraft === true && !keepDraft) {
+                  // Clear only the exact unchanged submission that the computer
+                  // accepted. A different or edited draft is never discarded.
+                  refs.input.value = '';
+                  state.uploads = state.uploads.filter(function (upload) { return snapshot.uploads.indexOf(upload) < 0; });
+                  saveCurrentDraft(); renderUploads(); renderControls();
+                  box.__liteClose(); clearError();
+                } else {
+                  row.hidden = true;
+                  status.textContent = t('状态已更新。关闭后再次按发送，不会自动发送。');
+                }
+              } catch (failure) {
+                if (current()) status.textContent = failure && failure.userMessage || t('无法确认收件状态，请稍后重新检查。');
+              } finally {
+                recovery.busy = false;
+                buttons.forEach(function (node) { node.disabled = false; });
+              }
+            }
+            button.addEventListener('click', function () { return resolveOperation(false); });
+            buttons.push(button); row.append(button); rows.append(row);
+            if (accepted && !item.contextChanged && item.matchesDraft === true) {
+              var repeat = el('button', 'screen-action', t('这是新的相同提问，保留草稿'));
+              repeat.type = 'button'; repeat.dataset.intent = 'new-same-content';
+              repeat.addEventListener('click', function () { return resolveOperation(true); });
+              buttons.push(repeat); row.append(repeat);
+            }
+          });
+        }
+        render(operations);
+      }, refs.send);
+    }
     async function send(event) {
       event.preventDefault();
       var submittedDraft = refs.input.value;
       var text = refs.input.value.trim();
-      if ((!text && !state.uploads.length) || state.connection !== 'connected' || !state.sessionId || state.sending || state.uploading) return;
+      if (state.disposed || (!text && !state.uploads.length) || state.connection !== 'connected' || !state.sessionId || state.sending || state.uploading) return;
+      if (!ensureSendReviewed()) return;
       var sessionId = state.sessionId;
       var projectId = state.projectId;
       var uploads = state.uploads.slice();
+      var submission = sendReviewSnapshot();
       saveCurrentDraft();
       state.sending = true; renderControls();
       try {
@@ -2396,7 +2755,11 @@
         }
         clearError();
       } catch (error) {
-        if (state.sessionId === sessionId) showError(error, '发送失败，文字已保留，请重试。');
+        if (state.sessionId === sessionId && state.projectId === projectId) {
+          if (error && error.code === 'prompt-recovery-required' &&
+              typeof adapter.resolvePromptOperation === 'function') showPromptRecovery(error, submission);
+          else showError(error, '发送结果未确认，文字已保留。请先查看对话，再检查收件状态。');
+        }
       }
       finally { state.sending = false; renderControls(); }
     }
@@ -2434,6 +2797,7 @@
         remove.type = 'button';
         remove.setAttribute('aria-label', t('移除附件') + ' ' + label(upload.file && upload.file.name, t('文件')));
         remove.addEventListener('click', function () {
+          invalidateSendReview();
           state.uploads.splice(index, 1);
           saveCurrentDraft();
           renderUploads(); renderControls();
@@ -2459,6 +2823,7 @@
       var previewScope = { sessionId: sessionId, projectId: projectId,
         contextVersion: state.contextVersion, epoch: localUploadPreviewEpoch };
       var previewKey = localPreviewKeyIdentity().catch(function () { return null; });
+      invalidateSendReview();
       state.uploading = true; renderControls();
       try {
         for (var i = 0; i < files.length; i++) {
@@ -4358,7 +4723,7 @@
     listen(refs.composer, 'submit', send);
     listen(refs.upload, 'click', function () { refs.uploadInput.click(); });
     listen(refs.uploadInput, 'change', uploadFiles);
-    listen(refs.input, 'input', function () { saveCurrentDraft(); renderControls(); });
+    listen(refs.input, 'input', function () { invalidateSendReview(); saveCurrentDraft(); renderControls(); });
     listen(refs.input, 'keydown', function (event) {
       if (event.key !== 'Enter' || event.isComposing) return;
       var shortcut = event.ctrlKey || event.metaKey;
@@ -4397,6 +4762,7 @@
       dispose: function () {
         createStage('disposed');
         state.disposed = true;
+        invalidateSendReview();
         state.connecting++;
         state.filesLoad++;
         mountCleanups.forEach(function (cleanup) { try { cleanup(); } catch (_) {} });

@@ -1,6 +1,9 @@
 'use strict';
 // Local Chromium fixture with real mobile UI/translation code. All application
 // transport is mocked; neither a gateway nor a public tunnel is started.
+// The current-origin input alone is substituted with a synthetic Quick Tunnel
+// origin because the fixture is served on loopback. Production URL validation
+// remains unchanged and is separately covered by test-dsh-lite-backup.js.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -13,8 +16,12 @@ isolated._compile(fs.readFileSync(browserFile, 'utf8').replace('    sweepOrphanB
 const { Browser } = isolated.exports;
 const fixtureScript = `
 window.__proofReady = !location.search.includes('notready');
-window.__backup = {enabled:true,supported:true,requested:true,backup:{phase:'ready',reachable:true,generation:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',origin:'https://fixture-backup.trycloudflare.com',url:'https://fixture-backup.trycloudflare.com/dsh-lite',checkedAt:Date.now()}};
+window.__fixtureEntryOrigin = location.search.includes('backup=1') ? 'https://fixture-backup.trycloudflare.com' : 'https://fixture-primary.trycloudflare.com';
+window.__backup = {enabled:true,supported:true,requested:true,primary:{phase:'ready',reachable:true,generation:'cccccccccccccccccccccccccccccccc',origin:'https://fixture-primary.trycloudflare.com',url:'https://fixture-primary.trycloudflare.com/dsh-lite',checkedAt:Date.now()},backup:{phase:'ready',reachable:true,generation:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',origin:'https://fixture-backup.trycloudflare.com',url:'https://fixture-backup.trycloudflare.com/dsh-lite',checkedAt:Date.now()}};
 window.__backupReads = 0; window.__copied = []; window.__opened = [];
+window.__clockOffset=0; window.__realNow=Date.now.bind(Date); Date.now=()=>window.__realNow()+window.__clockOffset;
+window.__fixtureHidden=false; Object.defineProperty(document,'hidden',{configurable:true,get:()=>window.__fixtureHidden});
+window.__advanceBackup=ms=>{window.__clockOffset+=ms;for(const slot of [__backup.primary,__backup.backup])slot.checkedAt=Date.now();document.dispatchEvent(new Event('visibilitychange'));};
 window.__dshE2eeSecret = 'SYNTHETIC_BROWSER_FIXTURE_KEY';
 window.WebSocket.__dshE2ee = true;
 window.DshE2EE = {available:()=>true,proofState:()=>({ok:window.__proofReady}), encryptedFetch:async(secret,path,init)=>{
@@ -44,7 +51,13 @@ async function run() {
     if (pathname === '/fixture.js') { res.writeHead(200, { ...headers, 'content-type': 'application/javascript' }); res.end(fixtureScript); return; }
     if (['/i18n.js', '/dsh-lite-lang.js', '/dsh-lite-ui.js', '/dsh-lite.css', '/pocket-bridge.svg'].includes(pathname)) {
       res.writeHead(200, { ...headers, 'content-type': pathname.endsWith('.css') ? 'text/css' : pathname.endsWith('.svg') ? 'image/svg+xml' : 'application/javascript' });
-      res.end(fs.readFileSync(path.join(root, 'pwa', pathname.slice(1)))); return;
+      let source = fs.readFileSync(path.join(root, 'pwa', pathname.slice(1)));
+      if (pathname === '/dsh-lite-ui.js') {
+        const marker = 'entryOrigin = window.location.origin';
+        assert.equal(source.toString().split(marker).length, 2, 'substitute only the exact current-origin input');
+        source = source.toString().replace(marker, 'entryOrigin = window.__fixtureEntryOrigin');
+      }
+      res.end(source); return;
     }
     res.writeHead(404); res.end();
   });
@@ -62,8 +75,8 @@ async function run() {
     await page.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 740, deviceScaleFactor: 1, mobile: true });
     await page.goto(base + '/app', 300);
     await until(`document.getElementById('dsh-lite-backup-settings')`);
-    assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'initial navigation has an optional entry without auto-modal');
-    await page.eval(`document.getElementById('dsh-lite-backup-settings').click()`);
+    await until(`document.getElementById('dsh-lite-backup-dialog')`);
+    assert.equal(await page.eval(`performance.getEntriesByType('navigation')[0].type`), 'navigate');
     await until(`document.getElementById('dsh-lite-backup-copy') && !document.getElementById('dsh-lite-backup-copy').disabled`);
     assert.equal(await page.eval(`document.getElementById('app').inert`), true);
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
@@ -110,8 +123,39 @@ async function run() {
     await page.eval(`history.back()`);
     await until(`location.pathname === '/app' && document.getElementById('dsh-lite-backup-settings')`);
     await sleep(250); assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'real browser back navigation does not prompt');
+    await page.goto(base + '/app?backup=1', 200);
+    await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://fixture-primary.trycloudflare.com/dsh-lite'`);
+    assert.equal(await page.eval(`document.getElementById('dsh-lite-backup-current').textContent.includes('fixture-backup')`), true);
+    await page.eval(`window.__backup.primary.reachable=false;window.__backup.primary.origin=null;window.__backup.primary.url=null;document.getElementById('dsh-lite-backup-check').click()`);
+    await until(`document.getElementById('dsh-lite-backup-copy').disabled && document.getElementById('dsh-lite-backup-address').value === ''`);
+    await page.eval(`window.__backup.primary={phase:'ready',reachable:true,generation:'dddddddddddddddddddddddddddddddd',origin:'https://recovered-primary.trycloudflare.com',url:'https://recovered-primary.trycloudflare.com/dsh-lite',checkedAt:Date.now()};document.getElementById('dsh-lite-backup-check').click()`);
+    await until(`document.getElementById('dsh-lite-backup-address').value === 'https://recovered-primary.trycloudflare.com/dsh-lite'`);
+    assert.equal(await page.eval(`window.__opened.length`), 0, 'status reminders never transfer credentials or open another origin');
+    // Closed-panel change monitoring uses the actual DOM/controller. Only the
+    // clock, visibility and gateway metadata are synthetic in this browser test.
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await until(`!document.getElementById('dsh-lite-backup-dialog')`);
+    await page.eval(`__backup.primary.generation='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';__advanceBackup(20001)`);
+    await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://recovered-primary.trycloudflare.com/dsh-lite'`);
+    assert.equal(await page.eval(`document.getElementById('dsh-lite-backup-changed').hidden`), false, 'same URL new generation reminds on backup-current entry');
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await page.eval(`__advanceBackup(20001)`); await sleep(100);
+    assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'same shown version is not repeated by polling');
+    await page.goto(base + '/app', 200);
+    await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://fixture-backup.trycloudflare.com/dsh-lite'`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await page.eval(`__backup.backup.origin='https://updated-backup.trycloudflare.com';__backup.backup.url=__backup.backup.origin+'/dsh-lite';__backup.backup.generation='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';__advanceBackup(20001)`);
+    await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://updated-backup.trycloudflare.com/dsh-lite'`);
+    assert.equal(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), true, 'updated reminder still fits 320px');
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    const beforeHidden = await page.eval(`__backupReads`);
+    await page.eval(`__fixtureHidden=true;document.dispatchEvent(new Event('visibilitychange'));__backup.backup.origin='https://latest-backup.trycloudflare.com';__backup.backup.url=__backup.backup.origin+'/dsh-lite';__backup.backup.generation='ffffffffffffffffffffffffffffffff';__advanceBackup(120000)`);
+    await sleep(100); assert.equal(await page.eval(`__backupReads`), beforeHidden, 'hidden-page metadata monitoring pauses');
+    await page.eval(`__fixtureHidden=false;document.dispatchEvent(new Event('visibilitychange'))`);
+    await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://latest-backup.trycloudflare.com/dsh-lite'`);
+    assert.equal(await page.eval(`__opened.length`), 0, 'change notices never automatically prepare/open another origin');
     assert.equal(page.exceptions.length, 0, 'browser reports no uncaught exception');
-    console.log('Backup mobile browser fixture passed: real refresh gating, auth wait, navigation/back/reconnect, focus trap/Escape, 320px layout, ZH/EN/ES, bare copying, denied clipboard and generation/unavailable states.');
+    console.log('Backup mobile browser fixture passed: real initial-entry/refresh gating, synthetic relative-origin selection/recovery, auth wait, navigation/back/reconnect, focus trap/Escape, 320px layout, ZH/EN/ES, bare copying, denied clipboard, closed-panel version changes and paused/resumed monitoring.');
   } finally {
     if (browser) { try { await browser.send('Browser.close'); } catch (_) {} try { browser.ws.close(); } catch (_) {} }
     await new Promise(resolve => server.close(resolve));

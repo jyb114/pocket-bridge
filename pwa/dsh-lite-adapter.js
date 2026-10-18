@@ -6,6 +6,7 @@
   var socket = null;
   var serial = 0;
   var generation = 0;
+  var socketAttempt = 0;
   var listener = function () {};
   var workspaces = [];
   var sessionSummaries = new Map();
@@ -31,7 +32,11 @@
   var pageRequest = null;
   var toolRows = new Map();
   var rebaselineCount = 0;
-  var pendingPrompt = null;
+  // Uncertain submissions must retain their identities when another draft or
+  // conversation is sent. Bound admission rather than evicting an identity
+  // whose upstream outcome is still unknown.
+  var pendingPrompts = new Map();
+  var MAX_PENDING_PROMPTS = 64;
   var hiddenAt = 0;
   var resumeHandler = null;
   // 这次断开是不是**我们自己为了进后台而主动关的**。
@@ -393,6 +398,18 @@
     clearTimeout(waiting.timer);
     if (ok) waiting.resolve(); else waiting.reject(problem || error('加载项目失败，请重连。'));
   }
+  function armInitialTimeout() {
+    if (!initial || initial.timer || backgrounded) return;
+    var waiting = initial;
+    waiting.timer = global.setTimeout(function () {
+      if (initial !== waiting) return;
+      settleInitial(false, error('加载项目超时。请检查电脑和隧道，再点重连。'));
+      live = false;
+      socketAttempt++;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      try { if (socket) socket.close(); } catch (_) {}
+    }, 45000);
+  }
   function settleSession(value, problem) {
     if (!sessionRequest) return;
     var waiting = sessionRequest;
@@ -677,7 +694,7 @@
     });
   }
   function scheduleReconnect(epoch) {
-    if (!live || epoch !== generation || reconnectTimer) return;
+    if (!live || epoch !== generation || backgrounded || reconnectTimer) return;
     if (!reconnectSince) reconnectSince = Date.now();
     if (Date.now() - reconnectSince > 60000) {
       live = false;
@@ -711,10 +728,13 @@
    */
   function goBackground() {
     hiddenAt = Date.now();
+    backgrounded = true;
+    socketAttempt++;
+    // Background suspension is not a failed foreground connection attempt.
+    if (initial && initial.timer) { clearTimeout(initial.timer); initial.timer = null; }
     resetProjectionConnection();
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (socket) {
-      backgrounded = true;                 // 让 onclose 知道：这是我们主动断的
       try { socket.close(1000, 'background'); } catch (_) { /* 已经死了 */ }
     }
   }
@@ -730,6 +750,8 @@
     if (!live || epoch !== generation) return;
     hiddenAt = 0;
     backgrounded = false;
+    socketAttempt++;
+    armInitialTimeout();
     // iOS 恢复页面时，旧连接可能一直停在 CLOSING，onclose 很晚才来（甚至不来）。
     // 先弃用它，再主动安排新连接；旧连接的回调有 socket !== ws 守卫，不会碰新连接。
     var stale = socket;
@@ -749,12 +771,16 @@
     scheduleReconnect(epoch);
   }
   async function openSocket(epoch, reprove) {
-    if (!live || epoch !== generation) return;
+    if (!live || epoch !== generation || backgrounded) return;
+    // Several foreground/retry paths can await the same deduplicated proof.
+    // Only the latest attempt may create a socket or schedule another retry.
+    var attempt = ++socketAttempt;
+    function current() { return live && epoch === generation && attempt === socketAttempt && !backgrounded; }
     if (reprove) {
       try {
-        if (!await global.DshE2EE.prove(true)) { scheduleReconnect(epoch); return; }
-      } catch (_) { scheduleReconnect(epoch); return; }
-      if (!live || epoch !== generation) return;
+        if (!await global.DshE2EE.prove(true)) { if (current()) scheduleReconnect(epoch); return; }
+      } catch (_) { if (current()) scheduleReconnect(epoch); return; }
+      if (!current()) return;
     }
     var protocol = global.location.protocol === 'https:' ? 'wss:' : 'ws:';
     var url = protocol + '//' + global.location.host + '/api/remote.mux';
@@ -806,6 +832,7 @@
     if (!await e2ee.prove(true)) throw error('连接授权未通过。请重新打开完整的轻量版地址。');
     if (epoch !== generation) return;
     live = true;
+    backgrounded = !!(global.document && global.document.visibilityState === 'hidden');
     if (global.document && typeof global.document.addEventListener === 'function') {
       resumeHandler = function () {
         if (global.document.visibilityState === 'hidden') { goBackground(); return; }
@@ -814,18 +841,15 @@
       global.document.addEventListener('visibilitychange', resumeHandler);
     }
     await new Promise(function (resolve, reject) {
-      var timer = global.setTimeout(function () {
-        settleInitial(false, error('加载项目超时。请检查电脑和隧道，再点重连。'));
-        live = false;
-        try { if (socket) socket.close(); } catch (_) {}
-      }, 45000);
-      initial = { resolve: resolve, reject: reject, timer: timer };
+      initial = { resolve: resolve, reject: reject, timer: null };
+      armInitialTimeout();
       openSocket(epoch, false);
     });
     if (epoch !== generation) return;
   }
   function disconnect() {
     generation++;
+    socketAttempt++;
     resetProjectionConnection();
     live = false;
     if (resumeHandler && global.document && typeof global.document.removeEventListener === 'function')
@@ -855,19 +879,30 @@
       body: JSON.stringify({ method: method, request: request })
     }); };
     var response = await invoke();
-    if (response.status === 403) {
+    if (response.status === 403 && method !== 'session/prompt') {
       if (await e2ee.prove(true)) response = await invoke();
     }
     if (response.status === 401 || response.status === 403) throw error('连接授权未通过，请重新打开完整的轻量版地址。');
-    if (!response.ok) throw error(response.status === 400 &&
+    if (!response.ok) {
+      var failureBody = null;
+      try { failureBody = await response.json(); } catch (_) {}
+      var failure = error(response.status === 400 &&
       (method === 'session/page' || method === 'session/cancel') ?
       '桥服务尚未更新此功能，请先更新电脑端桥并重启服务。' :
-      '电脑端 DSH 请求失败（HTTP ' + response.status + '），请重试。');
+      '电脑端 DSH 请求失败（HTTP ' + response.status + '），请先确认发送状态。');
+      if (failureBody && /^prompt-[a-z-]+$/.test(failureBody.error || '')) failure.code = failureBody.error;
+      throw failure;
+    }
     var body;
     try { body = await response.json(); } catch (_) { throw error('电脑端返回的数据无法读取。'); }
     if (!body || !body.result || body.result.ok !== true) {
       var code = body && body.result && body.result.error && body.result.error.code;
-      throw error(code ? 'DSH 拒绝了请求：' + String(code).slice(0, 100) : 'DSH 没有完成请求，请重试。');
+      var rejected = error(code ? 'DSH 拒绝了请求：' + String(code).slice(0, 100) : 'DSH 没有完成请求，请重试。');
+      if (typeof code === 'string') rejected.code = code.slice(0, 100);
+      if (method === 'bridge/prompt-prepare' && body.result.error && Array.isArray(body.result.error.operations) &&
+          body.result.error.operations.length <= 64 && body.result.error.operations.every(validPromptOperation))
+        rejected.operations = body.result.error.operations;
+      throw rejected;
     }
     return body.result.value || {};
   }
@@ -909,12 +944,19 @@
     if (pageRequest) throw error('正在加载更早记录，请稍等。');
     var epoch = generation, firstSeq = activeFirstSeq, streamId = activeSessionStream;
     var result = await new Promise(function (resolve, reject) {
-      pageRequest = { resolve: resolve, reject: reject };
+      var waiting = { resolve: resolve, reject: reject };
+      pageRequest = waiting;
       rpc('session/page', { address: { kind: 'session', sessionId: selected },
         throughSeq: activeCursor, beforeSeq: firstSeq, maxMessages: 20,
         turnWindow: { minMessages: 10, minTurns: 1 } }).then(function (value) {
+        // Switching/reconnecting cancels this waiter, but its HTTP request may
+        // still finish after a new page starts. Never settle that newer waiter.
+        if (pageRequest !== waiting) return;
         settlePage(value);
-      }, function (problem) { settlePage(null, problem); });
+      }, function (problem) {
+        if (pageRequest !== waiting) return;
+        settlePage(null, problem);
+      });
     });
     if (epoch !== generation || selected !== activeSessionId || streamId !== activeSessionStream ||
         firstSeq !== activeFirstSeq) throw error('对话已更新，请重新加载更早记录。');
@@ -1002,6 +1044,42 @@
     }
     return { id: String(value.sessionId) };
   }
+  function promptRequestId() {
+    if (global.crypto && typeof global.crypto.randomUUID === 'function') return global.crypto.randomUUID();
+    if (!global.crypto || typeof global.crypto.getRandomValues !== 'function') throw error('缺少安全随机数，无法建立发送身份。');
+    var bytes = new Uint8Array(16); global.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    var hex = Array.from(bytes, function (value) { return value.toString(16).padStart(2, '0'); }).join('');
+    return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+  }
+  function validPromptOperation(value) {
+    return value && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value.requestId || '') &&
+      ['prepared', 'uncertain', 'accepted', 'cancelled'].indexOf(value.state) >= 0 &&
+      typeof value.reviewed === 'boolean' && typeof value.contextChanged === 'boolean' &&
+      (!Object.prototype.hasOwnProperty.call(value, 'matchesDraft') || typeof value.matchesDraft === 'boolean') &&
+      Number.isSafeInteger(value.createdAt) && Number.isSafeInteger(value.updatedAt);
+  }
+  async function listPromptOperations(sessionId) {
+    var value = await rpc('bridge/prompt-state', { sessionId: String(sessionId || ''), action: 'list' });
+    if (!Array.isArray(value.operations) || value.operations.length > 64 || value.operations.some(function (item) { return !validPromptOperation(item); }))
+      throw error('电脑端没有返回可验证的发送记录，请更新桥后重试。');
+    return value.operations;
+  }
+  async function resolvePromptOperation(input) {
+    var request = { sessionId: String(input.sessionId || ''), requestId: String(input.requestId || ''), action: input.action };
+    if (input.confirm === true) request.confirm = true;
+    var value = await rpc('bridge/prompt-state', request);
+    if (!validPromptOperation(value.operation) || value.operation.requestId !== request.requestId) throw error('发送状态无法确认。');
+    if (value.operation.reviewed) pendingPrompts.forEach(function (pending, signature) {
+      if (pending.requestId === request.requestId) pendingPrompts.delete(signature);
+    });
+    return value.operation;
+  }
+  function promptRecovery(operations, requestId) {
+    var problem = error('这条消息的接收状态需要确认。请先查看发送记录和对话历史，不能自动重发。');
+    problem.code = 'prompt-recovery-required'; problem.operations = operations || []; problem.requestId = requestId || null;
+    return problem;
+  }
   async function sendMessage(input) {
     var content = [];
     var text = String(input.text || '');
@@ -1014,13 +1092,74 @@
     });
     if (!content.length) throw error('请输入文字或选择文件。');
     var sessionId = String(input.sessionId || '');
-    var signature = JSON.stringify(content);
-    if (!pendingPrompt || pendingPrompt.sessionId !== sessionId || pendingPrompt.signature !== signature)
-      pendingPrompt = { sessionId: sessionId, signature: signature, requestId: id() };
-    var value = await rpc('session/prompt', { requestId: pendingPrompt.requestId, sessionId: sessionId,
-      mode: 'queue', content: content });
-    if (value.accepted !== true) throw error('DSH 没有接收这条消息，请重试。');
-    pendingPrompt = null;
+    var signature = JSON.stringify([sessionId, content]);
+    var pending = pendingPrompts.get(signature);
+    if (!pending) {
+      if (pendingPrompts.size >= MAX_PENDING_PROMPTS)
+        throw error('有较多发送结果尚未确认，请先查看发送记录和对话历史，再发送新消息。');
+      pending = { requestId: promptRequestId(), dispatched: false };
+      // Reserve before the first await. Simultaneous clicks share one identity
+      // and one in-flight promise, including when preparation is still pending.
+      pendingPrompts.set(signature, pending);
+    }
+    if (pending.promise) return pending.promise;
+    var work = performSend(); pending.promise = work;
+    try { return await work; }
+    finally { if (pending.promise === work) pending.promise = null; }
+
+    async function performSend() {
+    var request = { requestId: pending.requestId, sessionId: sessionId, mode: 'queue', content: content };
+    try {
+      var prepared = await rpc('bridge/prompt-prepare', request);
+      var operation = prepared.operation;
+      if (!validPromptOperation(operation) || operation.requestId !== pending.requestId) throw error('桥服务没有返回持久发送身份，请先更新电脑端桥。');
+      if (operation.state === 'accepted') {
+        try { await resolvePromptOperation({ sessionId: sessionId, requestId: pending.requestId, action: 'acknowledge' }); }
+        catch (_) { /* The durable positive receipt is sufficient; never send again. */ }
+        if (pendingPrompts.get(signature) === pending) pendingPrompts.delete(signature);
+        return { accepted: true, recovered: true, operation: operation };
+      }
+      if (operation.state !== 'prepared' || operation.contextChanged || pending.dispatched) throw promptRecovery([operation], pending.requestId);
+      // Once transport is attempted, even a missing response must never cause
+      // this page to issue it again. Only state queries/review are recoverable.
+      pending.dispatched = true;
+      var value = await rpc('session/prompt', request);
+      if (value.accepted !== true || !validPromptOperation(value.bridgeOperation) || value.bridgeOperation.state !== 'accepted' ||
+          value.bridgeOperation.requestId !== pending.requestId) throw promptRecovery([], pending.requestId);
+      try { await resolvePromptOperation({ sessionId: sessionId, requestId: pending.requestId, action: 'acknowledge' }); }
+      catch (_) { /* Accepted is durable; a lost phone acknowledgement cannot undo it. */ }
+      if (pendingPrompts.get(signature) === pending) pendingPrompts.delete(signature);
+      return { accepted: true, operation: value.bridgeOperation };
+    } catch (problem) {
+      if (pending.dispatched || problem.code === 'prompt-recovery-required' || problem.code === 'prompt-state-context-changed') {
+        var operations = problem.operations;
+        if (pending.dispatched) {
+          // Re-prepare only the original identity and content. This is a
+          // read of an existing intent, never another upstream dispatch. A
+          // list alone cannot establish whether the current draft matches.
+          try {
+            var confirmed = (await rpc('bridge/prompt-prepare', request)).operation;
+            if (validPromptOperation(confirmed) && confirmed.requestId === pending.requestId && confirmed.matchesDraft === true) {
+              if (confirmed.state === 'accepted') {
+                try { await resolvePromptOperation({ sessionId: sessionId, requestId: pending.requestId, action: 'acknowledge' }); }
+                catch (_) { /* Positive receipt is already durable. */ }
+                if (pendingPrompts.get(signature) === pending) pendingPrompts.delete(signature);
+                return { accepted: true, recovered: true, operation: confirmed };
+              }
+              operations = [confirmed];
+            }
+          } catch (lookupProblem) {
+            if (lookupProblem.operations && lookupProblem.operations.length) operations = lookupProblem.operations;
+          }
+        }
+        if (!operations || !operations.length) { try { operations = await listPromptOperations(sessionId); } catch (_) {} }
+        if (!pending.dispatched && operations && operations.length && operations.every(function (item) { return item.requestId !== pending.requestId; }) &&
+            pendingPrompts.get(signature) === pending) pendingPrompts.delete(signature);
+        throw promptRecovery(operations, pending.requestId);
+      }
+      throw problem;
+    }
+    }
   }
   async function uploadFile(input) {
     var file = input && input.file;
@@ -1418,7 +1557,8 @@
     loadSession: loadSession, loadOlder: loadOlder, listDirectories: listDirectories,
     listWorkspaceFiles: listWorkspaceFiles,
     createProject: createProject, createSession: createSession,
-    sendMessage: sendMessage, uploadFile: uploadFile, downloadFile: downloadFile,
+    sendMessage: sendMessage, listPromptOperations: listPromptOperations, resolvePromptOperation: resolvePromptOperation,
+    uploadFile: uploadFile, downloadFile: downloadFile,
     downloadImageAttachment: downloadImageAttachment,
     cancelSession: cancelSession, respondToInteraction: respondToInteraction
   };
