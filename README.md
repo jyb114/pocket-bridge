@@ -26,11 +26,13 @@ Capabilities depend on the installed DSH runtime, its plugins, and the connected
 ## Windows setup
 
 1. Install and sign in to DSH on the computer. Verify that it can open a project and reply locally.
-2. Download a DSH-only Windows setup from [Releases](https://github.com/jyb114/pocket-bridge/releases). Older combined installers are historical releases.
+2. Download the DSH-only Windows setup from [Preview.17](https://github.com/jyb114/pocket-bridge/releases/tag/v1.0.0-preview.17). Older installers remain available in Releases.
 3. Install Pocket Bridge. An upgrade uses the saved installation location; choose a D: location for a new install if preferred.
 4. Open the desktop console and verify that the detected DSH runtime is running. The console remains local to the computer.
 5. Copy the complete HTTPS phone connection link. Keep its access key and `#k=` fragment private.
 6. Open the link on the phone. Select a project and conversation, or add a computer folder and create one. The host computer must remain awake and connected.
+
+Preview.17 fixes **Start DSH** in the desktop console: it uses a strict local control request, reports HTTP failures clearly, and shares an in-flight start across repeated clicks. To close DSH, exit it from the DSH application. The [release notes](RELEASE_NOTES.md) keep Preview.17 validation separate from the historical Preview.16 acceptance records.
 
 The Windows installer bundles Node.js and cloudflared with their license texts. It does not bundle DSH. Temporary tunnel addresses can change after a restart; use the newly copied link when that happens. A tunnel that is unavailable or disconnected does not mean a message was accepted. Do not repeatedly send an instruction with an uncertain delivery result.
 

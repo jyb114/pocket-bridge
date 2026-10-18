@@ -2,7 +2,7 @@
 
 The current product is DSH-only. See [DSH mobile acceptance](DSH-MOBILE-ACCEPTANCE.md) for the current candidate's actual browser operations, observed defects, isolated test evidence and remaining release checks. See [DSH compatibility](DSH-COMPATIBILITY.md) for the exact historical npm versions, actual workflows and unverified limits.
 
-The current release's separate original-desktop and live HTTPS-browser record is [Preview.16 acceptance](PREVIEW16-ACCEPTANCE.md). Historical records do not imply those old hosts were all rerun with Flash-1017.
+Preview.17's focused desktop-console startup and cold-start HTTPS-browser verification are recorded in the [release notes](../RELEASE_NOTES.md). The broader [Preview.16 acceptance](PREVIEW16-ACCEPTANCE.md) remains its separate historical original-desktop and live HTTPS-browser record. Historical records do not imply those old hosts were all rerun with Flash-1017 or Preview.17.
 
 Previous combined releases and installers remain in GitHub Releases, with their original source history. Historical Codex/Dot native experiments are not current installer features and are not updated in the DSH-only line. The presence of retained source or local journals does not establish a supported current endpoint.
 

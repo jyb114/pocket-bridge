@@ -23,10 +23,10 @@ async function check(name,fn){await fn();passed++;console.log('OK '+name);}
   await check('console cached lists expose only DSH and keep its real controls usable',()=>{
     const html=fs.readFileSync(path.join(__dirname,'../pwa/console.html'),'utf8'),actions=[],opens=[];
     function element(){return{children:[],style:{},innerHTML:'',appendChild(c){this.children.push(c);}};}
-    const list=element();const ui=vm.createContext({document:{createElement:element},$:()=>list,tr:s=>s,esc:String,desktopIcon:()=>'',mkBtn:(label,cls,fn)=>({label,onclick:fn}),targetAction:(...args)=>actions.push(args),confirm:()=>true,window:{open:(...args)=>opens.push(args)}});
+    const list=element();const ui=vm.createContext({document:{createElement:element},$:()=>list,tr:s=>s,esc:String,desktopIcon:()=>'',mkBtn:(label,cls,fn)=>({label,onclick:fn}),targetStartPending:null,targetAction:(...args)=>actions.push(args),confirm:()=>true,window:{open:(...args)=>opens.push(args)}});
     vm.runInContext(extractFunction(html,'renderTargets'),ui);
     ui.renderTargets([{id:'codex',installed:true,running:true,short:'Codex'},{id:'dot',installed:true,running:true,short:'Dot'},{id:'dsh',installed:true,running:true,short:'DSH'}]);
-    assert.equal(list.children.length,1);const buttons=list.children[0].children[0].children;assert.equal(buttons.length,2);buttons[0].onclick();buttons[1].onclick();assert.equal(opens[0][0],'/?target=dsh');assert.equal(actions[0][0],'dsh');assert.equal(actions[0][1],'stop');
+    assert.equal(list.children.length,1);const controls=list.children[0].children[0].children;assert.equal(controls.length,2);controls[0].onclick();assert.equal(opens[0][0],'/?target=dsh');assert.equal(controls[1].onclick,undefined);assert.match(controls[1].textContent,/DSH 应用中退出/);assert.equal(actions.length,0);
     assert.doesNotMatch(html,/id=["'](?:btn-codex-proxy|v-codex-balance)["']|loadCodexQuota\(|renderCodexProxy\(|fetch\(['"]\/__codex/);
     const tray=fs.readFileSync(path.join(__dirname,'../desktop/tray.ps1'),'utf8');assert.doesNotMatch(tray,/id\s*=\s*'codex'|nm\s*=\s*'Codex'/);
   });
