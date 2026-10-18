@@ -81,8 +81,13 @@ async function run() {
       throw Error('Timed out waiting for action fixture state: ' + expression);
     }
     async function pointer(selector, text) {
-      const inClosedMenu = await page.eval(`(()=>{const node=${text === undefined ? `document.querySelector(${JSON.stringify(selector)})` : `[...document.querySelectorAll(${JSON.stringify(selector)})].find(x=>x.textContent===${JSON.stringify(text)})`};return !!node?.closest('#settings-menu[hidden]');})()`);
-      if (inClosedMenu) await pointer('#rail-settings');
+      // Compact phones retain the real controls inside collapsed containers.
+      // Reach them through the same visible entry points as a user, then keep
+      // the existing geometry/hit check for the actual action below.
+      const reveal = await page.eval(`(()=>{const node=${text === undefined ? `document.querySelector(${JSON.stringify(selector)})` : `[...document.querySelectorAll(${JSON.stringify(selector)})].find(x=>x.textContent===${JSON.stringify(text)})`};if(!node)throw Error('Fixture control unavailable');const toggle=document.getElementById('composer-options-toggle'),box=toggle?.getBoundingClientRect();return {menu:!!node.closest('#settings-menu[hidden]'),options:!!node.closest('#composer-picks')&&!!box&&box.width>0&&box.height>0&&toggle.getAttribute('aria-expanded')!=='true',sidebar:!!node.closest('#sidebar')&&document.body.classList.contains('sidebar-hidden')};})()`);
+      if (reveal.menu) await pointer('#rail-settings');
+      if (reveal.options) await pointer('#composer-options-toggle');
+      if (reveal.sidebar) await pointer('#projects-toggle');
       const point = await page.eval(`(()=>{let node=${text === undefined ? `document.querySelector(${JSON.stringify(selector)})` : `[...document.querySelectorAll(${JSON.stringify(selector)})].find(x=>x.textContent===${JSON.stringify(text)})`};if(!node||node.disabled)throw Error('Fixture control unavailable');node.scrollIntoView({block:'center',inline:'nearest'});const r=node.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!r.width||!r.height||x<0||x>innerWidth||y<0||y>innerHeight||!node.contains(document.elementFromPoint(x,y)))throw Error('Fixture control not reachable: '+${JSON.stringify(selector)}+': '+JSON.stringify({x,y,w:r.width,h:r.height,hit:document.elementFromPoint(x,y)?.className}));return{x,y};})()`);
       await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point });
       await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point });
@@ -289,9 +294,13 @@ async function run() {
     check(await page.eval(`__actions.heightReads<=5`), true, 'streaming layout reads are bounded per frame, not per chunk');
     check(await page.eval(`document.getElementById('record-list').scrollTop===__actions.top`), true, 'streaming leaves a reader above the bottom in place');
     await page.eval(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{__actions.copied=text}}})`);
+    // Compact chrome no longer creates a cramped transcript at 844px. Use an
+    // actual short browser viewport for the same docking/hit regression. This
+    // is a layout case, not a claim of physical-phone keyboard testing.
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 400, deviceScaleFactor: 1, mobile: true });
     await wait(`!document.querySelector('.jump-bottom').hidden&&document.querySelector('.jump-bottom').classList.contains('is-docked')`);
     check(await page.eval(`document.getElementById('record-list').clientHeight<176`), true, 'goal/queue/error state reproduces a cramped real history viewport');
-    check(await page.eval(`document.querySelector('.jump-bottom').parentNode===document.querySelector('.chat-tabs')`), true, 'Latest occupies the existing tab bar instead of covering a short transcript');
+    check(await page.eval(`document.querySelector('.jump-bottom').parentNode===document.getElementById('mobile-chat-heading')&&!document.querySelector('.jump-bottom').closest('#settings-menu')`), true, 'Latest occupies the visible compact header instead of hidden menu tabs or a short transcript');
     check(await page.eval(`(()=>{const a=document.querySelector('.jump-bottom').getBoundingClientRect(),b=document.getElementById('record-list').getBoundingClientRect();return a.bottom<=b.top+.5&&a.height>=44;})()`), true, 'docked Latest is a reachable 44px action outside the transcript');
     await pointer('[data-record-id="long-10"] .record-copy');
     match(await page.eval(`__actions.copied`), /Burst 19/, 'a retained Copy whole turn button uses current records rather than its old snapshot object');
@@ -300,6 +309,8 @@ async function run() {
     await wait(`document.querySelector('.jump-bottom').hidden`);
     check(await page.eval(`(()=>{const l=document.getElementById('record-list');return l.scrollHeight-l.scrollTop-l.clientHeight<2;})()`), true, 'one actual docked Latest click reaches the newest content');
     check(await page.eval(`document.getElementById('message-input').value`), 'Preserved action draft', 'Latest navigation never changes the unsent composer');
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await page.eval(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     await page.eval(`delete document.getElementById('record-list').scrollHeight;__actions.event({type:'record',sessionId:'s1',record:{id:'broken-image',role:'assistant',text:'Explicit retry fixture',attachments:[{name:'broken.png',path:'D:/action-fixture/broken.png'}]}});__actions.badImage=true`);
     await wait(`!!document.querySelector('[data-record-id="broken-image"] .record-image-holder')`);
     await pointer('[data-record-id="broken-image"] .record-image-holder');

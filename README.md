@@ -26,13 +26,13 @@ Capabilities depend on the installed DSH runtime, its plugins, and the connected
 ## Windows setup
 
 1. Install and sign in to DSH on the computer. Verify that it can open a project and reply locally.
-2. Download the DSH-only Windows setup from [Preview.17](https://github.com/jyb114/pocket-bridge/releases/tag/v1.0.0-preview.17). Older installers remain available in Releases.
+2. Download the DSH-only Windows setup from [Preview.18](https://github.com/jyb114/pocket-bridge/releases/tag/v1.0.0-preview.18). Older installers remain available in Releases.
 3. Install Pocket Bridge. An upgrade uses the saved installation location; choose a D: location for a new install if preferred.
 4. Open the desktop console and verify that the detected DSH runtime is running. The console remains local to the computer.
 5. Copy the complete HTTPS phone connection link. Keep its access key and `#k=` fragment private.
 6. Open the link on the phone. Select a project and conversation, or add a computer folder and create one. The host computer must remain awake and connected.
 
-Preview.17 fixes **Start DSH** in the desktop console: it uses a strict local control request, reports HTTP failures clearly, and shares an in-flight start across repeated clicks. To close DSH, exit it from the DSH application. The [release notes](RELEASE_NOTES.md) keep Preview.17 validation separate from the historical Preview.16 acceptance records.
+Preview.18 gives phone conversations more space through a compact heading and expandable composer controls, and reduces the server work needed for first-miss public asset compression. The [release notes](RELEASE_NOTES.md) distinguish measured server work from real browser loading. The desktop console retains Preview.17's strict local **Start DSH** action. To close DSH, exit it from the DSH application.
 
 The Windows installer bundles Node.js and cloudflared with their license texts. It does not bundle DSH. Temporary tunnel addresses can change after a restart; use the newly copied link when that happens. A tunnel that is unavailable or disconnected does not mean a message was accepted. Do not repeatedly send an instruction with an uncertain delivery result.
 
@@ -76,11 +76,13 @@ Local DSH history, uploads, configuration, and browser drafts have separate stor
 
 ## Mobile design
 
-Pocket Bridge uses its own bridge mark and a shared set of simple controls. A compact top bar gives phone conversations the full screen width. Secondary actions live in a labelled menu; model, tool, permission, and goal controls remain visible without a hidden horizontal toolbar. Primary touch actions have at least a 44-pixel target. The interface uses system fonts and local assets, with light and dark palettes and Chinese, English, and Spanish text.
+Pocket Bridge uses its own bridge mark and a shared set of simple controls. On phones, one top row contains the conversation heading and connection indicator. Session actions and activity controls live in the labelled menu; model, tool, permission and goal choices open from the composer's labelled options button. Long drafts scroll within a bounded input instead of occupying the transcript. The existing controls retain their state when moved, and return to their wider desktop layout when appropriate. Primary touch actions have at least a 44-pixel target. The interface uses system fonts and local assets, with light and dark palettes and Chinese, English, and Spanish text.
 
 History is paged, unchanged message rows are reused, streaming updates are coalesced, and images are requested explicitly. These reduce work without removing content, authentication, or encryption. Network speed, tunnel stability, runtime discovery, and the amount of history can still affect response time.
 
-Public page assets have a bounded compression cache, with current source bytes and file identity checked on every request. This reduces repeated server work without changing compression settings or caching private conversation/file responses; first-miss compression is unchanged. Concurrent modern-session queue, goal and model reads share only an in-flight request, with a one-second join window and fresh reads after mutations or connection changes. Repeated catalog updates preserve unchanged navigation buttons instead of recreating them. These optimizations retain the existing feature and security boundaries rather than omitting content.
+The computer's public-asset compression cache checks current source bytes and file identity on every request it receives. Brotli quality 5 reduces first-miss compression work; gzip remains at level 6. The largest Lite script is preloaded from its existing fingerprinted path without changing execution order. On a previously trusted origin, ten fixed public scripts can be reused from the phone's cache after their bytes, active pin and access-key epoch are rechecked. The emergency updater and manifest stay online; installing new code still requires the normal explicit verified update. A new origin or an empty cache still needs its first download. Private conversation and file responses are not added to this public cache.
+
+Concurrent modern-session queue, goal and model reads share only an in-flight request, with a one-second join window and fresh reads after mutations or connection changes. Repeated catalog updates preserve unchanged navigation buttons instead of recreating them. In the recorded desktop-browser tunnel run, static scripts and DOMContentLoaded improved, but first conversation content still took about nine seconds and did not beat the earlier run. Fresh Windows process discovery remains a measured bottleneck. See [Preview.18 acceptance](docs/PREVIEW18-ACCEPTANCE.md) for the actual timings, measurement method and device limits.
 
 <img src="docs/assets/dsh-mobile-preview.png" alt="Pocket Bridge mobile interface with synthetic demonstration content" width="320">
 

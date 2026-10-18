@@ -21,6 +21,7 @@ button:disabled { opacity: .45; cursor: default; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .mobile-only { display: none; }
+.mobile-chat-heading, .mobile-session-menu, .composer-options-toggle { display: none; }
 .app { display: grid; grid-template-columns: 62px minmax(0, 1fr); width: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
 .rail { display: flex; position: relative; flex-direction: column; align-items: center; gap: 17px; padding: max(15px, env(safe-area-inset-top)) 5px max(15px, env(safe-area-inset-bottom)); border-right: 1px solid var(--line); background: var(--rail); }
 .rail-brand { display: flex; align-items: center; gap: 8px; }
@@ -63,6 +64,7 @@ body.sidebar-hidden .sidebar { display: none; }
 .status[data-state="disconnected"]:before { background: var(--danger); }
 .sidebar-backdrop { display: none; }
 .chat { display: flex; position: relative; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.transcript { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .chat-title { display: flex; align-items: center; justify-content: space-between; gap: .8rem; min-height: 77px; padding: 13px 28px; border-bottom: 1px solid var(--line); }
 .chat-heading { min-width: 0; }
 .chat-actions { display: flex; align-items: center; gap: 7px; flex: none; }
@@ -118,6 +120,8 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
    使用者截图里满屏 `**` 和 `|---|---|` —— 回复原来是当纯文本显示的。
    渲染之后要保证：手机上**读得下去**，而且宽内容（表格 / 代码）能横向滚，
    不把整页撑宽（撑宽了整页左右晃，比不渲染还难用）。 */
+.mobile-activity-return { display: none; }
+.record-markdown { white-space: normal; }
 .record-markdown > :first-child { margin-top: 0; }
 .record-markdown > :last-child { margin-bottom: 0; }
 .record-markdown p { margin: .4rem 0; }
@@ -135,6 +139,7 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
   overflow-wrap: anywhere;
 }
 .record-markdown pre.md-code {
+  white-space: pre;
   margin: .45rem 0; padding: .5rem .6rem; border: 1px solid var(--line);
   border-radius: 9px; background: #f6f7f9;
   overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -311,6 +316,53 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
   .rail { padding-left: 8px; padding-right: 8px; }
   .rail-brand { gap: 6px; }
   .rail-brand-name { font-size: .76rem; }
+}
+/* One navigation row and an expandable composer on phones. The original
+   controls move rather than being duplicated, retaining their live state. */
+@media (max-width: 700px) {
+  body.dsh-compact-mobile { overflow: hidden; }
+  .app.compact-mobile { position: fixed; left: 0; top: var(--pb-viewport-top, 0px); height: var(--pb-viewport-height, 100dvh); }
+  .compact-mobile .rail { min-height: 52px; gap: 2px; padding: max(4px, env(safe-area-inset-top)) 6px 4px; }
+  .compact-mobile .rail-brand { display: none; }
+  .compact-mobile .mobile-chat-heading { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; min-height: 44px; }
+  .compact-mobile .chat-heading { flex: 1; min-width: 0; }
+  .compact-mobile .chat-heading h1 { margin: 0; font-size: .9rem; line-height: 1.35; font-weight: 650; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  .compact-mobile .chat-heading #project-name { display: block; font-size: .68rem; color: var(--muted); line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  .mobile-connection { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #c09132; }
+  .compact-mobile[data-connection="connected"][data-crypto="on"] .mobile-connection { background: #35a46b; }
+  .compact-mobile[data-connection="disconnected"] .mobile-connection { background: var(--danger); }
+  .compact-mobile .chat-title { display: none; }
+  .compact-mobile .mobile-session-menu { display: block; border-bottom: 1px solid var(--line); margin-bottom: 5px; padding-bottom: 5px; }
+  .compact-mobile .settings-menu { max-height: min(75dvh, calc(var(--pb-viewport-height, 100dvh) - 64px)); overscroll-behavior: contain; }
+  .compact-mobile .mobile-session-menu .chat-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .compact-mobile .mobile-session-menu .chat-actions > * { width: 100%; justify-content: flex-start; text-align: left; }
+  .compact-mobile .mobile-session-menu .chat-tabs { gap: 6px; min-height: 44px; padding: 0; margin: 4px 0; }
+  .compact-mobile .mobile-session-menu .chat-tab { width: 50%; min-height: 44px; text-align: center; }
+  .compact-mobile .mobile-session-menu .composer-status { min-height: 44px; padding: 0 5px; }
+  .compact-mobile .mobile-session-menu .composer-status button { width: auto; min-width: 44px; text-align: right; }
+  .compact-mobile .transcript .record-list { padding: 12px 14px; overscroll-behavior-y: contain; }
+  .compact-mobile .transcript[data-has-history="true"] .record-list { padding-top: 64px; }
+  .compact-mobile .history-bar { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 2; padding: 8px 14px 0; pointer-events: none; }
+  .compact-mobile .transcript.is-at-history-start .history-bar { display: block; }
+  .compact-mobile .history-bar button { pointer-events: auto; box-shadow: 0 2px 8px #152b4a0b; }
+  .compact-mobile .composer { position: relative; flex: none; padding: 6px 10px max(5px, env(safe-area-inset-bottom)); }
+  .compact-mobile .composer-row { padding: 3px 7px 4px; border-radius: 22px; box-shadow: none; }
+  .compact-mobile .composer textarea { min-height: 38px; max-height: 116px; padding: 6px 6px; line-height: 1.45; overflow-y: auto; }
+  .compact-mobile .composer-bottom { display: flex; gap: 3px; min-height: 44px; }
+  .compact-mobile .composer-bottom > .voice-button { width: 44px; min-width: 44px; }
+  .compact-mobile .composer-bottom > .voice-button.is-listening { width: 70px; min-width: 70px; }
+  .compact-mobile .composer-options-toggle { display: flex; align-items: center; justify-content: flex-start; gap: 5px; flex: 1; min-width: 44px; height: 44px; padding: 4px 6px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: .76rem; }
+  .composer-options-toggle svg { flex: none; width: 18px; height: 18px; fill: var(--paper); stroke: currentColor; stroke-width: 1.6; }
+  .composer-options-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compact-mobile .composer-options-toggle[aria-expanded="true"] { background: var(--surface); color: var(--accent); }
+  .compact-mobile .composer-picks { display: none; position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; width: auto; z-index: 6; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: 0 8px 24px #152b4a24; }
+  .compact-mobile .composer.options-open .composer-picks { display: grid; }
+  .compact-mobile .composer .composer-pick { min-height: 46px; background: var(--surface); border-color: transparent; text-align: left; }
+  .compact-mobile .composer .stop-button { flex: none; width: 44px; height: 44px; padding: 0 2px; font-size: .72rem; border-radius: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compact-mobile .jump-bottom.is-docked { width: 44px; max-width: 44px; min-width: 44px; height: 44px; padding: 0; margin: 0; font-size: 0; }
+  .compact-mobile .jump-bottom.is-docked::after { content: '↓'; font-size: 20px; }
+  .compact-mobile .error-banner { flex: none; }
+  .compact-mobile .mobile-activity-return { display: block; flex: none; align-self: center; min-height: 44px; margin: 4px 12px; padding: 5px 14px; border: 1px solid var(--line); border-radius: 22px; background: var(--paper); color: var(--accent); font-size: .82rem; }
 }
 @media (prefers-color-scheme: dark) {
   :root { color-scheme: dark; --paper: #191c22; --rail: #20242b; --surface: #272d36; --line: #353d48; --ink: #f0f2f5; --muted: #acb5c2; --accent: #82b0ff; --accent-ink: #142238; --danger: #ff9990; }

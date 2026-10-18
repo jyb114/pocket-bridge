@@ -7,6 +7,13 @@ const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 
+// These small public assets are compressed on the gateway's event loop once
+// per source/encoding. Quality 5 avoids the default quality-11 cold-start stall
+// while retaining Brotli transport and the exact decoded source/code pin.
+const BROTLI_OPTIONS = Object.freeze({ params: Object.freeze({
+  [zlib.constants.BROTLI_PARAM_QUALITY]: 5
+}) });
+
 const LIMITS = Object.freeze({ maxEntries: 64, maxBytes: 8 * 1024 * 1024,
   maxFileBytes: 2 * 1024 * 1024 });
 
@@ -92,7 +99,7 @@ function createPublicStaticRepresentationCache(options = {}) {
     let body = source.raw;
     if (encoding) {
       try {
-        body = encoding === 'br' ? codec.brotliCompressSync(body) : codec.gzipSync(body, { level: 6 });
+        body = encoding === 'br' ? codec.brotliCompressSync(body, BROTLI_OPTIONS) : codec.gzipSync(body, { level: 6 });
       } catch (_) {
         // Preserve the existing identity fallback; never substitute old bytes.
         encoding = null;

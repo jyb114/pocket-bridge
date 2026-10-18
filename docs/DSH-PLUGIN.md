@@ -14,10 +14,10 @@ offering a connection or changing the gateway state.
 ## Installation
 
 Install a tested release tarball through your DSH plugin manager. No separate
-npm publication is required. Preview.17's versioned release URL is:
+npm publication is required. Preview.18's versioned release URL is:
 
 ```text
-dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.17/pocket-bridge-1.0.0-preview.17.tgz
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.18/pocket-bridge-1.0.0-preview.18.tgz
 ```
 
 Use the exact versioned asset from [Releases](https://github.com/jyb114/pocket-bridge/releases).

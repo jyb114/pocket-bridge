@@ -1,6 +1,6 @@
 # DSH compatibility and actual test coverage
 
-Updated 2026-10-18 (UTC), preview.16. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime. Older rows below describe their original acceptance runs; they are not all rerun for each new release.
+Updated 2026-10-18 (UTC), preview.18. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime. Older rows below describe their original acceptance runs; they are not all rerun for each new release. Preview.18 changes the Lite layout and public asset loading; it does not expand the admitted DSH versions. Its focused results are recorded in [Preview.18 acceptance](PREVIEW18-ACCEPTANCE.md).
 
 Version detection selects an adapter after checking the local runtime and its observed protocol. A recognized version, a running service, or a successful automated fixture is not proof that every feature works. The exact distribution and the operated workflow matter.
 

@@ -16,10 +16,49 @@ const i18nSource = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'i18n.js'),
 const languageSource = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-lang.js'), 'utf8');
 assert.match(gateway, /'\/__dsh\/legacy-rpc'/);
 assert.match(gateway, /'\/dsh-lite-router\.js': \{ file: 'dsh-lite-router\.js'/);
-const order = ['/e2ee.js', '/dsh-lite-pin.js', '/dsh-lite-adapter.js',
-  '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js'].map(name => html.indexOf(name));
-assert.ok(order.every(index => index >= 0) && order.every((index, i) => i === 0 || index > order[i - 1]),
-  'the router must defer UI mount until both adapters and encryption are loaded');
+function attribute(tag, name) {
+  const match = tag.match(new RegExp('(?:^|\\s)' + name +
+    '(?:\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'=<>`]+)))?(?=\\s|$)', 'i'));
+  return match ? match[1] ?? match[2] ?? match[3] ?? '' : null;
+}
+function verifyLiteAssets(markup) {
+  // A preload href is a fetch hint, not a second script execution. Inspect the
+  // actual external script tags rather than the first pathname in the HTML.
+  const scripts = [...markup.matchAll(/<script\b([^>]*)>/gi)].map(match => match[1]);
+  const sources = scripts.map(tag => attribute(tag, 'src'));
+  const external = sources.filter(Boolean);
+  assert.equal(new Set(external).size, external.length, 'external scripts must not execute twice');
+  const required = ['/e2ee.js', '/dsh-lite-pin.js', '/dsh-lite-adapter.js',
+    '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js'];
+  const order = required.map(name => {
+    assert.equal(sources.filter(value => value === name).length, 1, name + ' must execute exactly once');
+    const index = sources.indexOf(name), tag = scripts[index];
+    assert.notEqual(attribute(tag, 'defer'), null, name + ' must defer execution');
+    assert.equal(attribute(tag, 'async'), null, name + ' must retain ordered execution');
+    assert.equal(attribute(tag, 'type'), null, name + ' remains a classic script');
+    return index;
+  });
+  assert.ok(order.every((index, i) => i === 0 || index > order[i - 1]),
+    'the router must defer UI mount until both adapters and encryption are loaded');
+  const preloads = [...markup.matchAll(/<link\b([^>]*)>/gi)].map(match => match[1])
+    .filter(tag => attribute(tag, 'rel') === 'preload');
+  assert.equal(preloads.length, 1, 'only the existing large UI script is preloaded');
+  assert.equal(attribute(preloads[0], 'href'), '/dsh-lite-ui.js', 'preload must retain the execution URL');
+  assert.equal(attribute(preloads[0], 'as'), 'script');
+  assert.equal(attribute(preloads[0], 'fetchpriority'), 'high');
+  assert.equal(attribute(preloads[0], 'crossorigin'), null, 'preload must retain classic-script request credentials');
+}
+verifyLiteAssets(html);
+assert.throws(() => verifyLiteAssets(html.replace('</head>', '<script src="/dsh-lite-ui.js" defer></script></head>')),
+  /must not execute twice/);
+assert.throws(() => verifyLiteAssets(html.replace('src="/dsh-lite-ui.js" defer', 'src="/dsh-lite-ui.js"')),
+  /must defer execution/);
+assert.throws(() => verifyLiteAssets(html.replace('src="/dsh-lite-ui.js" defer', 'src="/dsh-lite-ui.js" defer async')),
+  /must retain ordered execution/);
+assert.throws(() => verifyLiteAssets(html.replace('href="/dsh-lite-ui.js"', 'href="/different-ui.js"')),
+  /preload must retain the execution URL/);
+assert.throws(() => verifyLiteAssets(html.replace('rel="preload"', 'rel="preload" crossorigin="anonymous"')),
+  /request credentials/);
 
 // Execute the gateway's actual root branch. A remote phone must receive the
 // owned shell before local discovery, regardless of profile, cookie or UA.

@@ -98,6 +98,56 @@ window.DshVoice = {
 };
 `;
 
+// A fixture pointer must use the same visible entry points as a phone user.
+// Hidden selectors remain in the DOM for state updates, but they are reached
+// through the options popover / settings menu rather than programmatic clicks.
+async function pointerControl(targetPage, selector) {
+  const reveal = await targetPage.eval(`(() => {
+    const node = document.querySelector(${JSON.stringify(selector)});
+    if (!node) throw Error('Fixture control is missing: ' + ${JSON.stringify(selector)});
+    const toggle = document.getElementById('composer-options-toggle');
+    const toggleBox = toggle && toggle.getBoundingClientRect();
+    return {settings:!!node.closest('#settings-menu[hidden]'),
+      options:!!node.closest('#composer-picks') && !!toggleBox && toggleBox.width > 0 &&
+        toggleBox.height > 0 && toggle.getAttribute('aria-expanded') !== 'true',
+      sidebar:!!node.closest('#sidebar') && document.body.classList.contains('sidebar-hidden')};
+  })()`);
+  if (reveal.settings) await pointerControl(targetPage, '#rail-settings');
+  if (reveal.options) await pointerControl(targetPage, '#composer-options-toggle');
+  if (reveal.sidebar) await pointerControl(targetPage, '#projects-toggle');
+  let point;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      point = await targetPage.eval(`(() => {
+        const node = document.querySelector(${JSON.stringify(selector)});
+        node.scrollIntoView({block:'nearest',inline:'nearest'});
+        const r=node.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
+        if (!r.width || !r.height || x<0 || x>innerWidth || y<0 || y>innerHeight ||
+            !node.contains(document.elementFromPoint(x,y))) {
+          throw Error('Fixture control is not visible: ' + ${JSON.stringify(selector)});
+        }
+        return {x,y};
+      })()`);
+      break;
+    } catch (error) {
+      if (attempt === 11) throw error;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  await targetPage.send('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
+  await targetPage.send('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
+}
+
+async function settleLayout(targetPage) {
+  await targetPage.eval(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+}
+
+async function escapePanel(targetPage) {
+  await targetPage.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+  await targetPage.send('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+  await settleLayout(targetPage);
+}
+
 async function run() {
   process.env.TEMP = 'D:/bridge-codex-test-temp';
   process.env.TMP = process.env.TEMP;
@@ -236,9 +286,7 @@ async function run() {
     assert.match(await page.eval(`document.querySelector('.screen-overlay').textContent`), /仍作为新消息，可能重复执行/);
     assert.equal(await page.eval(`document.getElementById('app').inert`), true, 'review uses the normal accessible modal');
     async function reviewPointer(selector) {
-      const point = await page.eval(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'center'});const r=node.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
-      await page.send('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
-      await page.send('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
+      await pointerControl(page, selector);
     }
     await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
     await page.send('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
@@ -339,54 +387,21 @@ async function run() {
     for (const width of [320, 375, 412]) {
       await page.send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true });
       state = await page.eval(`(() => {
-        const input = document.getElementById('message-input');
-        input.style.height = '132px'; // keyboard/draft/attachments change the bottom area's height
         const composer = document.getElementById('composer');
-        const row = composer.querySelector('.composer-row');
-        const bottom = composer.querySelector('.composer-bottom');
-        const status = composer.querySelector('.composer-status');
-        const picks = [...bottom.querySelectorAll('.composer-pick[data-kind]')];
-        const textarea = input.getBoundingClientRect();
-        const footer = bottom.getBoundingClientRect();
-        const frame = row.getBoundingClientRect();
-        const footnote = status.getBoundingClientRect();
-        const result = { viewport: innerWidth, scroll: document.documentElement.scrollWidth,
+        const toggle = document.getElementById('composer-options-toggle');
+        return { viewport: innerWidth, scroll: document.documentElement.scrollWidth,
           send: document.getElementById('send-button').getBoundingClientRect().right,
-          inputBottom: textarea.bottom, footerTop: footer.top, footerBottom: footer.bottom,
-          frameBottom: frame.bottom, statusTop: footnote.top, statusBottom: footnote.bottom,
-          pickHeight: Math.min(...picks.map(x => x.getBoundingClientRect().height)),
-          pickKinds: picks.map(x => x.dataset.kind),
-          separateBar: !!document.querySelector('.quick-bar') };
-        input.style.height = '';
-        return result;
+          options:toggle && toggle.getAttribute('aria-controls'),
+          expanded:toggle && toggle.getAttribute('aria-expanded'),
+          pickKinds:[...composer.querySelectorAll('.composer-pick[data-kind]')].map(x=>x.dataset.kind),
+          separateBar:!!document.querySelector('.quick-bar') };
       })()`);
       assert.ok(state.scroll <= state.viewport + 1, 'mobile shell overflows at ' + width);
       assert.ok(state.send <= state.viewport + 1, 'composer is outside viewport at ' + width);
-      assert.ok(state.inputBottom <= state.footerTop + 1 && state.footerBottom <= state.frameBottom + 1,
-        'model and mode should sit below the text inside the composer at ' + width + ': ' + JSON.stringify(state));
-      assert.ok(state.frameBottom <= state.statusTop + 1 && state.statusBottom <= 845,
-        'connection and balance should sit below the composer at ' + width + ': ' + JSON.stringify(state));
+      assert.equal(state.options, 'composer-picks', 'phone options have an explicit accessible entry point');
+      assert.equal(state.expanded, 'false', 'phone selectors start collapsed instead of consuming a permanent row');
       assert.deepEqual(state.pickKinds, ['model', 'mode', 'perm', 'goal']);
       assert.equal(state.separateBar, false, 'the old separate toolbar must be gone');
-      assert.ok(state.pickHeight >= 40, 'composer selectors are too short at ' + width);
-      const operations = await page.eval(`(async () => {
-        const holder = document.getElementById('composer-picks');
-        const result = [];
-        for (const kind of ['model', 'mode', 'perm', 'goal']) {
-          const button = holder.querySelector('[data-kind="' + kind + '"]');
-          button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-          const b = button.getBoundingClientRect(), h = holder.getBoundingClientRect();
-          const reachable = b.left >= h.left - 1 && b.right <= h.right + 1;
-          button.click();
-          await new Promise(resolve => setTimeout(resolve, 25));
-          const overlay = document.querySelector('.screen-overlay');
-          result.push({ kind, reachable, opened: !!overlay });
-          if (overlay) overlay.querySelector('.screen-action').click();
-        }
-        return result;
-      })()`);
-      assert.ok(operations.every(x => x.reachable && x.opened),
-        'all composer selectors must remain reachable and open at ' + width + ': ' + JSON.stringify(operations));
       await new Promise(resolve => setTimeout(resolve, 30));
       // The jump control belongs over the record area, never on top of the composer.
       state = await page.eval(`(() => {
@@ -405,7 +420,228 @@ async function run() {
     }
     assert.equal(page.exceptions.length, 0);
 
-    // ── E3：加密状态常驻标记 ─────────────────────────────────────────────────
+    // Compact phone layout uses a clean, stable conversation. The fixture above
+    // intentionally still has an unanswered question; it must not be used for
+    // a fixed reading-height budget or hide those interaction cards to pass it.
+    const compact = await browser.newPage();
+    await compact.send('Emulation.setDeviceMetricsOverride', {width:375,height:650,deviceScaleFactor:1,mobile:true});
+    await compact.goto('http://127.0.0.1:' + server.address().port + '/dsh-lite.html', 300);
+    await waitForSessionList(compact);
+    await compact.eval(`(() => {
+      window.__compactRecords = Array.from({length:24},(_,i)=>({id:'compact-'+i,
+        role:i%2?'assistant':'user',text:'Reading fixture '+i+'. '+('A stable transcript remains readable. '.repeat(5))}));
+      window.DshLiteAdapter.loadSession = async () => ({hasMore:true,records:window.__compactRecords});
+      window.DshLiteAdapter.loadOlder = async sessionId => {
+        window.__fake.calls.push(['loadOlder',sessionId]);
+        const older=Array.from({length:4},(_,i)=>({id:'compact-old-'+i,role:i%2?'assistant':'user',text:'Older fixture '+i+'. '.repeat(18)}));
+        window.__fake.onEvent({type:'records',sessionId,hasMore:false,records:[...older,...window.__compactRecords]});
+        return {hasMore:false};
+      };
+      document.querySelector('#session-list button').click();
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 70));
+    for (const width of [320, 375, 390]) {
+      await compact.send('Emulation.setDeviceMetricsOverride', {width,height:650,deviceScaleFactor:1,mobile:true});
+      await settleLayout(compact);
+      state = await compact.eval(`(() => {
+        const app=document.getElementById('app'),heading=document.querySelector('.chat-heading');
+        const menu=document.getElementById('mobile-session-menu'),transcript=document.getElementById('transcript');
+        const records=document.getElementById('record-list'),composer=document.getElementById('composer');
+        const input=document.getElementById('message-input'),toggle=document.getElementById('composer-options-toggle');
+        const r=records.getBoundingClientRect(),c=composer.getBoundingClientRect(),t=toggle.getBoundingClientRect();
+        const ids=[...document.querySelectorAll('[id]')].map(x=>x.id);
+        return {compact:app.classList.contains('compact-mobile'),headingInRail:heading.parentNode.id==='mobile-chat-heading',
+          oldHeaderHeight:document.querySelector('.chat-title').getBoundingClientRect().height,
+          actionsInMenu:!!menu.querySelector('.chat-actions'),tabsInMenu:!!menu.querySelector('.chat-tabs'),
+          statusInMenu:!!menu.querySelector('.composer-status'),menuHidden:document.getElementById('settings-menu').hidden,
+          reading:r.height,composer:c.height,rail:document.querySelector('.rail').getBoundingClientRect().height,
+          inputHeight:input.getBoundingClientRect().height,inputFont:parseFloat(getComputedStyle(input).fontSize),rows:input.rows,
+          optionsOpen:composer.classList.contains('options-open'),expanded:toggle.getAttribute('aria-expanded'),
+          toggleSize:[t.width,t.height],pickKinds:[...document.querySelectorAll('#composer-picks [data-kind]')].map(x=>x.dataset.kind),
+          transcriptChildren:['empty-state','history-bar','record-list'].every(id=>document.getElementById(id).parentNode===transcript),
+          listSemantics:records.tagName==='OL'&&[...records.children].every(x=>x.tagName==='LI'),
+          recordScroll:getComputedStyle(records).overflowY,transcriptScroll:getComputedStyle(transcript).overflowY,
+          scrollable:records.scrollHeight>records.clientHeight,bodyOverflow:document.documentElement.scrollHeight>innerHeight+1,
+          overflow:document.documentElement.scrollWidth>innerWidth+1,sendRight:document.getElementById('send-button').getBoundingClientRect().right,
+          duplicateIds:ids.filter((id,i)=>ids.indexOf(id)!==i)};
+      })()`);
+      assert.equal(state.compact && state.headingInRail, true, 'phone has one combined navigation/title row at '+width);
+      assert.ok(state.oldHeaderHeight <= 1, 'the old title row must not consume phone reading space');
+      assert.equal(state.actionsInMenu && state.tabsInMenu && state.statusInMenu && state.menuHidden, true,
+        'secondary phone controls are retained in the initially closed session menu');
+      if (width >= 375) assert.ok(state.reading >= 450, 'clean '+width+'x650 phone needs at least 450px of transcript: '+JSON.stringify(state));
+      assert.ok(state.composer <= 118 && state.rail <= 64, 'idle phone chrome must remain compact: '+JSON.stringify(state));
+      assert.ok(state.inputHeight <= 48 && state.inputFont >= 16 && state.rows === 1,
+        'phone input begins as one readable line, without iOS focus zoom');
+      assert.equal(state.optionsOpen, false);
+      assert.equal(state.expanded, 'false');
+      assert.ok(state.toggleSize.every(x=>x>=44), 'collapsed composer options retain a 44px touch target');
+      assert.deepEqual(state.pickKinds, ['model','mode','perm','goal']);
+      assert.equal(state.transcriptChildren && state.listSemantics && state.scrollable, true,
+        'the transcript wrapper preserves record-list and its ordered-list record semantics');
+      assert.match(state.recordScroll, /auto|scroll/);
+      assert.doesNotMatch(state.transcriptScroll, /auto|scroll/, 'the transcript wrapper must not introduce a second content scroller');
+      assert.equal(state.bodyOverflow || state.overflow, false, 'phone reading remains inside both viewport axes');
+      assert.ok(state.sendRight <= width+1);
+      assert.deepEqual(state.duplicateIds, []);
+      const closedComposerHeight=state.composer;
+      for (const kind of ['model','mode','perm','goal']) {
+        await pointerControl(compact, '#composer-options-toggle');
+        state = await compact.eval(`(() => {
+          const composer=document.getElementById('composer'),toggle=document.getElementById('composer-options-toggle');
+          const button=document.querySelector('#composer-picks [data-kind="${kind}"]'),r=button.getBoundingClientRect();
+          return {expanded:toggle.getAttribute('aria-expanded'),open:composer.classList.contains('options-open'),
+            composerHeight:composer.getBoundingClientRect().height,pickSize:[r.width,r.height],
+            popoverPosition:getComputedStyle(document.getElementById('composer-picks')).position};
+        })()`);
+        assert.equal(state.expanded, 'true');
+        assert.equal(state.open, true);
+        assert.match(state.popoverPosition, /absolute|fixed/, 'phone options float over content instead of adding a permanent row');
+        assert.ok(Math.abs(state.composerHeight-closedComposerHeight)<=2, 'opening options must not shrink the transcript');
+        assert.ok(state.pickSize.every(x=>x>=44), kind+' selector remains an accessible touch target');
+        await pointerControl(compact, '#composer-picks [data-kind="'+kind+'"]');
+        await settleLayout(compact);
+        state = await compact.eval(`({dialog:!!document.querySelector('.screen-overlay'),
+          collapsed:!document.getElementById('composer').classList.contains('options-open'),
+          expanded:document.getElementById('composer-options-toggle').getAttribute('aria-expanded'),
+          inert:document.getElementById('app').inert})`);
+        assert.deepEqual(state,{dialog:true,collapsed:true,expanded:'false',inert:true},kind+' opens its existing accessible panel and closes the popover');
+        await escapePanel(compact);
+        assert.equal(await compact.eval(`document.activeElement.id`),'composer-options-toggle',kind+' panel returns focus to its visible collapsed entry point');
+      }
+    }
+    // The controls moved to Settings must be operable through real hit-tested
+    // pointer input, including a scrollable menu on a short phone viewport.
+    await pointerControl(compact, '#files-open');
+    await settleLayout(compact);
+    assert.equal(await compact.eval(`!document.getElementById('files-modal').hidden`),true,'files remain reachable from the phone menu');
+    await pointerControl(compact, '#files-close');
+    await pointerControl(compact, '#composer-balance');
+    await settleLayout(compact);
+    assert.equal(await compact.eval(`!!document.querySelector('.screen-overlay')`),true,'balance remains reachable from the phone menu');
+    await escapePanel(compact);
+    await pointerControl(compact, '#tab-activity');
+    assert.equal(await compact.eval(`document.getElementById('tab-activity').getAttribute('aria-current')`),'page','activity view remains reachable from the phone menu');
+    if (await compact.eval(`!document.getElementById('settings-menu').hidden`)) await pointerControl(compact, '#rail-settings');
+    await settleLayout(compact);
+    state=await compact.eval(`(() => {const button=document.getElementById('mobile-activity-return'),r=button.getBoundingClientRect();
+      const target=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+      return {visible:!button.hidden&&r.width>=44&&r.height>=44,
+        hit:button.contains(target),hitTarget:target&&(target.id||target.className||target.tagName),
+        rect:{x:r.x,y:r.y,width:r.width,height:r.height},
+        conversation:document.getElementById('tab-conversation').getAttribute('aria-current'),
+        activity:document.getElementById('tab-activity').getAttribute('aria-current')};})()`);
+    assert.deepEqual({visible:state.visible,hit:state.hit,conversation:state.conversation,activity:state.activity},
+      {visible:true,hit:true,conversation:'false',activity:'page'},
+      'phone activity has a directly visible, hit-tested return-to-conversation control: '+JSON.stringify(state));
+    await pointerControl(compact, '#mobile-activity-return');
+    state=await compact.eval(`({conversation:document.getElementById('tab-conversation').getAttribute('aria-current'),
+      activity:document.getElementById('tab-activity').getAttribute('aria-current'),
+      returnHidden:document.getElementById('mobile-activity-return').hidden})`);
+    assert.deepEqual(state,{conversation:'page',activity:'false',returnHidden:true},
+      'the actual return button restores conversation view and both tab markers');
+
+    // Loading older content keeps the same visible original record at the same
+    // offset. The floating history action is shown at the top, not in a new row.
+    await compact.eval(`(() => { const list=document.getElementById('record-list'); list.scrollTop=list.scrollHeight;
+      list.dispatchEvent(new Event('scroll')); })()`);
+    await settleLayout(compact);
+    assert.equal(await compact.eval(`(() => {const b=document.getElementById('load-older'),r=b.getBoundingClientRect();
+      return !!r.width&&!!r.height&&getComputedStyle(b).visibility!=='hidden'&&
+        b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));})()`),false,'older-history action does not cover the transcript while reading below the top');
+    await compact.eval(`(() => { const list=document.getElementById('record-list');list.scrollTop=0;list.dispatchEvent(new Event('scroll'));
+      window.__compactFirstNode=document.querySelector('[data-record-id="compact-0"]'); })()`);
+    await settleLayout(compact);
+    const originalRecordTop = await compact.eval(`window.__compactFirstNode.getBoundingClientRect().top`);
+    await pointerControl(compact, '#load-older');
+    await settleLayout(compact);
+    state = await compact.eval(`({sameNode:window.__compactFirstNode===document.querySelector('[data-record-id="compact-0"]'),
+      originalTop:window.__compactFirstNode.getBoundingClientRect().top,scrollTop:document.getElementById('record-list').scrollTop,
+      older:!!document.querySelector('[data-record-id="compact-old-0"]'),historyHidden:document.getElementById('history-bar').hidden})`);
+    assert.equal(state.sameNode && state.older && state.historyHidden,true,'older loading preserves record nodes and removes the exhausted action');
+    assert.ok(state.scrollTop>0 && Math.abs(state.originalTop-originalRecordTop)<=2,'prepending older messages preserves the reading anchor: '+JSON.stringify({beforeTop:originalRecordTop,...state}));
+
+    // A reduced viewport approximates the room left by a keyboard. It is a
+    // layout regression case, not a claim that a real mobile keyboard was used.
+    for (const height of [650,400]) {
+      await compact.send('Emulation.setDeviceMetricsOverride', {width:390,height,deviceScaleFactor:1,mobile:true});
+      await settleLayout(compact);
+      const initialInputHeight=await compact.eval(`document.getElementById('message-input').getBoundingClientRect().height`);
+      await pointerControl(compact, '#message-input');
+      await compact.send('Input.insertText',{text:Array.from({length:18},(_,i)=>'Long draft line '+i).join('\n')});
+      await settleLayout(compact);
+      state = await compact.eval(`(() => {const input=document.getElementById('message-input'),composer=document.getElementById('composer');
+        const list=document.getElementById('record-list'),send=document.getElementById('send-button').getBoundingClientRect();
+        list.scrollTop=0;list.dispatchEvent(new Event('scroll'));
+        return {inputHeight:input.getBoundingClientRect().height,inputScroll:input.scrollHeight>input.clientHeight,
+          inputFont:parseFloat(getComputedStyle(input).fontSize),sendBottom:send.bottom,sendRight:send.right,
+          reading:list.getBoundingClientRect().height,composerBottom:composer.getBoundingClientRect().bottom,
+          overflow:document.documentElement.scrollWidth>innerWidth+1,bodyOverflow:document.documentElement.scrollHeight>innerHeight+1};})()`);
+      assert.ok(state.inputHeight>initialInputHeight+12 && state.inputHeight<=118 && state.inputScroll,
+        'long draft grows to a bounded textarea with its own draft scroll at height '+height+': '+JSON.stringify(state));
+      assert.ok(state.inputFont>=16 && state.sendBottom<=height+1 && state.composerBottom<=height+1 && state.sendRight<=391,
+        'draft and sending remain usable in the reduced viewport');
+      assert.equal(state.overflow || state.bodyOverflow,false,'long draft does not create page scrolling');
+      await settleLayout(compact);
+      state = await compact.eval(`(() => {const jump=document.querySelector('.jump-bottom'),list=document.getElementById('record-list');
+        const j=jump.getBoundingClientRect(),c=document.getElementById('composer').getBoundingClientRect();
+        return {reading:list.getBoundingClientRect().height,visible:!jump.hidden&&j.width>0&&j.height>0,
+          hiddenDock:!!jump.closest('#settings-menu'),
+          overlaps:!(j.right<=c.left||j.left>=c.right||j.bottom<=c.top||j.top>=c.bottom)};})()`);
+      assert.equal(state.hiddenDock || state.overlaps,false,'jump-to-bottom never docks in hidden menu tabs or covers the composer');
+      assert.equal(state.visible,true,'jump-to-bottom remains visible when reading away from the end');
+      await compact.eval(`(() => {const input=document.getElementById('message-input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await settleLayout(compact);
+      assert.ok(await compact.eval(`document.getElementById('message-input').getBoundingClientRect().height`)<=initialInputHeight+2,'clearing a long draft returns to one compact line');
+    }
+
+    await compact.send('Emulation.setDeviceMetricsOverride', {width:390,height:650,deviceScaleFactor:1,mobile:true});
+    await compact.eval(`window.__fake.onEvent({type:'session-status',sessionId:'s1',running:true});window.__compactStopNode=document.getElementById('stop-session')`);
+    await settleLayout(compact);
+    state=await compact.eval(`(() => {const stop=document.getElementById('stop-session'),r=stop.getBoundingClientRect();return {
+      parent:stop.parentNode.id,visible:!stop.hidden&&r.width>=44&&r.height>=44,
+      hit:stop.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};})()`);
+    assert.deepEqual(state,{parent:'composer-bottom',visible:true,hit:true},'running stop stays directly visible outside the closed phone menu');
+    // Keep Activity selected while crossing the breakpoint: desktop must hide
+    // its phone-only return affordance even though Activity is still current.
+    await pointerControl(compact, '#tab-activity');
+    if (await compact.eval(`!document.getElementById('settings-menu').hidden`)) await pointerControl(compact, '#rail-settings');
+    for (const width of [1024,390,1024]) {
+      await compact.send('Emulation.setDeviceMetricsOverride', {width,height:650,deviceScaleFactor:1,mobile:width<=700});
+      await settleLayout(compact);
+      state=await compact.eval(`(() => {const ids=[...document.querySelectorAll('[id]')].map(x=>x.id),mobile=innerWidth<=700;
+        const heading=document.querySelector('.chat-heading'),actions=document.querySelector('.chat-actions'),tabs=document.querySelector('.chat-tabs');
+        const status=document.querySelector('.composer-status'),stop=document.getElementById('stop-session');
+        const activityReturn=document.getElementById('mobile-activity-return'),returnBox=activityReturn.getBoundingClientRect();
+        return {mobile,compact:document.getElementById('app').classList.contains('compact-mobile'),
+          headingRestored:!!heading.closest('.chat-title'),actionsRestored:!!actions.closest('.chat-title'),tabsParent:tabs.parentNode.id,
+          statusParent:status.parentNode.id,stopParent:stop.parentNode.id,stopInActions:stop.parentNode===actions,
+          sameStop:stop===window.__compactStopNode,activity:document.getElementById('tab-activity').getAttribute('aria-current'),
+          activityReturnVisible:!activityReturn.hidden&&returnBox.width>0&&returnBox.height>0,
+          duplicates:ids.filter((id,i)=>ids.indexOf(id)!==i)};})()`);
+      assert.equal(state.compact,state.mobile);
+      assert.equal(state.sameStop,true,'responsive moves preserve the existing running control and its listeners');
+      assert.equal(state.activity,'page','resizing preserves the selected activity tab');
+      assert.equal(state.activityReturnVisible,state.mobile,'the activity return affordance is visible only on phones');
+      assert.deepEqual(state.duplicates,[],'resizing never clones IDs or leaves duplicate controls');
+      if (width>700) {
+        assert.equal(state.headingRestored && state.actionsRestored && state.stopInActions,true,'desktop restores title/actions/stop to their original parents');
+        assert.equal(state.tabsParent,'chat');
+        assert.equal(state.statusParent,'composer');
+      } else assert.equal(state.stopParent,'composer-bottom');
+    }
+    await compact.eval(`window.__fake.onEvent({type:'session-status',sessionId:'s1',running:false})`);
+    assert.equal(await compact.eval(`document.getElementById('stop-session').hidden`),true,'confirmed idle still hides stop after responsive moves');
+    assert.equal(compact.exceptions.length,0);
+    compact.close();
+    // Browser.session.close() releases its CDP socket, not the target tab.
+    // Restore the original fixture to the foreground so its existing RAF-based
+    // stream checks do not accidentally test a background-tab throttle.
+    await page.send('Page.bringToFront');
+    await settleLayout(page);
+    console.log('DSH compact phone layout checks passed (650px reading / collapsed controls / activity return / 400px viewport approximation / draft growth / history anchors / desktop restoration)');
+
+    // ── E3：保留会话加密状态标记（手机收纳于会话菜单） ─────────────────────────
     // 没有密钥时使用者只看到"发送键变灰"，不知道原因其实是地址缺了 #k=。
     await page.eval(`document.querySelector('#session-list button')?.click()`);
     await new Promise(resolve => setTimeout(resolve, 60));
@@ -413,7 +649,7 @@ async function run() {
       const chip = document.getElementById('crypto-chip');
       return { hidden: chip.hidden, state: chip.dataset.state, text: chip.textContent };
     })()`);
-    assert.equal(state.hidden, false, '加密状态标记应当是常驻的');
+    assert.equal(state.hidden, false, '加密状态标记仍应保留供会话菜单查看');
     assert.equal(state.state, 'off', '测试页没有密钥，应当显示"缺密钥"');
     assert.match(state.text, /缺密钥/);
     await page.eval(`document.getElementById('crypto-chip').click()`);
@@ -428,12 +664,12 @@ async function run() {
 
     // ── J：压缩上下文走 commands/execute，不是把 /compact 当消息发出去 ────────
     //
-    // The composer retains the four session-specific selectors. Compact
-    // remains inside the goal panel, and app/address actions live in Settings.
+    // The composer retains the four selectors behind its phone options entry.
+    // Compact stays inside the goal panel; app/address actions live in Settings.
     state = await page.eval(`([...document.querySelectorAll('.composer-pick[data-kind]')].map(b => b.textContent))`);
     assert.equal(state.some(x => x.indexOf('压缩上下文') >= 0), false,
       '压缩上下文不该占据输入区下沿：' + state.join('|'));
-    assert.ok(state.some(x => x === '目标'), '输入区下沿应当有目标入口');
+    assert.ok(state.some(x => x === '目标'), '对话选项中仍应保留目标入口');
     const composerInfo = await page.eval(`(() => {
       const picks = document.querySelectorAll('#composer-picks');
       const settings = document.getElementById('settings-menu');
@@ -846,8 +1082,10 @@ async function run() {
     // 使用者截图里满屏 `**` 和 `|---|---|` —— 回复原来是被当**纯文本**塞进 textContent 的，
     // 手机上几乎读不下去。
     await page.eval(`(() => {
-      const lines = ['**粗体** 和 \`行内代码\`', '', '| 列A | 列B |', '|---|---|', '| 1 | 2 |',
-        '', '\`\`\`', 'code line', '\`\`\`', '',
+      const lines = ['**粗体** 和 \`行内代码\`', '', 'Second paragraph stays close to the first.', '',
+        '- First compact item.', '- Second compact item.', '- Third compact item.', '',
+        '| 列A | 列B |', '|---|---|', '| 1 | 2 |',
+        '', '\`\`\`', 'code line 1', '  indented line 2', '\`\`\`', '',
         '<img src=x onerror=window.__xss=1>'];
       window.__fake.onEvent({ type: 'record', sessionId: 's1',
         record: { id: 'md-1', role: 'assistant', text: lines.join('\\n') } });
@@ -860,6 +1098,13 @@ async function run() {
       if (!row) return null;
       const md = row.querySelector('.record-markdown');
       if (!md) return { hasMd: false };
+      const paragraphs=[...md.querySelectorAll(':scope > p')];
+      const paragraphBoxes=paragraphs.slice(0,2).map(x=>x.getBoundingClientRect());
+      const list=md.querySelector('ul'),items=[...list.querySelectorAll('li')];
+      const itemBoxes=items.map(x=>x.getBoundingClientRect());
+      const code=md.querySelector('pre.md-code code'),codeRange=document.createRange();
+      codeRange.selectNodeContents(code);
+      const codeLineTops=[...new Set([...codeRange.getClientRects()].filter(x=>x.width>0).map(x=>Math.round(x.top*100)/100))];
       return { hasMd: true,
         strong: md.querySelectorAll('strong').length,
         inlineCode: md.querySelectorAll('code').length,
@@ -870,6 +1115,13 @@ async function run() {
         images: md.querySelectorAll('img').length,
         scriptish: md.innerHTML.indexOf('onerror') >= 0,
         rawStars: md.textContent.indexOf('**'),
+        paragraphGap:paragraphBoxes[1].top-paragraphBoxes[0].bottom,
+        lineHeight:parseFloat(getComputedStyle(md).lineHeight),
+        listItems:items.length,listHeight:list.getBoundingClientRect().height,
+        itemHeights:itemBoxes.map(x=>x.height),
+        itemGaps:itemBoxes.slice(1).map((x,i)=>x.top-itemBoxes[i].bottom),
+        codeText:code.textContent,codeLineTops,
+        codeLineHeight:parseFloat(getComputedStyle(code).lineHeight),
         xss: window.__xss === 1 };
     })()`);
     assert.ok(state && state.hasMd, '助手消息应当用 markdown 容器渲染');
@@ -880,10 +1132,20 @@ async function run() {
     assert.equal(state.th, 2);
     assert.equal(state.tds, 2);
     assert.equal(state.rawStars, -1, '星号不能再裸露在正文里');
+    assert.ok(state.paragraphGap>=-0.5 && state.paragraphGap<state.lineHeight,
+      'normal Markdown blank lines must not turn into extra rendered empty lines between paragraphs: '+JSON.stringify(state));
+    assert.equal(state.listItems,3);
+    assert.ok(state.itemGaps.every(gap=>gap>=-0.5&&gap<state.lineHeight/2) &&
+      state.itemHeights.every(height=>height<=state.lineHeight+1) && state.listHeight<state.lineHeight*4,
+      'single-newline Markdown bullets retain compact adjacent list items: '+JSON.stringify(state));
+    assert.equal(state.codeText,'code line 1\n  indented line 2','fenced code preserves newlines and indentation');
+    assert.equal(state.codeLineTops.length,2,'the two preserved code lines must also render on two visible lines');
+    assert.ok(state.codeLineTops[1]-state.codeLineTops[0]>=state.codeLineHeight*0.8,
+      'code line breaks remain visible after normalizing Markdown block whitespace');
     // ★ 安全：渲染顺序是"先转义、再套规则"，所以标签只能是文字
     assert.equal(state.images, 0, 'XSS：回复里的 <img> 绝不能被真的创建');
     assert.equal(state.xss, false, 'XSS：onerror 绝不能被执行');
-    console.log('DSH mobile shell markdown checks passed (bold / code / table / links / XSS-safe)');
+    console.log('DSH mobile shell markdown checks passed (paragraph/list geometry / code line preservation / bold / table / links / XSS-safe)');
 
     // ── C11：重新打开时应该**接着看刚才那段对话** ─────────────────────────────
     //
@@ -984,29 +1246,7 @@ async function run() {
       throw new Error('draft refresh fixture did not reach expected state: ' + expression);
     }
     async function draftPointer(selector) {
-      if ((/^#(?:project|session)-list/.test(selector) || selector === '#reconnect') &&
-          await draftRefresh.eval(`document.body.classList.contains('sidebar-hidden')`)) {
-        await draftPointer('#projects-toggle');
-      }
-      let point;
-      for (let attempt = 0; attempt < 12; attempt++) {
-        try {
-          point = await draftRefresh.eval(`(() => {
-            const node=document.querySelector(${JSON.stringify(selector)});
-            node.scrollIntoView({block:'nearest'});
-            const r=node.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-            if (!r.width || !r.height || x<0 || x>innerWidth || y<0 || y>innerHeight ||
-                !node.contains(document.elementFromPoint(x,y))) throw Error('Draft fixture control is not visible');
-            return {x,y};
-          })()`);
-          break;
-        } catch (error) {
-          if (attempt === 11) throw error;
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-      }
-      await draftRefresh.send('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
-      await draftRefresh.send('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
+      await pointerControl(draftRefresh, selector);
     }
     async function setRefreshDraft(text) {
       if (!await draftRefresh.eval(`document.body.classList.contains('sidebar-hidden')`)) await draftPointer('#sidebar-close');
@@ -1570,7 +1810,7 @@ async function run() {
     await new Promise(resolve => setTimeout(resolve, 70));
     assert.equal(await usability.eval(`document.querySelector('.composer-pick[data-kind="model"]').textContent`), 'm1',
       '输入区应显示真正的下轮模型');
-    await usability.eval(`document.querySelector('.composer-pick[data-kind="mode"]').click()`);
+    await pointerControl(usability, '.composer-pick[data-kind="mode"]');
     await new Promise(resolve => setTimeout(resolve, 50));
     state = await usability.eval(`(() => { const dialog=document.querySelector('.screen-overlay');
       const rows=[...dialog.querySelectorAll('.pick-row')];
@@ -1587,8 +1827,8 @@ async function run() {
     assert.equal(state.locked, true, '已开始的对话不能给出注定失败的工具配置选项');
     await usability.eval(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
     state = await usability.eval(`({open:!!document.querySelector('.screen-overlay'),
-      focus:document.activeElement.dataset.kind,inert:document.getElementById('app').inert})`);
-    assert.deepEqual(state, {open:false,focus:'mode',inert:false}, 'Escape 应关闭面板并把焦点还给原按钮');
+      focus:document.activeElement.id,inert:document.getElementById('app').inert})`);
+    assert.deepEqual(state, {open:false,focus:'composer-options-toggle',inert:false}, 'Escape 应关闭面板并把焦点还给可见的对话选项入口');
     await usability.eval(`document.querySelector('.composer-pick[data-kind="model"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(await usability.eval(`document.querySelector('.pick-row').getAttribute('aria-selected')`), 'true',
@@ -1605,18 +1845,16 @@ async function run() {
         modelSelection:{provider:'group-a',model:'deepseek-flash'},lastUsedModel:null,blank:false});
       document.querySelector('#session-list button').click(); })()`);
     await new Promise(resolve => setTimeout(resolve, 60));
+    await pointerControl(usability, '#composer-options-toggle');
     state = await usability.eval(`({upload:document.getElementById('upload-button').getBoundingClientRect().height,
       send:document.getElementById('send-button').getBoundingClientRect().height,
       voice:document.querySelector('.voice-button').getBoundingClientRect().height,
        goalRight:document.querySelector('.composer-pick[data-kind="goal"]').getBoundingClientRect().right,
        goalBottom:document.querySelector('.composer-pick[data-kind="goal"]').getBoundingClientRect().bottom,
-       sendTop:document.getElementById('send-button').getBoundingClientRect().top,
-       sendLeft:document.getElementById('send-button').getBoundingClientRect().left,
        reachable:(()=>{const node=document.querySelector('.composer-pick[data-kind="goal"]'),r=node.getBoundingClientRect();return r.width>=44&&r.height>=44&&r.right<=innerWidth&&node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()})`);
     assert.ok(state.upload >= 44 && state.send >= 44 && state.voice >= 44,
       '手机上的上传、发送、语音按钮应有足够大的触控区域');
-    assert.ok(state.reachable && (state.goalRight <= state.sendLeft + 1 || state.goalBottom <= state.sendTop + 1),
-      '模型名称变长后，目标入口仍须在手机宽度内直接点到');
+    assert.ok(state.reachable, '模型名称变长后，展开选项中的目标仍须在手机宽度内可点到');
     usability.close();
 
     const planPage = await browser.newPage();
@@ -1736,17 +1974,7 @@ async function run() {
     await merged.goto('http://127.0.0.1:' + server.address().port + '/dsh-lite.html',300);
     await waitForSessionList(merged);
     async function pointer(selector) {
-      if (await merged.eval(`!!document.querySelector(${JSON.stringify(selector)})?.closest('#settings-menu[hidden]')`)) {
-        await pointer('#rail-settings');
-      }
-      if (/^#(?:project|session)-list/.test(selector)) await openSidebar();
-      let point;
-      for (let attempt=0;attempt<12;attempt++) {
-        try { point = await merged.eval(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!r.width||!r.height||x<0||x>innerWidth||y<0||y>innerHeight||!node.contains(document.elementFromPoint(x,y)))throw Error('Fixture control is not visible: '+${JSON.stringify(selector)});return{x,y};})()`); break; }
-        catch(error) { if(attempt===11)throw error; await new Promise(resolve=>setTimeout(resolve,50)); }
-      }
-      await merged.send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
-      await merged.send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+      await pointerControl(merged, selector);
     }
     async function inputText(text) {
       await pointer('#message-input');
