@@ -1,39 +1,66 @@
-# Release notes - 1.0.0-preview.17
+# Release notes - 1.0.0-preview.18
 
-Start DSH from the desktop console through a strict local control request,
-without requiring a phone authentication cookie. The request verifies the
-loopback source and exact Host, Origin, protocol and gateway port.
+Give conversations more room on phones. The title and connection indicator now
+share one top row. Session actions and activity controls are available in the
+labelled menu. Model, tool, permission and goal choices open from the composer's
+conversation-settings button, which shows the current model.
 
-HTTP failures and malformed responses now produce a clear failure message
-instead of a JSON parsing error. Repeated requests share one in-flight start,
-preventing duplicate DSH launches while startup is pending.
+The resting composer is smaller, long drafts scroll inside a bounded input,
+and layout follows the available visual viewport. The older-history control
+appears at the beginning of the transcript while pagination preserves the
+reading position. Wider desktop layouts retain their original controls and
+state.
 
-To close DSH, exit it from the DSH application. Pausing Pocket Bridge stops
-phone access through that gateway; it does not close the DSH application.
+The largest Lite script is preloaded from its existing URL. Public assets use
+Brotli quality 5 to reduce first-miss server compression work; gzip remains at
+level 6. In a controlled offline run of the real cache on the same 12 public
+files, cold compression fell from about 1,200 ms to 43 ms, while compressed size
+increased from 160,143 to 179,248 bytes. This is a server measurement, not a
+guaranteed phone or tunnel load time.
+
+Source validation, encoding-specific ETags, cache limits, code fingerprints,
+explicit verified updates and authenticated encrypted content remain in place.
+Ten fixed public scripts can now be served from the phone's verified cache,
+with their bytes, current pin and access-key epoch checked again before use.
+There is no per-script background revalidation. Navigation, authentication,
+APIs, the emergency updater and fresh manifest checks stay online. Key rotation
+and explicit update commits invalidate stale cache decisions. First visits,
+new origins and missing cache entries still need a download.
+
+An early hide or reload also preserves a pending conversation choice until its
+first list can be checked. Switching projects invalidates that pending choice;
+missing conversations are not retained indefinitely.
+
+No private messages or files are added to the public asset cache. The DSH
+version gates and supported protocols are unchanged.
 
 ## Validation scope
 
-Forty-four isolated checks exercised the actual router and console functions:
-strict source rejection, one in-flight dispatch, polling-safe buttons and clear
-localized response failures. Seven adjacent regression suites also passed.
+The full isolated layout fixture covers compact and short viewports, long
+drafts, focus, menus, settings, history anchoring and restoration of the desktop
+layout. The public cache's 27 checks, 27 worker-cache and trust-context checks,
+nine actual-function selection checks and the related fingerprint/update
+suites passed.
 
-On Windows with the official native DSH 0.2.1-rc.2 host stopped, an actual
-desktop Edge console click sent one local Start request. The button stayed
-disabled while startup was pending. After about 32 seconds, the request returned
-`dsh-start-complete`; the native application and its local backend were running,
-and the console displayed the ready state and application-exit guidance.
+On the real Quick HTTPS entrance in desktop Edge at 390 by 650 pixels, the
+transcript grew from 188 to 492 pixels and the composer shrank from 239 to 105
+pixels. The measured largest-script request fell from 3,515 to 23 ms and
+DOMContentLoaded from 4,593 to 1,653 ms. First conversation content took 9,400 ms,
+versus 8,751 ms before: these single runs do **not** establish an overall loading
+improvement. Separate read-only live diagnostics measured fresh Windows process
+inventory at about 3–3.7 seconds, while upstream authentication took under 5 ms.
+That local startup bottleneck remains; version detection and authentication
+have not been weakened to conceal it.
 
-After that cold start, the existing Cloudflare Quick HTTPS entrance was opened
-in Edge at a phone viewport. Its connection had reached the retry limit during
-the deliberate shutdown; clicking Retry restored the encrypted connection and
-existing history. A newly submitted synthetic prompt received the requested
-`PB17_COLD_START_OK` reply from the Flash model.
+The real browser operated the conversation settings, files and activity views,
+returned to the conversation, stopped a task and received the requested reply
+from the next synthetic prompt. Another real reply verified paragraphs, lists
+and a two-line code block. These were desktop-browser phone viewports, not
+physical iPhone/Android or cellular tests. Full observations and limits are
+recorded in [Preview.18 acceptance](docs/PREVIEW18-ACCEPTANCE.md).
 
-The [Preview.16 acceptance record](docs/PREVIEW16-ACCEPTANCE.md),
-[compatibility matrix](docs/DSH-COMPATIBILITY.md) and
-[manual acceptance record](docs/MANUAL-ACCEPTANCE.md) retain their original
-versions and observations. They are historical evidence, not a new Preview.17
-run. Preview.17's focused operations used a desktop Edge browser, including a
-phone viewport, not a physical iPhone, Android handset or cellular network.
-One current native host and Quick Tunnel run do not establish universal model,
-network or cross-version compatibility. Existing releases are retained.
+The [Preview.17 startup record](docs/PREVIEW17-ACCEPTANCE.md) and broader
+[Preview.16 acceptance](docs/PREVIEW16-ACCEPTANCE.md) remain historical results;
+they do not imply every old host was retested with this release. Existing
+releases and installers are retained. Personal notification scripts and
+account settings are not included.

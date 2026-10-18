@@ -9,6 +9,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Pocket Bridge">
+  <link rel="preload" href="/dsh-lite-ui.js" as="script" fetchpriority="high">
   <link rel="stylesheet" href="/dsh-lite.css">
   <script src="/i18n.js" defer></script>
   <!-- 轻量版自己的三套文案（中文 / English / Español），在 i18n.js 之后注册。 -->
@@ -37,6 +38,7 @@
       <button id="projects-toggle" class="rail-button" type="button" aria-label="项目与对话" title="项目与对话" data-i18n-aria="项目与对话" data-i18n-title="项目与对话" aria-controls="sidebar" aria-expanded="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
       </button>
+      <div id="mobile-chat-heading" class="mobile-chat-heading"><span id="mobile-connection" class="mobile-connection" role="img"></span></div>
       <button id="rail-new-session" class="rail-button" type="button" aria-label="新建对话" title="新建对话" data-i18n-aria="新建对话" data-i18n-title="新建对话" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-8-8"/><path d="M5.5 18.5 4 21l4-1.2M17 3v8M13 7h8"/></svg>
       </button>
@@ -46,6 +48,7 @@
       </button>
       <div id="settings-menu" class="settings-menu" hidden>
         <strong>Pocket Bridge · DSH</strong>
+        <div id="mobile-session-menu" class="mobile-session-menu"></div>
         <button id="rail-new-project" type="button" data-i18n="添加项目" disabled>添加项目</button>
         <button id="rail-search" type="button" data-i18n="搜索项目和对话" aria-pressed="false">搜索项目和对话</button>
         <button id="rail-activity" type="button" data-i18n="查看轨迹">查看轨迹</button>
@@ -71,9 +74,12 @@
         <div id="error-banner" class="error-banner" role="alert" hidden><span id="error-text"></span><button id="error-retry" type="button" data-i18n="重试">重试</button></div>
         <header class="chat-title"><div class="chat-heading"><h1 id="session-title">选择一个对话</h1><span id="project-name"></span></div><div class="chat-actions"><button id="crypto-chip" class="crypto-chip" type="button" hidden></button><button id="files-open" class="classic-link" type="button" data-i18n="文件" disabled>文件</button><button id="stop-session" class="stop-button" type="button" hidden>停止</button><a id="classic-view" class="classic-link" hidden title="打开原版界面" data-i18n="原版界面" data-i18n-title="打开原版界面">原版界面</a></div></header>
         <nav class="chat-tabs" aria-label="对话视图" data-i18n-aria="对话视图"><button id="tab-conversation" class="chat-tab" type="button" data-i18n="对话" aria-current="page">对话</button><button id="tab-activity" class="chat-tab" type="button" data-i18n="轨迹">轨迹</button></nav>
-        <div id="empty-state" class="empty-state">选择项目和对话，或新建对话。</div>
-        <div id="history-bar" class="history-bar" hidden><button id="load-older" type="button">加载更早内容</button></div>
-        <ol id="record-list" class="record-list" aria-live="polite" aria-relevant="additions text"></ol>
+        <button id="mobile-activity-return" class="mobile-activity-return" type="button" data-i18n="轨迹 · 返回对话" hidden>轨迹 · 返回对话</button>
+        <div id="transcript" class="transcript">
+          <div id="empty-state" class="empty-state">选择项目和对话，或新建对话。</div>
+          <div id="history-bar" class="history-bar" hidden><button id="load-older" type="button">加载更早内容</button></div>
+          <ol id="record-list" class="record-list" aria-live="polite" aria-relevant="additions text"></ol>
+        </div>
         <section id="interaction-list" class="interactions" aria-label="待处理请求" data-i18n-aria="待处理请求" aria-live="polite"></section>
         <p id="interaction-note" class="interaction-note" data-i18n="当前连接尚不能在手机端处理 DSH 的授权、选择或询问。遇到这类步骤，请在电脑端完成；对话内容仍可在此查看。" hidden>当前连接尚不能在手机端处理 DSH 的授权、选择或询问。遇到这类步骤，请在电脑端完成；对话内容仍可在此查看。</p>
         <!-- C26 目标条：**照电脑端的 GoalBar 做** —— 图标 + 阶段 + 单行截断的目标正文，
@@ -94,6 +100,7 @@
             <div id="composer-bottom" class="composer-bottom">
               <input id="upload-input" class="sr-only" type="file" multiple>
               <button id="upload-button" class="upload-button" type="button" aria-label="上传文件" title="上传文件" data-i18n-aria="上传文件" data-i18n-title="上传文件" disabled>＋</button>
+              <button id="composer-options-toggle" class="composer-options-toggle" type="button" aria-label="对话设置" data-i18n-aria="对话设置" aria-controls="composer-picks" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><span id="composer-options-label" data-i18n="对话设置">对话设置</span></button>
               <div id="composer-picks" class="composer-picks" aria-label="模型、工具配置和目标" data-i18n-aria="模型、工具配置和目标"></div>
               <button id="send-button" class="send-button" type="submit" aria-label="发送" data-i18n-aria="发送" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 11 7-7 7 7M12 4v16"/></svg></button>
             </div>

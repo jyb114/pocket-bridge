@@ -565,6 +565,9 @@
       empty: $('empty-state'), records: $('record-list'), interactions: $('interaction-list'),
       interactionNote: $('interaction-note'),
       chat: $('chat'), composer: $('composer'), composerPicks: $('composer-picks'),
+      transcript: $('transcript'), mobileHeading: $('mobile-chat-heading'), mobileConnection: $('mobile-connection'),
+      mobileActivityReturn: $('mobile-activity-return'),
+      mobileSessionMenu: $('mobile-session-menu'), composerOptions: $('composer-options-toggle'), composerOptionsLabel: $('composer-options-label'),
       composerConnection: $('composer-connection'), composerBalance: $('composer-balance'),
       input: $('message-input'), send: $('send-button'),
       upload: $('upload-button'), uploadInput: $('upload-input'), attachmentList: $('attachment-list'),
@@ -687,6 +690,41 @@
       refs.settingsMenu.hidden = true;
       refs.railSettings.setAttribute('aria-expanded', 'false');
     }
+    function closeComposerOptions(restoreFocus) {
+      if (!refs.composerOptions) return;
+      refs.composer.classList.remove('options-open');
+      refs.composerOptions.setAttribute('aria-expanded', 'false');
+      if (restoreFocus && refs.composerOptions.getClientRects().length) refs.composerOptions.focus();
+    }
+    var inputMeasuredValue = null, inputMeasuredWidth = -1;
+    function resizeComposerInput() {
+      if (!app.classList.contains('compact-mobile')) {
+        if (refs.input.dataset.autoHeight) { refs.input.style.height = ''; delete refs.input.dataset.autoHeight; }
+        inputMeasuredValue = null; return;
+      }
+      var width = refs.input.clientWidth;
+      if (inputMeasuredValue === refs.input.value && inputMeasuredWidth === width && refs.input.dataset.autoHeight) return;
+      refs.input.style.height = '0px';
+      refs.input.style.height = Math.min(116, Math.max(38, refs.input.scrollHeight)) + 'px';
+      refs.input.dataset.autoHeight = 'true';
+      inputMeasuredValue = refs.input.value; inputMeasuredWidth = width;
+    }
+    function syncHistoryScroll(commitHistoryPadding) {
+      if (!refs.transcript) return;
+      var oldHeight = refs.records.scrollHeight, oldTop = refs.records.scrollTop;
+      var nearBottom = oldHeight - oldTop - refs.records.clientHeight < 100;
+      var more = !refs.historyBar.hidden;
+      // The last older-page response updates hasMore before its records are
+      // prepended. Remove the old top inset only after that prepend restores
+      // the reading anchor; otherwise scrollTop=0 cannot absorb the -52px.
+      if (!more && refs.transcript.dataset.hasHistory === 'true' &&
+          commitHistoryPadding !== true && state.records.length) more = true;
+      var changed = refs.transcript.dataset.hasHistory !== String(more);
+      refs.transcript.dataset.hasHistory = String(more);
+      if (changed && state.records.length) refs.records.scrollTop = nearBottom ? refs.records.scrollHeight :
+        Math.max(0, oldTop + refs.records.scrollHeight - oldHeight);
+      refs.transcript.classList.toggle('is-at-history-start', refs.records.scrollTop < 32);
+    }
     // 离开页面之前把当前选中的项目和对话存下来。
     //
     // 为什么放在这里而不是每个赋值点各插一句：赋值点有好几处（新建项目、
@@ -697,7 +735,10 @@
     // 两个都注册，因为 iOS Safari 上不保证哪一个一定触发。
     function persistSelection() {
       remember('project', state.projectId);
-      remember('session', state.sessionId);
+      // A hide/reload can happen before the first authoritative list arrives.
+      // Keep that pending choice instead of erasing it with the empty loading
+      // state. Project switches below invalidate a choice from the old project.
+      remember('session', state.sessionId || (state.projectId ? state.restoreSession : ''));
     }
     // 启动时先把「上次那段对话」记在一边，等项目列表回来再恢复（见 reloadProjects）。
     scheduleSessionRestore();
@@ -866,6 +907,7 @@
     function setStatus(value) {
       if (state.connection !== value) { backupConnectionEpoch++; invalidateSendReview(); }
       state.connection = value;
+      app.dataset.connection = value;
       // 状态**文案**单独记一份。为什么不复用 `state.connection`：
       // 它会被别处（比如适配器重连）改动，而"连接断开"那行字是使用者最后看到的事实。
       // 换语言时照这份重画，才不会把界面上的状态改回一个更旧的值。
@@ -885,6 +927,7 @@
       else if (state.statusText) refs.status.textContent = t(state.statusText);
     }
     function renderControls() {
+      resizeComposerInput();
       var ready = state.connection === 'connected';
       refs.newProject.disabled = !ready || state.creating || typeof adapter.createProject !== 'function';
       refs.newSession.disabled = !ready || !state.projectId || state.loadingProjects || state.loadingSessions ||
@@ -921,6 +964,7 @@
       refs.historyBar.hidden = !state.sessionId || !state.hasMore || typeof adapter.loadOlder !== 'function';
       refs.loadOlder.disabled = !ready || state.loadingOlder;
       refs.loadOlder.textContent = state.loadingOlder ? t('正在加载…') : t('加载更早内容');
+      syncHistoryScroll();
     }
     function currentProject() { return state.projects.find(function (p) { return safeId(p.id) === state.projectId; }); }
     function currentSession() { return state.sessions.find(function (s) { return safeId(s.id) === state.sessionId; }); }
@@ -1069,11 +1113,14 @@
       return state.records.filter(recordIsVisible);
     }
     function setTab(tab) {
+      closeSettingsMenu(); closeComposerOptions();
       state.tab = tab === 'activity' ? 'activity' : 'conversation';
       refs.tabConversation.setAttribute('aria-current', state.tab === 'conversation' ? 'page' : 'false');
       refs.tabActivity.setAttribute('aria-current', state.tab === 'activity' ? 'page' : 'false');
       refs.railActivity.setAttribute('aria-pressed', String(state.tab === 'activity'));
+      if (refs.mobileActivityReturn) refs.mobileActivityReturn.hidden = state.tab !== 'activity';
       renderRecords();
+      renderTitle();
     }
     function renderEmpty() {
       if (visibleRecords().length) { refs.empty.hidden = true; return; }
@@ -1140,7 +1187,7 @@
           // 助手和用户的话走 markdown 渲染（`**粗体**`、代码块、表格、列表…）。
           // 思考过程和工具调用**保持纯文本** —— 工具参数常常是 JSON，
           // 套 markdown 只会把它打乱。
-          var body = el('p', 'record-text record-markdown');
+          var body = el('div', 'record-text record-markdown');
           body.innerHTML = markdownToHtml(recordText);
           item.append(body);
         }
@@ -1323,6 +1370,7 @@
         else if (nearBottom) refs.records.scrollTop = refs.records.scrollHeight;
         else refs.records.scrollTop = oldTop;
       }
+      syncHistoryScroll(true);
     }
     function upsertRecord(record) {
       if (!record) return;
@@ -2088,6 +2136,7 @@
       // replace a just-created conversation with yesterday's saved one.
       if (switchingProjects) {
         state.sessionId = '';
+        state.restoreSession = '';
         // A same-document remount does not fire pagehide. Persist the choice
         // now, so a delayed component reload cannot restore the old project.
         remember('project', state.projectId);
@@ -2883,7 +2932,8 @@
         if (screenOverlay === box) screenOverlay = null;
         if (app && !document.querySelector('.screen-overlay')) app.inert = false;
         if (restoreFocus !== false) {
-          var target = opener && opener.isConnected && !opener.closest('[hidden]') ? opener : refs.railSettings;
+          var target = opener && opener.isConnected && !opener.closest('[hidden]') && opener.getClientRects().length ? opener :
+            opener && opener.closest('#composer-picks') && refs.composerOptions && refs.composerOptions.getClientRects().length ? refs.composerOptions : refs.railSettings;
           if (target && typeof target.focus === 'function') target.focus();
         }
       };
@@ -3035,6 +3085,7 @@
     // 挂在设置菜单里（菜单本身已经在 HTML 里，只是往里加按钮，不动结构）。
     function overlay(title, build, openerOverride) {
       closeSettingsMenu();
+      closeComposerOptions();
       // 同时开两个面板没有意义，只会互相盖住 —— 先把已有的收掉。
       // （实测踩过：连点两次「计划/目标」会叠两层，里层点不到；
       //   而且"最后一个面板"和"第一个面板"不是同一个，排查时很误导。）
@@ -4065,7 +4116,7 @@
         button.type = 'button';
         button.dataset.kind = pair[0];
         button.setAttribute('aria-label', t(pair[2]));
-        button.addEventListener('click', pair[3]);
+        button.addEventListener('click', function () { closeComposerOptions(); pair[3](); });
         holder.append(button);
       });
       composerPicksRelabel = function () {
@@ -4086,6 +4137,11 @@
           }
         });
         if (refs.composerBalance) refs.composerBalance.title = t('看余额');
+        if (refs.composerOptionsLabel) {
+          var chosen = state.selection.modelSelection || state.selection.lastUsedModel;
+          refs.composerOptionsLabel.textContent = chosen && chosen.model || t('对话设置');
+          refs.composerOptions.setAttribute('aria-label', t('对话设置') + (chosen && chosen.model ? '：' + chosen.model : ''));
+        }
       };
       composerPicksRelabel();
     })();
@@ -4287,10 +4343,15 @@
       var readiness = encryptionReadiness();
       node.hidden = false;
       node.dataset.state = readiness === 'on' ? 'on' : readiness === 'pending' ? 'pending' : 'off';
+      app.dataset.crypto = node.dataset.state;
       var title = readiness === 'on' ? t('已加密') : readiness === 'missing' ? t('缺密钥') :
         readiness === 'pending' ? t('加密待验证') : t('加密未就绪');
       node.textContent = (readiness === 'on' ? '🔒 ' : readiness === 'pending' ? '◷ ' : '⚠️ ') + title;
       node.setAttribute('aria-label', title);
+      if (refs.mobileConnection) {
+        refs.mobileConnection.setAttribute('aria-label', t(state.statusText || '正在连接') + ' · ' + title);
+        refs.mobileConnection.title = t(state.statusText || '正在连接') + ' · ' + title;
+      }
       if (backupRecovery) backupRecovery.update();
     }
     function explainCrypto() {
@@ -4602,6 +4663,88 @@
     }
     renderQueue();
 
+    // Keep one live instance of each control across mobile/desktop layouts.
+    // Moving nodes preserves their handlers, running state and permission UI.
+    (function installCompactLayout() {
+      if (!refs.mobileHeading || !refs.mobileSessionMenu || !refs.composerOptions) return;
+      var heading = refs.chat.querySelector('.chat-heading');
+      var actions = refs.chat.querySelector('.chat-actions');
+      var tabs = refs.tabConversation.parentNode;
+      var footer = refs.composer.querySelector('.composer-status');
+      var bottom = $('composer-bottom');
+      var rows = refs.input.rows, mobile = null, viewportFrame = null;
+      var moved = [heading, actions, tabs, footer, refs.stop].map(function (node) {
+        var anchor = document.createComment('responsive control position');
+        node.parentNode.insertBefore(anchor, node);
+        return { node: node, anchor: anchor };
+      });
+      function restore() {
+        moved.forEach(function (entry) { entry.anchor.parentNode.insertBefore(entry.node, entry.anchor.nextSibling); });
+      }
+      function viewport() {
+        viewportFrame = null;
+        var vv = window.visualViewport;
+        if (!mobile || !vv || vv.scale !== 1 || !Number.isFinite(vv.height) || vv.height < 120) return;
+        app.style.setProperty('--pb-viewport-height', Math.round(vv.height) + 'px');
+        app.style.setProperty('--pb-viewport-top', Math.max(0, Math.round(vv.offsetTop)) + 'px');
+      }
+      function scheduleViewport() {
+        if (viewportFrame === null) viewportFrame = requestAnimationFrame(viewport);
+      }
+      function apply() {
+        var next = window.matchMedia ? window.matchMedia('(max-width: 700px)').matches : window.innerWidth <= 700;
+        if (mobile !== next) {
+          var top = refs.records.scrollTop;
+          var pinned = refs.records.scrollHeight - top - refs.records.clientHeight < 100;
+          closeComposerOptions(); closeSettingsMenu();
+          mobile = next;
+          app.classList.toggle('compact-mobile', mobile);
+          document.body.classList.toggle('dsh-compact-mobile', mobile);
+          if (mobile) {
+            refs.mobileHeading.append(heading);
+            refs.mobileSessionMenu.append(actions, tabs, footer);
+            bottom.insertBefore(refs.stop, refs.send);
+            refs.input.rows = 1;
+          } else {
+            restore(); refs.input.rows = rows;
+            app.style.removeProperty('--pb-viewport-height'); app.style.removeProperty('--pb-viewport-top');
+          }
+          resizeComposerInput(); syncHistoryScroll();
+          refs.records.scrollTop = pinned ? refs.records.scrollHeight : top;
+        }
+        viewport(); resizeComposerInput();
+      }
+      listen(refs.composerOptions, 'click', function () {
+        var opening = !refs.composer.classList.contains('options-open');
+        closeSettingsMenu();
+        refs.composer.classList.toggle('options-open', opening);
+        refs.composerOptions.setAttribute('aria-expanded', String(opening));
+        if (opening) {
+          var first = refs.composerPicks.querySelector('button:not([disabled])');
+          if (first) first.focus();
+        }
+      });
+      listen(document, 'click', function (event) {
+        if (!refs.composerOptions.contains(event.target) && !refs.composerPicks.contains(event.target)) closeComposerOptions();
+        if (!refs.railSettings.contains(event.target) && !refs.settingsMenu.contains(event.target)) closeSettingsMenu();
+      });
+      listen(refs.records, 'scroll', syncHistoryScroll);
+      listen(window, 'resize', apply);
+      if (window.visualViewport) {
+        listen(window.visualViewport, 'resize', scheduleViewport);
+        listen(window.visualViewport, 'scroll', scheduleViewport);
+      }
+      mountCleanups.push(function () {
+        if (viewportFrame !== null) cancelAnimationFrame(viewportFrame);
+        restore(); moved.forEach(function (entry) { entry.anchor.remove(); });
+        closeComposerOptions(); refs.input.rows = rows;
+        refs.input.style.height = ''; delete refs.input.dataset.autoHeight;
+        app.classList.remove('compact-mobile'); document.body.classList.remove('dsh-compact-mobile');
+        app.style.removeProperty('--pb-viewport-height'); app.style.removeProperty('--pb-viewport-top');
+      });
+      apply();
+    })();
+
     // ── 一键滑到最下 ──────────────────────────────────────────────────────────
     //
     // 对话一长，往回翻之后就没有回去的路了：手机上的滚动条又细又难拖，
@@ -4625,9 +4768,10 @@
         var chatBox = refs.chat.getBoundingClientRect();
         var listBox = list.getBoundingClientRect();
         var docked = !!tabs && listBox.height < 176;
+        var dock = app.classList.contains('compact-mobile') && refs.mobileHeading ? refs.mobileHeading : tabs;
         jump.classList.toggle('is-docked', docked);
         if (tabs) tabs.classList.toggle('has-docked-jump', docked && !jump.hidden);
-        var parent = docked ? tabs : refs.chat;
+        var parent = docked ? dock : refs.chat;
         if (jump.parentNode !== parent) parent.append(jump);
         jump.style.bottom = docked ? '' : Math.max(12, Math.round(chatBox.bottom - listBox.bottom + 12)) + 'px';
       }
@@ -4662,6 +4806,7 @@
     });
     listen(refs.search, 'input', function () { renderProjects(); renderSessions(); });
     listen(refs.railSettings, 'click', function () {
+      closeComposerOptions();
       refs.settingsMenu.hidden = !refs.settingsMenu.hidden;
       refs.railSettings.setAttribute('aria-expanded', String(!refs.settingsMenu.hidden));
     });
@@ -4682,6 +4827,7 @@
     listen(refs.browseFolder, 'click', function () { loadDirectory(refs.projectPath.value.trim()); });
     listen(refs.filesOpen, 'click', function () {
       if (refs.filesOpen.disabled) return;
+      closeSettingsMenu(); closeComposerOptions();
       var project = currentProject();
       refs.filesProject.textContent = project ? label(project.name, '项目') : '当前项目';
       refs.filesModal.hidden = false;
@@ -4718,6 +4864,7 @@
     });
     listen(refs.tabConversation, 'click', function () { setTab('conversation'); });
     listen(refs.tabActivity, 'click', function () { setTab('activity'); });
+    listen(refs.mobileActivityReturn, 'click', function () { setTab('conversation'); });
     listen(refs.loadOlder, 'click', loadOlder);
     listen(refs.stop, 'click', stopSession);
     listen(refs.composer, 'submit', send);
@@ -4742,6 +4889,7 @@
         if (top.__liteClose) top.__liteClose();
       } else if (!refs.modal.hidden) refs.modal.hidden = true;
       else if (!refs.filesModal.hidden) { refs.filesModal.hidden = true; state.filesLoad++; }
+      else if (refs.composer.classList.contains('options-open')) closeComposerOptions(true);
       else if (!refs.settingsMenu.hidden) {
         refs.settingsMenu.hidden = true;
         refs.railSettings.setAttribute('aria-expanded', 'false');

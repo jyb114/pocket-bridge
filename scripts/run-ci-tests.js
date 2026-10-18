@@ -60,6 +60,8 @@ const SUITE = [
   ['test-e2ee-request-base.js', [], '手机入口的 fetch/XHR 遵循文档 base URI 且维持加密作用域'],
   ['test-dsh-auth-recovery.js', [], '隧道登录 cookie 丢失时原样保留 403 并显示重新配对入口（假 DOM）'],
   ['test-sw-static-cache.js', [], 'DSH 静态模块的版本边界、缓存命中与失败重试（假 Service Worker）'],
+  ['test-sw-pinned-cache.js', [], 'Verified fixed public Lite JavaScript cache reuse, pin/epoch rotation and delayed update races (isolated Service Worker fixtures; no live DSH)'],
+  ['test-dsh-lite-selection-persistence.js', [], 'Pending conversation selection survives hide/reload while project switches and confirmed missing sessions clear it (real UI functions with isolated state/storage)'],
   ['test-e2ee-order.js', [], '加密消息维持授权与已解决事件的收发顺序（延迟 WebCrypto 夹具）'],
   ['test-missing-targets.js', [], '缺少 DSH 时显示可操作提示，旧选择与独立运行服务仍可用（假目标与假连接）'],
   ['test-first-run.js', [], '隔离目录验证首次安装生成密钥、DSH 可选与升级保留'],

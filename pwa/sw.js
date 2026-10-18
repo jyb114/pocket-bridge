@@ -27,6 +27,29 @@ const LITE_PIN_REQUIRED = ['/e2ee.js', '/i18n.js', '/dsh-lite-lang.js',
   '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js',
   '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js', '/dsh-lite-switch.js'];
 const PIN_HASH = /^[a-f0-9]{64}$/i;
+// Only fixed public code may use the code-body cache. In particular, a stored
+// pin must never make HTML, API/authentication responses or an unknown URL
+// eligible for this cache. The emergency updater intentionally stays online.
+const PUBLIC_CODE_PATHS = new Set(['/polyfill.js', '/compat.js', '/dsh-directory-picker.js',
+  '/e2ee.js', '/i18n.js', '/voice.js', '/route.js', '/boot.js', '/dsh-lite-pin.js',
+  '/dsh-lite-adapter.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js', '/dsh-backup-prepare.js',
+  '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-lang.js', '/first-load.js', '/prove.js']);
+const LITE_CACHE_FIRST_PATHS = new Set(['/e2ee.js', '/i18n.js', '/dsh-lite-lang.js', '/voice.js',
+  '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js', '/dsh-lite-router.js',
+  '/dsh-backup-prepare.js', '/dsh-lite-ui.js']);
+let codeStateRevision = 0;
+let codeStateMutations = 0;
+let codeStateWrites = Promise.resolve();
+
+function mutateCodeState(action) {
+  // Invalidate readers before the first asynchronous storage operation, even
+  // when this mutation is queued behind a previous epoch/pin write.
+  const revision = ++codeStateRevision;
+  codeStateMutations++;
+  const operation = codeStateWrites.then(() => action(revision));
+  codeStateWrites = operation.catch(() => {});
+  return operation.finally(() => { codeStateMutations--; codeStateRevision++; });
+}
 
 function isCacheableDshStaticModule(url) {
   const pathname = url.pathname;
@@ -63,11 +86,46 @@ async function readPin() {
   } catch (err) { return null; }
 }
 
-async function writePin(manifest) {
-  const c = await caches.open(PIN_CACHE);
-  await c.put(PIN_KEY, new Response(JSON.stringify(manifest), {
-    headers: { 'content-type': 'application/json' }
-  }));
+async function writePin(manifest, expected) {
+  if (expected && (codeStateMutations || codeStateRevision !== expected.revision))
+    throw new Error('code trust changed before pin commit');
+  return mutateCodeState(async (revision) => {
+    if (expected) {
+      const current = await readStoredCodeState();
+      if (codeStateRevision !== revision || current.signature !== expected.signature || current.epoch !== expected.epoch)
+        throw new Error('code trust changed before pin commit');
+    }
+    const c = await caches.open(PIN_CACHE);
+    await c.put(PIN_KEY, new Response(JSON.stringify(manifest), {
+      headers: { 'content-type': 'application/json' }
+    }));
+  });
+}
+
+async function readStoredCodeState() {
+  const pins = await caches.open(PIN_CACHE);
+  const savedPin = await pins.match(PIN_KEY);
+  const pin = savedPin ? await savedPin.json() : null;
+  const epochs = await caches.open(KEY_EPOCH_CACHE);
+  const savedEpoch = await epochs.match(KEY_EPOCH_KEY);
+  const epoch = savedEpoch ? await savedEpoch.text() : '';
+  return { pin, epoch, signature: JSON.stringify(pin) };
+}
+
+async function readCodeState() {
+  const revision = codeStateRevision;
+  if (codeStateMutations) return null;
+  try {
+    const stored = await readStoredCodeState();
+    if (codeStateMutations || codeStateRevision !== revision) return null;
+    return Object.assign(stored, { revision });
+  } catch (_) { return null; }
+}
+
+function sameCodeState(before, after) {
+  return !!(before && after && !codeStateMutations &&
+    codeStateRevision === after.revision && before.revision === after.revision &&
+    before.epoch === after.epoch && before.signature === after.signature);
 }
 
 async function sha256Hex(buf) {
@@ -95,7 +153,11 @@ async function readCachedBody(url, hash) {
     // One-time migration for verified bodies left by the previous worker.
     // Never trust the path-only entry without hashing it against this pin.
     const legacy = await c.match(url);
-    if (!legacy || await sha256Hex(await legacy.clone().arrayBuffer()) !== hash) return null;
+    if (!legacy) return null;
+    if (await sha256Hex(await legacy.clone().arrayBuffer()) !== hash) {
+      await c.delete(url);
+      return null;
+    }
     await c.put(key, legacy.clone());
     return legacy;
   } catch (err) { return null; }
@@ -121,7 +183,7 @@ async function stageVerifiedPin(manifest) {
   const staged = [];
   for (const path of paths) {
     const hash = files[path];
-    if (!/^\/[a-z0-9][a-z0-9-]*\.js$/i.test(path) || !PIN_HASH.test(hash || ''))
+    if (!PUBLIC_CODE_PATHS.has(path) || !PIN_HASH.test(hash || ''))
       throw new Error('code manifest contains an invalid script');
     // A worker's own fetch bypasses its fetch event. Avoid the browser HTTP
     // cache so the bytes we hash are the same release the gateway now serves.
@@ -163,14 +225,17 @@ async function clearCachedBodies() {
 async function acceptAccessKeyEpoch(response) {
   const epoch = response && response.headers && response.headers.get('x-dsh-access-key-epoch');
   if (!epoch) return;
-  const oldPin = await readPin();
-  const oldEpoch = oldPin && oldPin.accessKeyEpoch;
-  if (oldPin && oldEpoch !== epoch) {
-    await caches.delete(PIN_CACHE);
-    await clearCachedBodies();
-  }
-  const c = await caches.open(KEY_EPOCH_CACHE);
-  await c.put(KEY_EPOCH_KEY, new Response(epoch, { headers: { 'content-type': 'text/plain' } }));
+  return mutateCodeState(async () => {
+    const stored = await readStoredCodeState();
+    const oldPin = stored.pin;
+    const c = await caches.open(KEY_EPOCH_CACHE);
+    const oldEpoch = stored.epoch || oldPin && oldPin.accessKeyEpoch;
+    if (oldPin && oldEpoch !== epoch) {
+      await caches.delete(PIN_CACHE);
+      await clearCachedBodies();
+    }
+    await c.put(KEY_EPOCH_KEY, new Response(epoch, { headers: { 'content-type': 'text/plain' } }));
+  });
 }
 
 // ── 拦截：pin 过的文件要核对指纹 ────────────────────────────────────────────
@@ -231,9 +296,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  if (!PUBLIC_CODE_PATHS.has(url.pathname)) {
+    // Keep navigation, authentication, API reads and the emergency updater
+    // independent of code-cache availability or an in-progress pin mutation.
+    event.respondWith((async () => {
+      const response = await fetch(event.request);
+      await acceptAccessKeyEpoch(response);
+      return response;
+    })());
+    return;
+  }
+
   event.respondWith((async () => {
-    const pin = await readPin();
-    const want = pin && pin.files && pin.files[url.pathname];
+    // Retry a bounded number of reads when another event changes the epoch or
+    // pin during Cache Storage/SHA awaits. Never return a body from that stale
+    // trust context, and never start per-script background revalidation.
+    for (let attempt = 0; attempt < 3; attempt++) {
+    const state = await readCodeState();
+    if (!state) continue;
+    const candidate = state.pin && state.pin.files && state.pin.files[url.pathname];
+    const want = PUBLIC_CODE_PATHS.has(url.pathname) && PIN_HASH.test(candidate || '') ? candidate : null;
 
     // 没 pin 过的文件，原样走网络 —— 不能因为没 pin 就把人挡在外面。
     // /k/<new-key> 也在这一支：即便它不是被 pin 的脚本，也必须先看到
@@ -241,7 +323,15 @@ self.addEventListener('fetch', (event) => {
     if (!want) {
       const response = await fetch(event.request);
       await acceptAccessKeyEpoch(response);
+      if (!sameCodeState(state, await readCodeState())) continue;
       return response;
+    }
+
+    if (!url.search && LITE_CACHE_FIRST_PATHS.has(url.pathname)) {
+      const cached = await readCachedBody(url.pathname, want);
+      const current = await readCodeState();
+      if (!sameCodeState(state, current)) continue;
+      if (cached) return cached;
     }
 
     let res;
@@ -250,20 +340,25 @@ self.addEventListener('fetch', (event) => {
     } catch (err) {
       // 网络不通就用缓存 —— 顺带让「在外面断网」也能用
       const cached = await readCachedBody(url.pathname, want);
+      if (!sameCodeState(state, await readCodeState())) continue;
       if (cached) return cached;
       throw err;
     }
     await acceptAccessKeyEpoch(res);
+    if (!sameCodeState(state, await readCodeState())) continue;
     if (!res.ok) {
       const cached = await readCachedBody(url.pathname, want);
+      if (!sameCodeState(state, await readCodeState())) continue;
       return cached || res;
     }
 
     const body = await res.clone().arrayBuffer();
     const got = await sha256Hex(body);
+    if (!sameCodeState(state, await readCodeState())) continue;
 
     if (got === want) {
       await writeCachedBody(url.pathname, want, body);     // 指纹对，更新缓存
+      if (!sameCodeState(state, await readCodeState())) continue;
       return res;
     }
 
@@ -291,9 +386,11 @@ self.addEventListener('fetch', (event) => {
     };
 
     const cached = await readCachedBody(url.pathname, want);
+    if (!sameCodeState(state, await readCodeState())) continue;
     if (cached) {
       console.warn('[DSH] 代码指纹对不上，改用缓存版本：' + url.pathname);
       await notify();
+      if (!sameCodeState(state, await readCodeState())) continue;
       return cached;
     }
 
@@ -304,6 +401,7 @@ self.addEventListener('fetch', (event) => {
     // 「有人在改发给你的代码」的手段。
     console.error('[DSH] 代码指纹对不上且没有缓存，拒绝执行：' + url.pathname);
     await notify();
+    if (!sameCodeState(state, await readCodeState())) continue;
     const P = JSON.stringify(url.pathname);
     return new Response(
       '(function(){try{' +
@@ -323,6 +421,9 @@ self.addEventListener('fetch', (event) => {
       'document.body.appendChild(d);' +
       '}catch(e){console.error("[DSH] 篡改提示渲染失败",e);}})();',
       { headers: { 'content-type': 'application/javascript; charset=utf-8' } });
+    }
+    return new Response('throw new Error("Code trust changed while loading. Refresh to retry.");',
+      { status: 503, headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' } });
   })());
 });
 
@@ -405,7 +506,9 @@ self.addEventListener('message', (event) => {
   // 否则「掉包代码 + 顺便改掉 pin」就绕过去了，等于没做。
   if (data.type === 'dsh-pin-code' && data.manifest && data.manifest.files) {
     event.waitUntil((async () => {
-      const existing = await readPin();
+      const before = await readCodeState();
+      if (!before) return;
+      const existing = before.pin;
       if (existing) {
         event.source && event.source.postMessage({
           type: 'dsh-pin-result', ok: true, already: true,
@@ -413,7 +516,7 @@ self.addEventListener('message', (event) => {
         });
         return;
       }
-      await writePin(data.manifest);
+      await writePin(data.manifest, before);
       event.source && event.source.postMessage({
         type: 'dsh-pin-result', ok: true, already: false,
         files: Object.keys(data.manifest.files).length
@@ -437,16 +540,17 @@ self.addEventListener('message', (event) => {
   if ((data.type === 'dsh-repin-code' || data.type === 'dsh-repin-code-verified') &&
       data.manifest && data.manifest.files) {
     event.waitUntil((async () => {
-      const before = await readPin();
+      const before = await readCodeState();
       const resultType = data.type === 'dsh-repin-code-verified' ?
         'dsh-repin-verified-result' : 'dsh-repin-result';
       try {
+        if (!before) throw new Error('code trust is changing');
         await stageVerifiedPin(data.manifest);
-        await writePin(data.manifest);
+        await writePin(data.manifest, before);
         event.source && event.source.postMessage({
           type: resultType, requestId: data.requestId, ok: true,
-          wasPinned: !!before,
-          before: before ? Object.keys(before.files || {}).length : 0,
+          wasPinned: !!before.pin,
+          before: before.pin ? Object.keys(before.pin.files || {}).length : 0,
           files: Object.keys(data.manifest.files).length
         });
       } catch (err) {

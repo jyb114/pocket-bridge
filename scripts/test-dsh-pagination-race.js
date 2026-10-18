@@ -109,6 +109,11 @@ async function fixture() {
     'renderProjects', 'clearDownloadUrls', 'saveCurrentDraft', 'restoreDraft',
     'resetSessionExtras', 'refreshQueue', 'refreshGoal', 'refreshSelection', 'closeSettingsMenu'
   ]) ui[name] = noop;
+  // Keep actual renderControls() and its loading/disabled state transitions.
+  // Its new composer sizing/history-padding hooks only measure or position
+  // browser DOM; geometry belongs to test-dsh-lite-ui.js, not this race fixture.
+  ui.resizeComposerInput = noop;
+  ui.syncHistoryScroll = noop;
   ui.setStatus = value => { state.connection = value; ui.renderControls(); };
   ui.clearError = () => { ui.lastError = ''; refs.error.hidden = true; };
   ui.showError = (error, fallback) => {

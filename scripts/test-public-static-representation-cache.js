@@ -17,7 +17,9 @@ function check(name, action) { action(); checks++; console.log('PASS ' + name); 
 function write(name, body) { fs.writeFileSync(path.join(root, name), body); }
 function codec() {
   const calls = { br: 0, gzip: 0 };
-  return { calls, brotliCompressSync(body) { calls.br++; return zlib.brotliCompressSync(body); },
+  const brotliOptions = [];
+  return { calls, brotliOptions, brotliCompressSync(body, options) {
+    calls.br++; brotliOptions.push(options); return zlib.brotliCompressSync(body, options); },
     gzipSync(body, options) { calls.gzip++; return zlib.gzipSync(body, options); } };
 }
 function io(overrides = {}) {
@@ -36,12 +38,21 @@ try {
   const br = cache.read('public.js', 'br');
   const gzip = cache.read('public.js', 'gzip');
   const identity = cache.read('public.js', null);
+  check('cold public Brotli compression explicitly uses bounded quality 5, not the slow runtime default', () => {
+    assert.deepEqual(counted.brotliOptions, [{ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }]);
+    assert.equal(Object.isFrozen(counted.brotliOptions[0]), true);
+    assert.equal(Object.isFrozen(counted.brotliOptions[0].params), true);
+  });
   check('current compression bytes and representation ETags remain exact', () => {
-    assert.deepEqual(br.body, zlib.brotliCompressSync(source));
+    assert.deepEqual(br.body, zlib.brotliCompressSync(source, {
+      params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 }
+    }));
     assert.deepEqual(gzip.body, zlib.gzipSync(source, { level: 6 }));
     for (const value of [br, gzip, identity])
       assert.equal(value.etag, '"' + crypto.createHash('sha256').update(value.body).digest('hex') + '"');
     assert.deepEqual(zlib.brotliDecompressSync(br.body), source);
+    assert.equal(crypto.createHash('sha256').update(zlib.brotliDecompressSync(br.body)).digest('hex'),
+      crypto.createHash('sha256').update(source).digest('hex'), 'code pins still cover the identical decoded source');
     assert.deepEqual(zlib.gunzipSync(gzip.body), source);
     assert.equal(new Set([br.etag, gzip.etag, identity.etag]).size, 3);
   });
@@ -140,7 +151,7 @@ try {
   check('a source change during compression is refused before serving or caching', () => {
     write('during-codec.js', source);
     const guarded = createPublicStaticRepresentationCache({ root, files: ['during-codec.js'], zlib: {
-      brotliCompressSync(body) { const output = zlib.brotliCompressSync(body);
+      brotliCompressSync(body, options) { const output = zlib.brotliCompressSync(body, options);
         write('during-codec.js', 'changed during compression'); return output; } } });
     assert.throws(() => guarded.read('during-codec.js', 'br'), /changed before serving/);
     assert.equal(guarded.stats().entries, 0);
@@ -195,7 +206,7 @@ try {
   check('compression failure falls back to current identity bytes, not old compressed bytes', () => {
     write('codec.js', source); let fail = false;
     const guarded = createPublicStaticRepresentationCache({ root, files: ['codec.js'], zlib: {
-      brotliCompressSync(body) { if (fail) throw Error('codec failure'); return zlib.brotliCompressSync(body); } } });
+      brotliCompressSync(body, options) { if (fail) throw Error('codec failure'); return zlib.brotliCompressSync(body, options); } } });
     guarded.read('codec.js', 'br'); fail = true; const changed = Buffer.from('updated codec source'.repeat(90)); write('codec.js', changed);
     const value = guarded.read('codec.js', 'br'); assert.equal(value.encoding, null); assert.deepEqual(value.body, changed);
   });

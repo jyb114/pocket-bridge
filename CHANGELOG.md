@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-preview.18 - More room for mobile conversations
+
+- Combine the phone's conversation heading and connection indicator into one navigation row. Keep session actions and activity controls in the labelled menu, and expose model, tool, permission and goal choices through an expandable composer control. Move the existing controls rather than duplicating their state; restore their desktop positions at wider widths.
+- Keep the resting composer compact, bound long drafts with internal scrolling, and adapt the phone layout to the available visual viewport. Show the older-history control at the beginning of the transcript while preserving the reading position after a page is added.
+- Preload the largest Lite script using its existing URL. Retain deferred execution order, code fingerprints, explicit updates and all authentication and encryption checks.
+- Reuse ten fixed public Lite scripts only after checking their stored code fingerprint, rehashing the cached body and rechecking the current pin and access-key epoch. Keep navigation, authentication, APIs, the emergency updater and manifest reads online. Do not revalidate every cached script in the background. Fence cache reads and update commits against concurrent key rotation or pin replacement.
+- Preserve a pending conversation choice if the page is hidden or reloaded before its first list arrives. Clear that pending choice when switching projects, and still discard a missing conversation after list validation.
+- Use Brotli quality 5 for public asset compression, retaining gzip level 6, source validation, exact representation ETags and cache bounds. In a controlled offline run of the actual cache on the same 12 public files, cold compression fell from about 1,200 ms to 43 ms; compressed bytes increased from 160,143 to 179,248. This measures server work, not a guaranteed phone or tunnel loading time. Private content is not added to this cache.
+- Operate the real Quick HTTPS route in desktop Edge at a 390-by-650 phone viewport: the transcript grew from 188 to 492 pixels and the composer shrank from 239 to 105 pixels. The measured largest-script request fell from 3,515 to 23 ms and DOMContentLoaded from 4,593 to 1,653 ms, but first conversation content took 9,400 ms versus 8,751 ms before; overall loading did not improve in these single observations. Fresh local process inventory remains a measured 3–3.7-second bottleneck. Keep these observations, the 27 worker-cache checks, nine selection-persistence checks and historical runtime coverage separate in [Preview.18 acceptance](docs/PREVIEW18-ACCEPTANCE.md). No new old-version or physical-phone compatibility claim is made.
+
 ## 1.0.0-preview.17 - Reliable local DSH startup
 
 - Fix the desktop console's Start DSH action by sending it through strict local controls with exact Host, Origin, protocol and port checks, without requiring a phone authentication cookie.

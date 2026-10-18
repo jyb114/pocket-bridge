@@ -21,6 +21,8 @@
   if (!global.DshI18n || typeof global.DshI18n.register !== 'function') return;
 
   global.DshI18n.register({
+    "对话设置": {"en": "Conversation settings", "es": "Ajustes de conversación"},
+    "轨迹 · 返回对话": {"en": "Activity · Back to conversation", "es": "Actividad · Volver a la conversación"},
     "连接已变化。这里只处理旧请求的收件状态，当前草稿不会被清除。请勿重复发送已接收的旧指令。": {"en": "The connection changed. Only the old receipt is being reviewed; your current draft is kept. Do not resend an old instruction that was already received.", "es": "La conexión cambió. Solo se revisa la recepción anterior y se conserva tu borrador. No reenvíes una instrucción anterior ya recibida."},
     "确认旧连接已接收，保留草稿": {"en": "Confirm the old receipt and keep the draft", "es": "Confirmar la recepción anterior y conservar el borrador"},
     "这是新的相同提问，保留草稿": {"en": "This is a new identical question; keep the draft", "es": "Es una nueva pregunta idéntica; conservar el borrador"},
