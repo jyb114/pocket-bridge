@@ -52,6 +52,20 @@ function accepted(input) {
   return { statusCode: 200, body: JSON.stringify({ rpcId: wire.rpcId, result: { ok: true, value: { accepted: true } } }) };
 }
 async function check(name, test) { await test(); checks++; console.log('PASS ' + name); }
+function waitForOwnedMarker(name, timeout = 4000) {
+  const deadline = Date.now() + timeout;
+  while (!fs.existsSync(name)) {
+    if (Date.now() >= deadline) throw Error('Owned test barrier timed out');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+}
+async function waitForOwnedMarkerAsync(name) {
+  const deadline = Date.now() + 4000;
+  while (!fs.existsSync(name)) {
+    assert.ok(Date.now() < deadline, 'owned partial-write child reached its barrier');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 
 async function run() {
   await check('prepare is private and durable before dispatch; no plaintext or secret is stored', () => {
@@ -209,15 +223,15 @@ async function run() {
     assert.equal((await invoke(handler, 'bridge/prompt-state', { sessionId: r.sessionId, action: 'list' }, { decrypted: false })).status, 403);
     assert.equal(calls, 0); assert.equal(fs.existsSync(f.directory), false);
   });
-  await check('two actual owned Node processes reading the same empty journal receive only one session admission', async () => {
+  await check('two actual owned Node processes with stale empty snapshots receive one complete session admission', async () => {
     const directory = path.join(owned, 'cross-process'); fs.mkdirSync(directory, { recursive: true });
     const execute = promisify(execFile);
     const results = await Promise.all([1, 2].map(actor => execute(process.execPath,
       [__filename, '--admission-race-child', directory, String(actor)],
       { windowsHide: true, shell: false, timeout: 8000, maxBuffer: 16384 })));
     const values = results.map(value => JSON.parse(value.stdout));
-    assert.equal(values.filter(value => value.dispatched).length, 1);
-    assert.equal(values.filter(value => value.error === 'prompt-recovery-required').length, 1);
+    assert.equal(values.filter(value => value.dispatched).length, 1, JSON.stringify(values));
+    assert.equal(values.filter(value => value.error === 'prompt-recovery-required').length, 1, JSON.stringify(values));
     const journal = createDshPromptState({ directory: path.join(directory, 'journal') });
     const operations = journal.state(ctx, { sessionId: 'owned-session', action: 'list' }).operations;
     assert.equal(operations.length, 1); assert.equal(operations[0].state, 'uncertain');
@@ -232,6 +246,41 @@ async function run() {
       readFileSync(...args) { reads++; return fs.readFileSync(...args); }
     }) });
     afterRace.prepare(ctx, request()); assert.ok(reads < 30, 'one cancelled race loser must not force a full normal-history scan: ' + reads);
+  });
+  await check('a real second Node fails closed on an open unwritten intent and leaves no orphan after publication', async () => {
+    const directory = path.join(owned, 'partial-intent'); fs.mkdirSync(directory);
+    const execute = promisify(execFile), release = path.join(directory, 'release-writer');
+    const writer = execute(process.execPath, [__filename, '--partial-intent-child', directory, 'writer'],
+      { windowsHide: true, shell: false, timeout: 15000, maxBuffer: 16384 });
+    // Observe the first child after exclusive creation but before JSON is
+    // written. The second child must see the real partial file, not a mock.
+    let writerValue;
+    try {
+      await waitForOwnedMarkerAsync(path.join(directory, 'intent-open'));
+      const result = await execute(process.execPath, [__filename, '--partial-intent-child', directory, 'reader'],
+        { windowsHide: true, shell: false, timeout: 8000, maxBuffer: 16384 });
+      const reader = JSON.parse(result.stdout);
+      assert.deepEqual({ dispatched: reader.dispatched, error: reader.error },
+        { dispatched: false, error: 'prompt-state-storage-unavailable' });
+    } finally {
+      fs.writeFileSync(release, 'release', { flag: 'wx' });
+      writerValue = JSON.parse((await writer).stdout);
+    }
+    assert.equal(writerValue.dispatched, true);
+    const journal = createDshPromptState({ directory: path.join(directory, 'journal') });
+    const operations = journal.state(ctx, { sessionId: 'owned-session', action: 'list' }).operations;
+    assert.equal(operations.length, 1, 'reader never creates a second intent or an orphan');
+    assert.equal(operations[0].requestId, writerValue.requestId);
+    assert.equal(operations[0].state, 'uncertain');
+    const original = { ...request(), requestId: writerValue.requestId };
+    assert.equal(journal.begin(ctx, original).dispatch, false, 'published identity cannot dispatch twice');
+    journal.state(ctx, { ...original, action: 'review-uncertain', confirm: true });
+    for (let i = 0; i < 50; i++) {
+      const next = request(); journal.prepare(ctx, next); assert.equal(journal.begin(ctx, next).dispatch, true);
+      journal.accepted(ctx, next); journal.state(ctx, { ...next, action: 'acknowledge' });
+    }
+    assert.equal(journal.state(ctx, { sessionId: 'owned-session', action: 'list' }).operations.length, 0);
+    assert.equal(journal.begin(ctx, original).dispatch, false);
   });
   await check('ordinary v2 send does not read every reviewed history receipt', () => {
     const f = fixture();
@@ -277,13 +326,40 @@ function raceChild() {
         if (Date.now() >= deadline) throw Error('Owned test barrier timed out');
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
       }
+      // Both processes retain their genuinely empty snapshot. Delay only the
+      // losing CAS attempt until the winning records are fully published;
+      // partial publication is a distinct fail-closed case below.
+      if (actor === 2) waitForOwnedMarker(path.join(directory, 'winner-published'));
     }
     return result;
   } });
+  const journal = createDshPromptState({ directory: path.join(directory, 'journal'), fileSystem: io });
+  const r = request();
+  try {
+    journal.prepare(ctx, r); const dispatched = journal.begin(ctx, r).dispatch;
+    if (actor === 1) fs.writeFileSync(path.join(directory, 'winner-published'), 'complete', { flag: 'wx' });
+    console.log(JSON.stringify({ requestId: r.requestId, dispatched }));
+  }
+  catch (error) { console.log(JSON.stringify({ requestId: r.requestId, dispatched: false, error: error.code })); }
+}
+function partialIntentChild() {
+  const directory = path.resolve(process.argv[3]), role = process.argv[4];
+  assert.ok(['writer', 'reader'].includes(role));
+  let paused = false;
+  const io = role === 'writer' ? patchFileSystem({ openSync(name, ...args) {
+    const fd = fs.openSync(name, ...args);
+    if (!paused && name.endsWith('.intent.json') && args[0] === 'wx') {
+      paused = true;
+      fs.writeFileSync(path.join(directory, 'intent-open'), 'open', { flag: 'wx' });
+      waitForOwnedMarker(path.join(directory, 'release-writer'), 10000);
+    }
+    return fd;
+  } }) : fs;
   const journal = createDshPromptState({ directory: path.join(directory, 'journal'), fileSystem: io });
   const r = request();
   try { journal.prepare(ctx, r); console.log(JSON.stringify({ requestId: r.requestId, dispatched: journal.begin(ctx, r).dispatch })); }
   catch (error) { console.log(JSON.stringify({ requestId: r.requestId, dispatched: false, error: error.code })); }
 }
 if (process.argv[2] === '--admission-race-child') raceChild();
+else if (process.argv[2] === '--partial-intent-child') partialIntentChild();
 else run().catch(error => { console.error(error); process.exitCode = 1; });
