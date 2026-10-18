@@ -17,9 +17,32 @@ const TICKET = /^bp1_[A-Za-z0-9_-]{43}$/;
 const PREPARATION = /^bprep1_[A-Za-z0-9_-]{43}$/;
 const RECEIPT = /^bpr1_[A-Za-z0-9_-]{43}$/;
 const CHALLENGE = /^[a-f0-9]{48}$/;
-const BINDINGS = ['instanceId', 'bootId', 'port', 'accessVersion', 'e2eeVersion', 'origin', 'generation'];
+const BINDINGS = ['instanceId', 'bootId', 'port', 'accessVersion', 'e2eeVersion',
+  'sourceRole', 'sourceOrigin', 'sourceGeneration', 'targetRole', 'origin', 'generation'];
 const fail = code => Object.assign(Error(code), { code });
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+
+function routeForRole(context, sourceRole, at) {
+  const targetRole = sourceRole === 'primary' ? 'backup' : sourceRole === 'backup' ? 'primary' : '';
+  const source = context?.[sourceRole], target = context?.[targetRole];
+  if (!targetRole || context?.enabled !== true || context.supported !== true || !Number.isSafeInteger(at) || at <= 0 ||
+      [source, target].some(slot => !slot || slot.phase !== 'ready' || slot.reachable !== true ||
+        !Number.isSafeInteger(slot.checkedAt) || slot.checkedAt <= 0 || slot.checkedAt > at ||
+        at - slot.checkedAt > FRESHNESS_MS || typeof slot.generation !== 'string' || !GENERATION.test(slot.generation) ||
+        !slot.origin || quickOrigin(slot.origin) !== slot.origin) || source.origin === target.origin)
+    throw fail('backup-preparation-unavailable');
+  return { sourceRole, sourceOrigin: source.origin, sourceGeneration: source.generation,
+    targetRole, origin: target.origin, generation: target.generation };
+}
+
+// An unknown, stale or local source has no implied counterpart. Both the
+// credential-free landing page and issuance use this exact current-slot rule.
+function selectPreparationRoute(context, sourceOrigin, at = Date.now()) {
+  if (!sourceOrigin || quickOrigin(sourceOrigin) !== sourceOrigin) throw fail('backup-preparation-unavailable');
+  const roles = ['primary', 'backup'].filter(role => context?.[role]?.origin === sourceOrigin);
+  if (roles.length !== 1) throw fail('backup-preparation-unavailable');
+  return routeForRole(context, roles[0], at);
+}
 
 function createBackupPreparation({ readContext, isDeviceActive, reissueDevice, now = Date.now,
   randomBytes = crypto.randomBytes } = {}) {
@@ -52,27 +75,23 @@ function createBackupPreparation({ readContext, isDeviceActive, reissueDevice, n
     try { if (isDeviceActive(deviceId) === true) return; } catch (_) {}
     throw fail('backup-preparation-device-inactive');
   }
-  function snapshot(at) {
+  function snapshot(at, sourceOrigin, sourceRole) {
     try {
       const value = readContext();
       const checkedAt = clock();
-      const backup = value?.backup;
       if (value?.enabled !== true || value.supported !== true || typeof value.instanceId !== 'string' || !UUID.test(value.instanceId) ||
           typeof value.bootId !== 'string' || !UUID.test(value.bootId) || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535 ||
           typeof value.accessVersion !== 'string' || !VERSION.test(value.accessVersion) ||
           typeof value.e2eeVersion !== 'string' || !VERSION.test(value.e2eeVersion) ||
-          !backup || backup.phase !== 'ready' || backup.reachable !== true ||
-          checkedAt < at || !Number.isSafeInteger(backup.checkedAt) || backup.checkedAt <= 0 || backup.checkedAt > checkedAt ||
-          checkedAt - backup.checkedAt > FRESHNESS_MS || typeof backup.generation !== 'string' || !GENERATION.test(backup.generation) ||
-          !backup.origin || quickOrigin(backup.origin) !== backup.origin) throw Error('unavailable');
+          checkedAt < at) throw Error('unavailable');
+      const route = sourceRole ? routeForRole(value, sourceRole, checkedAt) : selectPreparationRoute(value, sourceOrigin, checkedAt);
       return { instanceId: value.instanceId, bootId: value.bootId, port: value.port,
-        accessVersion: value.accessVersion, e2eeVersion: value.e2eeVersion,
-        origin: backup.origin, generation: backup.generation };
+        accessVersion: value.accessVersion, e2eeVersion: value.e2eeVersion, ...route };
     } catch (_) { throw fail('backup-preparation-unavailable'); }
   }
   function verify(record, at) {
     device(record.deviceId);
-    const current = snapshot(at);
+    const current = snapshot(at, record.sourceOrigin, record.sourceRole);
     if (clock() >= record.expiresAt) throw fail('backup-preparation-invalid');
     if (!BINDINGS.every(key => current[key] === record[key])) throw fail('backup-preparation-target-changed');
   }
@@ -102,11 +121,14 @@ function createBackupPreparation({ readContext, isDeviceActive, reissueDevice, n
     return typeof nonce === 'string' && CHALLENGE.test(nonce) && typeof challenge === 'string' &&
       CHALLENGE.test(challenge) && nonce === record.nonce && challenge === record.challenge;
   }
+  function verifySource(record, sourceOrigin) {
+    if (sourceOrigin !== record.sourceOrigin) throw fail('backup-preparation-target-changed');
+  }
 
   return Object.freeze({
-    mint({ deviceId, origin, generation, nonce, challenge } = {}) {
+    mint({ deviceId, sourceOrigin, origin, generation, nonce, challenge } = {}) {
       const at = clock(); prune(at); device(deviceId);
-      const current = snapshot(at);
+      const current = snapshot(at, sourceOrigin);
       if (typeof nonce !== 'string' || !CHALLENGE.test(nonce) || typeof challenge !== 'string' || !CHALLENGE.test(challenge))
         throw fail('backup-preparation-invalid');
       if (origin !== current.origin || generation !== current.generation) throw fail('backup-preparation-target-changed');
@@ -151,8 +173,9 @@ function createBackupPreparation({ readContext, isDeviceActive, reissueDevice, n
         throw /^backup-preparation-/.test(error?.code || '') ? error : fail('backup-preparation-unavailable');
       }
     },
-    confirmReceiver({ preparationId, deviceId, receipt, nonce, challenge } = {}) {
+    confirmReceiver({ preparationId, deviceId, sourceOrigin, receipt, nonce, challenge } = {}) {
       const at = clock(), record = owned(preparationId, deviceId, at);
+      verifySource(record, sourceOrigin);
       if (record.phase !== 'redeemed' || record.receiverVerified || !record.receiptDigest ||
           typeof receipt !== 'string' || !RECEIPT.test(receipt) ||
           !crypto.timingSafeEqual(Buffer.from(digest(receipt), 'hex'), Buffer.from(record.receiptDigest, 'hex')))
@@ -177,19 +200,21 @@ function createBackupPreparation({ readContext, isDeviceActive, reissueDevice, n
       record.phase = 'completed'; record.checkedAt = at;
       return { ...tuple(record), checkedAt: at };
     },
-    status({ preparationId, deviceId } = {}) {
+    status({ preparationId, deviceId, sourceOrigin } = {}) {
       const at = clock(), record = owned(preparationId, deviceId, at);
+      verifySource(record, sourceOrigin);
       verify(record, at);
       if (records.get(record.preparationId) !== record) throw fail('backup-preparation-invalid');
       if (!['pending', 'redeemed', 'completed'].includes(record.phase)) throw fail('backup-preparation-invalid');
       return { ...tuple(record), phase: record.phase, checkedAt: record.checkedAt };
     },
-    revoke({ preparationId, deviceId } = {}) {
+    revoke({ preparationId, deviceId, sourceOrigin } = {}) {
       const at = clock(), record = owned(preparationId, deviceId, at);
+      verifySource(record, sourceOrigin);
       // Authenticated cancellation may retire an old target after replacement.
       remove(record); return { ok: true };
     }
   });
 }
 
-module.exports = { createBackupPreparation, TTL_MS, MAX_RECORDS, MAX_PER_DEVICE };
+module.exports = { createBackupPreparation, selectPreparationRoute, TTL_MS, MAX_RECORDS, MAX_PER_DEVICE };

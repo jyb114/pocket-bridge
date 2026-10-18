@@ -22,7 +22,7 @@ const net = require('net');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { spawn, execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 
 const BASE = path.resolve(__dirname, '..');
 const LOG_DIR = path.join(BASE, 'logs');
@@ -560,13 +560,8 @@ class Browser {
   kill() {
     try { this.ws.close(); } catch (err) { }
     try { this.proc.kill(); } catch (err) { }
-    // 无头浏览器会留下子进程，按 profile 路径把它们一起收掉
-    try {
-      if (process.platform === 'win32') {
-        execFileSync('taskkill', ['/F', '/FI', `WINDOWTITLE eq *dsh-gw-browser*`],
-          { stdio: 'ignore', timeout: 5000 });
-      }
-    } catch (err) { }
+    // Only signal this instance's held ChildProcess. Never clean by a shared
+    // title/image pattern: another test or user session may match it.
     setTimeout(() => {
       try { fs.rmSync(this.profile, { recursive: true, force: true }); } catch (err) { }
     }, 1500);

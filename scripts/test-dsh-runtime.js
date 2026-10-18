@@ -186,6 +186,21 @@ function fixture(state = {}) {
   equal(cliRunning.kind, 'cli', 'retain CLI runtime kind');
   equal(cliRunning.profile, 'remote-mux', 'modern CLI profile');
 
+  const latestDesktop = fixture({ processes: [desktop(21, '0.2.1-rc.2')],
+    owners: [{ pid: 21, port: 19021 }], responses: { 19021: auth } });
+  const latestRunning = await latestDesktop.resolver.resolveRuntime({ dshPort: 19021 });
+  check(latestRunning.running && latestRunning.supported, 'exact verified 0.2.1 desktop is usable after its real HTTP fingerprint');
+  equal([latestRunning.kind, latestRunning.version, latestRunning.pid, latestRunning.port, latestRunning.profile],
+    ['desktop', '0.2.1-rc.2', 21, 19021, 'remote-mux'], '0.2.1 identity retains process ownership and explicit port');
+  const latestUnverified = fixture({ processes: [desktop(21, '0.2.1-rc.2')],
+    owners: [{ pid: 21, port: 19021 }], responses: { 19021: { statusCode: 403, body: 'Forbidden' } } });
+  equal((await latestUnverified.resolver.resolveRuntime({ dshPort: 19021 })).running, false,
+    'known 0.2.1 version never bypasses a missing DSH HTTP fingerprint');
+  const latestCli = fixture({ processes: [cli(22, '0.2.1-rc.2')],
+    owners: [{ pid: 22, port: 19022 }], responses: { 19022: auth } });
+  const unverifiedCli = await latestCli.resolver.resolveRuntime({ dshMode: 'web', dshPort: 19022 });
+  check(unverifiedCli.running && !unverifiedCli.supported, 'desktop verification does not claim untested npm 0.2.1 compatibility');
+
   const mixed = fixture({ processes: [desktop(1), cli(2)], owners: [{ pid: 1, port: 19005 }, { pid: 1, port: 19003 }, { pid: 2, port: 19002 }],
     responses: { 19003: auth, 19005: { statusCode: 200, headers: { 'content-type': 'text/html' }, body: '<title>Other Node Server</title>' }, 19002: auth } });
   equal((await mixed.resolver.resolveRuntime({})).port, 19003, 'select genuine desktop and exclude non-DSH port');

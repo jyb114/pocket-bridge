@@ -193,6 +193,7 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
 /* 余额 / 连接地址面板（复用抓屏那层遮罩） */
 .panel-body { color: #e7eef7; font-size: .92rem; }
 .panel-line { margin: 0 0 10px; }
+.send-review-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
 .addr-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;
   padding: 11px 12px; border: 1px solid #3c4d63; border-radius: 11px; background: #1a2532; }
 .addr-url { color: #9fb3c9; font-size: .76rem; overflow-wrap: anywhere; }
@@ -500,3 +501,5 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
 .backup-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .backup-actions button{min-height:44px;white-space:normal}
 .backup-warning{padding:12px;border-radius:8px;background:#fff4de;color:#6c4600;line-height:1.6}
+
+.backup-current{overflow-wrap:anywhere;word-break:break-word}

@@ -25,13 +25,15 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const DEFAULT_MAX_WIDTH = 1280;
 const MAX_MAX_WIDTH = 3840;
 const MIN_MAX_WIDTH = 480;
 const MAX_BYTES = 4 * 1024 * 1024;      // 单张上限，超过就报错而不是把隧道堵死
 const CAPTURE_TIMEOUT_MS = 20000;
+const MAX_OUTPUT_BYTES = 1024 * 1024;
+const MAX_CONCURRENT_CAPTURES = 1;
 
 /**
  * 抓屏用的 PowerShell。
@@ -105,12 +107,61 @@ async function readBody(req, limit = 4096) {
   return Buffer.concat(chunks, total).toString('utf8');
 }
 
+// Keep the capture lease and its files until close, including after timeout or
+// cancellation: killing a child is a request, not proof it has stopped writing.
+function capture(script, maxWidth, file, signal, onTimeout) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new Error('capture-aborted')); return; }
+    let child;
+    try {
+      child = spawn('powershell', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA',
+        '-File', script, String(maxWidth), file
+      ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch (error) { reject(error); return; }
+
+    let failure = null, bytes = 0;
+    const chunks = [];
+    const stop = error => {
+      if (failure) return;
+      failure = error;
+      // Only this exact child is ours. Never search for or kill other processes.
+      try { child.kill('SIGKILL'); } catch (err) { /* wait for confirmed close */ }
+    };
+    const abort = () => stop(new Error('capture-aborted'));
+    const timer = setTimeout(() => {
+      stop(new Error('capture-timeout'));
+      // Bound the HTTP wait even if the OS cannot promptly confirm termination.
+      // The promise/lease still waits for close before removing any files.
+      onTimeout();
+    }, CAPTURE_TIMEOUT_MS);
+    signal.addEventListener('abort', abort, { once: true });
+    child.once('error', error => { if (!failure) failure = error; });
+    child.stdout.on('error', stop);
+    child.stdout.on('data', chunk => {
+      if (failure) return;
+      bytes += chunk.length;
+      if (bytes > MAX_OUTPUT_BYTES) { stop(new Error('capture-output-too-large')); return; }
+      chunks.push(chunk);
+    });
+    child.once('close', (code, exitSignal) => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      if (failure) reject(failure);
+      else if (code !== 0) reject(new Error(`capture-process-exit: ${exitSignal || code}`));
+      else resolve(Buffer.concat(chunks, bytes).toString('utf8'));
+    });
+    if (signal.aborted) abort();
+  });
+}
+
 /**
  * @param {{ log?: (line: string) => void }} options
  *   log 用来记「谁在什么时候抓了一次屏」。抓屏是敏感操作，必须留痕。
  */
 function createDshLiteScreen(options = {}) {
   const note = typeof options.log === 'function' ? options.log : () => {};
+  let activeCaptures = 0;
 
   return async function handleDshLiteScreen(req, res) {
     function reply(status, value) {
@@ -146,19 +197,34 @@ function createDshLiteScreen(options = {}) {
     const opts = normalizeOptions(asked);
     if (!opts) { reply(400, { error: 'invalid-screen-request' }); return; }
 
-    const file = path.join(os.tmpdir(), `pb-screen-${process.pid}-${Date.now()}.jpg`);
-    const script = path.join(os.tmpdir(), `pb-screen-${process.pid}-${Date.now()}.ps1`);
+    if (req.aborted || res.destroyed || res.writableEnded || req.socket?.destroyed) return;
+    if (activeCaptures >= MAX_CONCURRENT_CAPTURES) {
+      reply(429, { error: 'capture-busy' }); return;
+    }
+    activeCaptures++;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    // The decrypted request is a Readable shim. Its normal close means the
+    // JSON was consumed, not that the phone disconnected; use the real response.
+    const onClose = () => { if (!res.writableEnded) abort(); };
+    req.once('aborted', abort);
+    res.once('close', onClose);
+    let directory, timedOut = false;
     try {
+      directory = fs.mkdtempSync(path.join(os.tmpdir(), `pb-screen-${process.pid}-`));
+      const file = path.join(directory, 'capture.jpg');
+      const script = path.join(directory, 'capture.ps1');
       // ★ UTF-8 带 BOM —— PowerShell 5.1 靠这个 BOM 才按 UTF-8 读文件。
       //   去掉它，中文会被当 GBK 解析，脚本直接语法错误（这个坑在
       //   否则会出现难以定位的 PowerShell 语法错误）。
       fs.writeFileSync(script, '\uFEFF' + PS_SCRIPT, 'utf8');
 
-      const out = execFileSync('powershell', [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA',
-        '-File', script, String(opts.maxWidth), file
-      ], { encoding: 'utf8', timeout: CAPTURE_TIMEOUT_MS, windowsHide: true,
-        stdio: ['ignore', 'pipe', 'ignore'] });
+      const out = await capture(script, opts.maxWidth, file, controller.signal, () => {
+        timedOut = true;
+        note('抓屏出错：capture-timeout');
+        reply(502, { error: 'capture-failed' });
+      });
+      if (controller.signal.aborted || res.destroyed || res.writableEnded) return;
 
       if (!/RESULT=OK/.test(String(out))) {
         note('抓屏失败：系统没有可抓的屏幕');
@@ -183,11 +249,15 @@ function createDshLiteScreen(options = {}) {
         capturedAt: new Date().toISOString()
       });
     } catch (error) {
-      note(`抓屏出错：${error && error.message ? error.message : error}`);
+      if (!timedOut) note(`抓屏出错：${error && error.message ? error.message : error}`);
       reply(502, { error: 'capture-failed' });
     } finally {
-      try { fs.unlinkSync(file); } catch (err) { /* 删不掉就交给系统清 temp */ }
-      try { fs.unlinkSync(script); } catch (err) { /* 同上 */ }
+      req.removeListener('aborted', abort);
+      res.removeListener('close', onClose);
+      if (directory) {
+        try { fs.rmSync(directory, { recursive: true, force: true }); } catch (err) { /* 删不掉就交给系统清 temp */ }
+      }
+      activeCaptures--;
     }
   };
 }

@@ -27,6 +27,7 @@ test-uploads/
 before.png
 after.png
 queue-fixture/
+output/
 
 # ── 打包进来的运行时 ──────────────────────────────────────────────────────────
 #

@@ -1,6 +1,6 @@
 {
   "name": "pocket-bridge",
-  "version": "1.0.0-preview.15",
+  "version": "1.0.0-preview.16",
   "private": true,
   "description": "An unofficial DSH-only gateway for using DeepSeek Harness on your Windows PC from a phone browser.",
   "keywords": [
@@ -14,7 +14,8 @@
   "license": "MIT",
   "author": "Pocket Bridge contributors",
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "dsh": "0.1.7-rc.2 || 0.2.0-rc.2 || 0.2.1-rc.2"
   },
   "main": "scripts/gateway-daemon.js",
   "exports": {
@@ -61,7 +62,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/schemastery": "~3.18.4",
-    "@deepseek-ai/dsh-home-paths": "0.1.7-rc.2 || 0.2.0-rc.2"
+    "@deepseek-ai/dsh-home-paths": "0.1.7-rc.2 || 0.2.0-rc.2 || 0.2.1-rc.2"
   },
   "_comment_dependencies": "The gateway has no third-party npm runtime dependencies. The optional DSH plugin reuses host-provided peers. Source users install Node.js and, for a temporary internet tunnel, cloudflared. The Windows installer bundles those two runtimes, but not DSH."
 }

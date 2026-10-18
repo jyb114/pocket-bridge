@@ -10,7 +10,8 @@ const path = require('node:path');
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const UPSTREAM_TIMEOUT_MS = 15_000;
-const METHODS = new Set(['workspace/create', 'session/create', 'session/prompt', 'session/list',
+const METHODS = new Set(['bridge/prompt-prepare', 'bridge/prompt-state',
+  'workspace/create', 'session/create', 'session/prompt', 'session/list',
   'session/page', 'session/cancel', '$events/result',
   // 选模型 / 选模式（C3 / C4）。方法名是从 DSH 自己的 app.asar 里搜出来的，
   // 不是猜的：`session/modelCatalog`（列）、`session/selectModel`（设）、
@@ -208,6 +209,16 @@ function validPromptContent(content) {
 }
 
 function validRequest(method, request) {
+  if (method === 'bridge/prompt-prepare') return validRequest('session/prompt', request) &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(request.requestId);
+  if (method === 'bridge/prompt-state') {
+    return exactKeys(request, ['sessionId', 'action'], ['requestId', 'confirm']) && validId(request.sessionId) &&
+      ['list', 'status', 'acknowledge', 'review-uncertain', 'cancel-prepared'].includes(request.action) &&
+      (request.action === 'list' ? !Object.hasOwn(request, 'requestId') :
+        typeof request.requestId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(request.requestId)) &&
+      (!Object.hasOwn(request, 'confirm') || request.confirm === true) &&
+      (request.action !== 'review-uncertain' || request.confirm === true);
+  }
   if (method === 'workspace/create') {
     return exactKeys(request, ['path']) && validDirectory(request.path);
   }
@@ -358,6 +369,7 @@ function responseBody(input) {
 
 function createDshLiteRpc(options = {}) {
   if (typeof options.callUpstream !== 'function') throw new TypeError('callUpstream is required');
+  if (!!options.promptState !== (typeof options.promptContext === 'function')) throw new TypeError('Prompt state requires trusted context');
 
   return async function handleDshLiteRpc(req, res) {
     function reply(status, value) {
@@ -391,6 +403,33 @@ function createDshLiteRpc(options = {}) {
       reply(400, { error: 'invalid-rpc-request' }); return;
     }
 
+    // These bridge-owned methods never become upstream RPC names. The context
+    // comes from verified cookies/runtime evidence, never from phone fields.
+    let promptContext = null;
+    if (input.method.startsWith('bridge/prompt-') || input.method === 'session/prompt' && options.promptState) {
+      try {
+        if (!options.promptState) throw Object.assign(Error(), { code: 'prompt-state-unavailable' });
+        promptContext = await options.promptContext(req);
+        if (input.method === 'bridge/prompt-prepare') {
+          const operation = options.promptState.prepare(promptContext, input.request);
+          reply(200, { result: { ok: true, value: { operation } } }); return;
+        }
+        if (input.method === 'bridge/prompt-state') {
+          const value = options.promptState.state(promptContext, input.request);
+          reply(200, { result: { ok: true, value } }); return;
+        }
+      } catch (error) {
+        const code = /^prompt-[a-z-]+$/.test(error?.code || '') ? error.code : 'prompt-state-storage-unavailable';
+        // Only prepare can compare the submitted draft. Never put its digest,
+        // text, files or trusted device/runtime context in the result.
+        const operations = input.method === 'bridge/prompt-prepare' && Array.isArray(error?.operations) ?
+          error.operations.slice(0, 64).map(item => ({ requestId: item.requestId, state: item.state,
+            reviewed: item.reviewed, contextChanged: item.contextChanged, createdAt: item.createdAt,
+            updatedAt: item.updatedAt, matchesDraft: item.matchesDraft === true })) : undefined;
+        reply(200, { result: { ok: false, error: { code, ...(operations ? { operations } : {}) } } }); return;
+      }
+    }
+
     // ★ 每个方法的 args **包装方式不一样**，这一点只能从 DSH 的错误里看出来。
     //
     //   实测（2026-09-29）：`session/modelCatalog` 不接受 `{request: …}` 这层包装，
@@ -422,6 +461,23 @@ function createDshLiteRpc(options = {}) {
     const body = Buffer.from(JSON.stringify(wire), 'utf8');
     if (body.length > MAX_REQUEST_BYTES) { reply(413, { error: 'request-too-large' }); return; }
 
+    // Claim only after all local serialization/size checks. The immutable
+    // decision must be durable before the first possible upstream write.
+    if (promptContext) {
+      try {
+        const claim = options.promptState.begin(promptContext, input.request);
+        if (!claim.dispatch) {
+          if (claim.operation.state === 'accepted') reply(200, { result: { ok: true,
+            value: { accepted: true, bridgeOperation: claim.operation } } });
+          else reply(200, { result: { ok: false, error: { code: 'prompt-recovery-required' } } });
+          return;
+        }
+      } catch (error) {
+        const code = /^prompt-[a-z-]+$/.test(error?.code || '') ? error.code : 'prompt-state-storage-unavailable';
+        reply(200, { result: { ok: false, error: { code } } }); return;
+      }
+    }
+
     try {
       let upstream = await sendUpstream(input.method, body);
       let decoded = decodeResult(upstream, wire.rpcId);
@@ -430,7 +486,7 @@ function createDshLiteRpc(options = {}) {
       // （界面只能显示"DSH 拒绝了请求：gateway/arguments-invalid"），不如**换一种
       // 形状再发一次**：两种形状里必有一种是对的，另一种只会得到同一个错误。
       // 这一步不会把请求变成"别的东西" —— 换的只是外层包装，业务字段一模一样。
-      if (decoded && decoded.error && decoded.error.code === 'gateway/arguments-invalid') {
+      if (input.method !== 'session/prompt' && decoded && decoded.error && decoded.error.code === 'gateway/arguments-invalid') {
         const alternate = FLAT_ARGS.has(input.method) ? { request: input.request } : input.request;
         const retryWire = { type: 'client-request', rpcId: crypto.randomUUID(), method: input.method,
           payload: { args: alternate } };
@@ -441,16 +497,21 @@ function createDshLiteRpc(options = {}) {
         }
       }
       if (!decoded) { reply(502, { error: 'upstream-rpc-invalid' }); return; }
+      if (promptContext && decoded.ok === true && decoded.value?.accepted === true) {
+        decoded.value.bridgeOperation = options.promptState.accepted(promptContext, input.request);
+      }
       // Keep the official result including a domain failure. Never proxy
       // arbitrary upstream headers, cookies, redirects, or raw error pages.
       reply(200, { result: decoded });
-    } catch (_) {
-      reply(502, { error: 'upstream-rpc-unavailable' });
+    } catch (error) {
+      reply(502, { error: /^prompt-[a-z-]+$/.test(error?.code || '') ? error.code : 'upstream-rpc-unavailable' });
     }
 
     /** 发一帧给上游，拿回原始响应。 */
     function sendUpstream(method, body) {
       return options.callUpstream({ path: '/api/' + method, method: 'POST', body,
+        ...(promptContext ? { verifiedRuntime: promptContext.verifiedRuntime,
+          verifyPromptContext: promptContext.verifyPromptContext } : {}),
         headers: { 'content-type': 'application/json; charset=utf-8', 'content-length': String(body.length),
           'accept': 'application/json', 'accept-encoding': 'identity' },
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });

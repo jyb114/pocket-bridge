@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0-preview.16 - Flash-1017 and safer mobile recovery
+
+- Recognize the verified native Windows DSH 0.2.1-rc.2 runtime and add that exact version to the optional plugin's engine and peer gates. Keep unknown versions blocked. Follow the connected host's model catalog; do not rewrite upstream model streams.
+- Persist modern prompt identities, exclusive admission/dispatch decisions and receipt metadata without prompt plaintext. Recover known acceptance without redispatch; retain uncertain decisions across reloads, prepared alternate entrances, process restart and concurrent handlers. Recheck device/key authorization around asynchronous runtime discovery and immediately before dispatch.
+- Show received, not-dispatched and uncertain request recovery separately. Preserve intentional new identical questions through an explicit choice. Changed-runtime/key records retain their actual status and can be resolved without clearing the current draft. No automatic uncertain-message replay or universal exactly-once claim.
+- Keep browser-test cleanup restricted to the connection and child process held by that test, instead of global window-title process matching.
+
+- Keep checking the other tunnel while the authenticated page is visible, including after its reminder is closed. Prompt once per newly observed alternate origin/generation, preserve same-version dismissal across reconnect/remount, and coalesce deferred changes to the latest verified address. Pause in the background, cancel superseded reads, back off failures and invalidate stale preparation/copy candidates. No background/offline real-time delivery, automatic preparation or availability guarantee is claimed.
+
+- Retain the manual first-send history/queue review for legacy adapters without durable receipt recovery. The modern adapter uses the computer's authenticated receipt journal instead of interrupting every fresh-page conversation. A newly authorized operation after an uncertain outcome can still duplicate an earlier accepted task.
+
+- Phone backup reminders now appear on fresh visits and reloads, select the other verified tunnel relative to the current address, and never offer the current address as its own fallback. Visiting a backup does not swap global daemon roles. Both directions retain explicit, origin-bound browser preparation; reachability alone is never presented as prepared login/encryption.
+
+- Preserve unsent text and uploaded attachment receipts when reconnecting or refreshing the current project's conversation list. Keep drafts isolated by project and conversation, including delayed reads, failed reads and retries; never send a restored draft automatically.
+- Redact complete Windows and UNC paths containing spaces from diagnostic exports. Scrub parsed JSON fields without damaging useful status data, and omit source snippets from JSON parse errors. Known-credential checks and the manual-review warning remain in place.
+- Keep screenshot capture subprocesses off the gateway event loop. Admit at most one capture, return an encrypted failure at the existing 20-second deadline, and retain owned files and the capture slot until the child has actually closed, including after a disconnected request.
+- Bind older-history callbacks to their originating page request. Late success or failure from a previous conversation or connection cannot replace another conversation's history or clear its loading state.
+- Fence each connection-recovery attempt across delayed authorization and foreground/background changes. Superseded callbacks cannot create duplicate sockets, reopen a background connection or schedule another retry after cancellation.
+- Retain unresolved modern prompt identities across interleaved sends and reconnects, and persist the computer-side decision independently of browser memory. Prepared entrances preserve the device identity; new devices do not inherit another device's receipts. Bound unresolved admission and fail closed on storage/capacity faults; never retry an uncertain dispatch automatically.
+- Redact configured ntfy and Bark notification destinations independently of hostname, including supported self-hosted servers and encoded credential-bearing URL components. Keep stdout/file export checks and the manual-review warning.
+- Add isolated regression coverage for reconnect drafts, late history responses, actual stdout/file diagnostic exports, and encrypted loopback HTTP with synthetic screenshot children. Add browser draft-recovery coverage to the existing Windows CI suite. These changes do not establish native Windows screenshot, physical-phone or public-tunnel acceptance.
+
 ## 1.0.0-preview.15 - Optional backup tunnels and safer diagnostics
 
 - Add an explicit, disabled-by-default primary/backup pair for Windows Cloudflare Quick Tunnels. Track each owned process separately, verify fresh current-boot readiness and repair only the affected slot with bounded retries; uncertain ownership blocks replacement.

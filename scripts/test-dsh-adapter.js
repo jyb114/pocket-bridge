@@ -155,6 +155,22 @@ function fakeRequest(result, options = {}) {
   check('unknown future build not silently assumed compatible', () => assert.equal(adapter.detectProfile({ version: '9.0.0' }).supported, false));
   check('exact npm rc.2 protocol verified by real events and workspace streams', () => assert.equal(adapter.detectProfile({ kind: 'cli', version: '0.2.0-rc.2' }).profile, 'remote-mux'));
   check('npm rc.2 acceptance does not assume an untested desktop wrapper', () => assert.equal(adapter.detectProfile({ kind: 'desktop', version: '0.2.0-rc.2' }).supported, false));
+  check('exact signed 0.2.1 desktop uses its observed ready and workspace baseline protocol', () => {
+    const value = adapter.detectProfile({ kind: 'desktop', version: '0.2.1-rc.2', capabilities: { browserAuth: true } });
+    assert.equal(value.profile, 'remote-mux'); assert.equal(value.supported, true);
+    assert.equal(value.evidence, 'verified-version');
+  });
+  check('0.2.1 desktop acceptance does not certify the untested CLI or an unidentified kind', () => {
+    for (const kind of ['cli', 'unknown', undefined]) {
+      const value = adapter.detectProfile({ kind, version: '0.2.1-rc.2', capabilities: { browserAuth: true } });
+      assert.equal(value.supported, false); assert.equal(value.evidence, 'runtime-kind-required');
+    }
+  });
+  check('0.2.1 desktop declaration does not infer nearby or future builds', () => {
+    for (const version of ['0.2.1-rc.1', '0.2.1-rc.3', '0.2.1', '0.2.2']) {
+      assert.equal(adapter.detectProfile({ kind: 'desktop', version, capabilities: { browserAuth: true } }).supported, false);
+    }
+  });
   check('unknown build can use observed modern capabilities', () => assert.equal(adapter.detectProfile({ version: '9.0.0', bundleText: 'connect("/api/remote.mux"); workspace.follow' }).profile, 'remote-mux'));
   check('old version label cannot override active modern endpoint', () => assert.equal(adapter.detectProfile({ version: '0.1.0-rc.8', capabilities: { remoteMux: true } }).profile, 'remote-mux'));
   check('legacy endpoint pair observed in native bundle', () => assert.equal(adapter.detectProfile({ bundleText: '/api/events.mux /api/events.host host.describe' }).profile, 'legacy-events'));

@@ -232,6 +232,24 @@ async function run() {
 
     await page.eval(`(async()=>{let x=document.getElementById('message-input');x.value='测试指令';x.dispatchEvent(new Event('input'));document.getElementById('composer').requestSubmit();await new Promise(r=>setTimeout(r,30));})()`);
     let calls = await page.eval(`window.__fake.calls`);
+    assert.equal(calls.some(x => x[0] === 'sendMessage'), false, 'fresh existing-session Send must first show review');
+    assert.match(await page.eval(`document.querySelector('.screen-overlay').textContent`), /仍作为新消息，可能重复执行/);
+    assert.equal(await page.eval(`document.getElementById('app').inert`), true, 'review uses the normal accessible modal');
+    async function reviewPointer(selector) {
+      const point = await page.eval(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'center'});const r=node.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      await page.send('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
+      await page.send('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
+    }
+    await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    await page.send('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    assert.equal(await page.eval(`!!document.getElementById('send-review-confirm')`), false, 'Escape cancels review');
+    assert.equal(await page.eval(`document.getElementById('message-input').value`), '测试指令', 'cancel preserves exact draft');
+    await reviewPointer('#send-button'); await new Promise(resolve => setTimeout(resolve, 30));
+    await reviewPointer('#send-review-confirm');
+    assert.equal(await page.eval(`window.__fake.calls.filter(x=>x[0]==='sendMessage').length`), 0, 'confirmation never sends');
+    assert.equal(await page.eval(`document.activeElement.id`), 'message-input', 'confirmation returns composer focus');
+    await reviewPointer('#send-button'); await new Promise(resolve => setTimeout(resolve, 30));
+    calls = await page.eval(`window.__fake.calls`);
     assert.ok(calls.some(x => x[0] === 'sendMessage' && x[1] === 's1' && x[2] === '测试指令'));
 
     await page.eval(`window.__fake.onEvent({type:'record',sessionId:'s1',record:{id:'thought-1',role:'thought',title:'思考',text:'正在检查'}});document.getElementById('tab-activity').click();window.__fake.onEvent({type:'record',sessionId:'s1',record:{id:'thought-1',role:'thought',title:'思考',text:'检查完成'}})`);
@@ -932,6 +950,152 @@ async function run() {
       throw new Error('isolated DSH session list did not finish loading');
     }
 
+    // A same-project refresh retains the session ID. It must also retain the
+    // composer that belongs to that ID, including while its list is pending.
+    const draftRefresh = await browser.newPage();
+    await draftRefresh.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await draftRefresh.goto('http://127.0.0.1:' + server.address().port + '/dsh-lite.html', 300);
+    await waitForSessionList(draftRefresh);
+    await draftRefresh.eval(`(() => {
+      const f = window.__fake, adapter = window.DshLiteAdapter;
+      adapter.listProjects = async () => [{id:'p1',name:'Draft project one'},{id:'p2',name:'Draft project two'}];
+      adapter.listSessions = async projectId => {
+        f.calls.push(['listSessions',projectId]);
+        if (f.holdDraftList) {
+          f.holdDraftList = false;
+          await new Promise(resolve => { f.releaseDraftList = resolve; });
+        }
+        if (f.failDraftList) { f.failDraftList = false; throw {userMessage:'Draft fixture list unavailable'}; }
+        return projectId === 'p1' ? [{id:'s1',title:'First draft chat'},{id:'s2',title:'Second draft chat'}] :
+          [{id:'s3',title:'Other project chat'}];
+      };
+      adapter.uploadFile = async value => {
+        f.calls.push(['uploadFile',value.sessionId,value.file.name]);
+        return {receiptId:'receipt-'+value.sessionId,file:{name:value.file.name,bytes:value.file.size}};
+      };
+      f.onEvent({type:'projects',projects:[{id:'p1',name:'Draft project one'},{id:'p2',name:'Draft project two'}]});
+      document.querySelector('#project-list button').click();
+    })()`);
+    async function waitForDraftState(expression) {
+      for (let attempt = 0; attempt < 160; attempt++) {
+        if (await draftRefresh.eval(expression)) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error('draft refresh fixture did not reach expected state: ' + expression);
+    }
+    async function draftPointer(selector) {
+      if ((/^#(?:project|session)-list/.test(selector) || selector === '#reconnect') &&
+          await draftRefresh.eval(`document.body.classList.contains('sidebar-hidden')`)) {
+        await draftPointer('#projects-toggle');
+      }
+      let point;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        try {
+          point = await draftRefresh.eval(`(() => {
+            const node=document.querySelector(${JSON.stringify(selector)});
+            node.scrollIntoView({block:'nearest'});
+            const r=node.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
+            if (!r.width || !r.height || x<0 || x>innerWidth || y<0 || y>innerHeight ||
+                !node.contains(document.elementFromPoint(x,y))) throw Error('Draft fixture control is not visible');
+            return {x,y};
+          })()`);
+          break;
+        } catch (error) {
+          if (attempt === 11) throw error;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+      await draftRefresh.send('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...point});
+      await draftRefresh.send('Input.dispatchMouseEvent', {type:'mouseReleased',button:'left',clickCount:1,...point});
+    }
+    async function setRefreshDraft(text) {
+      if (!await draftRefresh.eval(`document.body.classList.contains('sidebar-hidden')`)) await draftPointer('#sidebar-close');
+      await draftPointer('#message-input');
+      await draftRefresh.send('Input.dispatchKeyEvent', {type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+      await draftRefresh.send('Input.dispatchKeyEvent', {type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+      await draftRefresh.send('Input.insertText', {text});
+    }
+    async function attachRefreshFile(name) {
+      await draftRefresh.eval(`(() => { const data=new DataTransfer();
+        data.items.add(new File(['draft attachment'],${JSON.stringify(name)},{type:'text/plain'}));
+        const input=document.getElementById('upload-input'); input.files=data.files;
+        input.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+      await waitForDraftState(`document.querySelectorAll('.attachment-chip').length===1 && !document.getElementById('upload-button').disabled`);
+    }
+    async function assertRefreshDraft(text, fileName, message) {
+      const current = await draftRefresh.eval(`({text:document.getElementById('message-input').value,
+        names:[...document.querySelectorAll('.attachment-chip > span')].map(node=>node.textContent),
+        sent:window.__fake.calls.filter(call=>call[0]==='sendMessage').length})`);
+      assert.equal(current.text, text, message);
+      assert.equal(current.names.length, fileName ? 1 : 0, message + ' (attachment count)');
+      if (fileName) assert.ok(current.names[0].startsWith(fileName + ' · '), message + ' (attachment identity)');
+      assert.equal(current.sent, 0, 'refreshing or restoring drafts must never send them');
+    }
+    await waitForSessionList(draftRefresh);
+    await draftPointer('#session-list button');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s1'`);
+    await setRefreshDraft('Unsent text before reconnect');
+    await attachRefreshFile('first-draft.txt');
+    await draftPointer('#reconnect');
+    await waitForDraftState(`window.__dshLiteState().connection==='connected' && document.querySelector('#session-list [aria-selected="true"]')`);
+    await assertRefreshDraft('Unsent text before reconnect', 'first-draft.txt', 'reconnect must preserve text and uploaded receipts');
+
+    await draftPointer('#project-list [aria-selected="true"]');
+    await waitForSessionList(draftRefresh);
+    await assertRefreshDraft('Unsent text before reconnect', 'first-draft.txt', 'reselecting the same project must preserve its draft');
+
+    await draftRefresh.eval(`window.__fake.holdDraftList=true`);
+    await draftPointer('#project-list [aria-selected="true"]');
+    await waitForDraftState(`typeof window.__fake.releaseDraftList==='function'`);
+    await assertRefreshDraft('Unsent text before reconnect', 'first-draft.txt', 'pending list reads must keep the composer intact');
+    await setRefreshDraft('Newer text typed while the list was pending');
+    await draftRefresh.eval(`window.__fake.releaseDraftList(); window.__fake.releaseDraftList=null`);
+    await waitForSessionList(draftRefresh);
+    await assertRefreshDraft('Newer text typed while the list was pending', 'first-draft.txt', 'list completion must preserve newer edits');
+
+    await draftRefresh.eval(`window.__fake.failDraftList=true`);
+    await draftPointer('#project-list [aria-selected="true"]');
+    await waitForDraftState(`document.getElementById('session-list').textContent.includes('Draft fixture list unavailable')`);
+    await assertRefreshDraft('Newer text typed while the list was pending', 'first-draft.txt', 'a failed list read must preserve the draft');
+    await setRefreshDraft('Edited after list failure');
+    await draftPointer('#session-list button');
+    await waitForDraftState(`!!document.querySelector('#session-list [aria-selected="true"]')`);
+    await assertRefreshDraft('Edited after list failure', 'first-draft.txt', 'list retry must preserve text and receipt');
+
+    await draftPointer('#session-list button:nth-of-type(2)');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s2'`);
+    await assertRefreshDraft('', '', 'another chat must not inherit the first chat draft');
+    await setRefreshDraft('Second chat draft');
+    await attachRefreshFile('second-draft.txt');
+    await draftPointer('#session-list button');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s1'`);
+    await assertRefreshDraft('Edited after list failure', 'first-draft.txt', 'returning to the first chat must restore its own draft');
+
+    await draftPointer('#project-list button:nth-of-type(2)');
+    await waitForSessionList(draftRefresh);
+    await assertRefreshDraft('', '', 'another project must not inherit the first project draft');
+    await draftPointer('#session-list button');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s3'`);
+    await setRefreshDraft('Other project draft');
+    await attachRefreshFile('other-project.txt');
+    await draftPointer('#project-list button');
+    await waitForSessionList(draftRefresh);
+    await draftPointer('#session-list button');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s1'`);
+    await assertRefreshDraft('Edited after list failure', 'first-draft.txt', 'returning across projects must restore the matching draft');
+    await draftPointer('#session-list button:nth-of-type(2)');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s2'`);
+    await assertRefreshDraft('Second chat draft', 'second-draft.txt', 'refreshing one chat must not change another saved draft');
+    await draftPointer('#project-list button:nth-of-type(2)');
+    await waitForSessionList(draftRefresh);
+    await draftPointer('#session-list button');
+    await waitForDraftState(`window.__dshLiteState().sessionId==='s3'`);
+    await assertRefreshDraft('Other project draft', 'other-project.txt', 'the other project must retain its own draft');
+    assert.equal(draftRefresh.exceptions.length, 0, 'draft refresh checks must not throw browser exceptions');
+    await draftRefresh.eval(`localStorage.clear()`);
+    draftRefresh.close();
+    console.log('DSH mobile draft refresh checks passed (reconnect / reselect / pending edits / retry / session and project isolation)');
+
     // These checks reproduce mistakes found by actually using the phone-sized
     // page: cross-session drafts, hidden modal errors, and stale async results.
     const regress = await browser.newPage();
@@ -1618,6 +1782,10 @@ async function run() {
     await pointer('#session-list button'); await new Promise(resolve=>setTimeout(resolve,40));
     await merged.eval(`window.DshLiteAdapter.sendMessage=value=>new Promise(resolve=>{window.__sentValue=value;window.__releaseSend=resolve})`);
     await inputText('Original command'); await pointer('#send-button');
+    await new Promise(resolve=>setTimeout(resolve,30));
+    await pointer('#send-review-confirm');
+    assert.equal(await merged.eval(`typeof window.__releaseSend`),'undefined','review confirmation does not dispatch a prompt');
+    await pointer('#send-button');
     assert.equal(await merged.eval(`document.getElementById('message-input').disabled`),false,'sending must not interrupt further typing');
     await appendInput(' plus newer draft');
     await merged.eval(`window.__fake.onEvent({type:'status',state:'disconnected'})`);

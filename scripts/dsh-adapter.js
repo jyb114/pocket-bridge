@@ -25,7 +25,10 @@ const VERIFIED_VERSIONS = Object.freeze({
   '0.1.5-rc.3': 'remote-mux', '0.1.7-rc.2': 'remote-mux',
   // Exact published npm build: authenticated events ready + workspace baseline
   // were exercised against the installed runtime, rather than inferred by range.
-  '0.2.0-rc.2': 'remote-mux'
+  '0.2.0-rc.2': 'remote-mux',
+  // Exact signed desktop build: authenticated WebSocket upgrade, $events ready
+  // and workspace/follow baseline were observed on its process-owned listener.
+  '0.2.1-rc.2': 'remote-mux'
 });
 
 function normalizeVersion(value) {
@@ -220,6 +223,10 @@ function detectProfile(input = {}) {
   if (version === '0.2.0-rc.2' && input.kind !== 'cli') {
     return { profile: 'unsupported', capabilities, supported: false, evidence: 'runtime-kind-required',
       reason: 'Only the inspected npm web runtime is verified for this version.' };
+  }
+  if (version === '0.2.1-rc.2' && input.kind !== 'desktop') {
+    return { profile: 'unsupported', capabilities, supported: false, evidence: 'runtime-kind-required',
+      reason: 'Only the inspected desktop runtime is verified for this version.' };
   }
   const known = version && VERIFIED_VERSIONS[version];
   if (known) {

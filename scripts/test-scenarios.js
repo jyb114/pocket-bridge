@@ -450,7 +450,7 @@ async function redCheck() {
   mustRed('R1 公网地址形式（喂 api.trycloudflare.com）',
     publicHostProblem('https://api.trycloudflare.com/tunnel'));
   mustGreen('R1b 公网地址形式（喂正常快速隧道域名）',
-    publicHostProblem('https://hybrid-store-blink-locations.trycloudflare.com'));
+    publicHostProblem('https://fixture-normal.trycloudflare.com'));
 
   const goodKey = E2EE_SECRET || 'REALSECRETREALSECRET';
   mustRed('R2 地址里的 #k= 只许一份（喂两份）',

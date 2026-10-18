@@ -46,6 +46,16 @@ Existing Codex/Dot journals and uploads are retained during a DSH-only upgrade. 
 
 Temporary tunnels can disconnect or change address. A transport error is not proof that an instruction was rejected. Preserve drafts and ambiguous delivery outcomes; never automatically resend a possibly accepted operation. Queued-message edits require readback before reporting success, and a failed or unknown acknowledgement must not discard the user's edited text.
 
+The modern DSH prompt path additionally uses a durable application request
+identity, exclusive dispatch decision and receipt journal. It stores metadata
+and a keyed content comparison, not prompt plaintext. Records are scoped to the
+authenticated device, session, runtime and encryption-key context; revoked
+devices and changed contexts cannot silently continue a prepared send. The
+bridge dispatches at most once for one admitted request identity. This is not
+universal exactly-once task execution: a newly paired browser has another
+identity, and a user who reviews an uncertain outcome may explicitly submit a
+different new request. Legacy adapters retain the manual review barrier.
+
 Runtime identity, authorization, replay defenses, and file scope remain in place during performance optimization. Verified inbound protected mobile/Lite HTTP bodies and WebSocket content, together with one-shot proof nonces, now have bounded server-side durable admission receipts committed before dispatch. They survive an ordinary gateway restart; invalid cryptographic input cannot reserve a receipt. Active receipts are not evicted to make room, and journal/checkpoint disagreement, capacity, storage, concurrent-lock or clock rollback errors refuse admission. The ledger contains receipt metadata, not messages or keys, and must be retained with installation data. Do not delete it to work around an error. Downstream streamed replies are not synchronously journaled per token.
 
 Admission receipts are not an execution journal or an exactly-once application protocol. A request may have been admitted when its reply is lost, and a newly encrypted repeat with a different nonce is not the same cryptographic replay. The current envelope does not authenticate HTTP method/path, device cookie, or message order; the device-cookie check is a separate authorization gate. The browser's received-message replay cache is not made durable across page reloads, and the first ledger deployment cannot recognize packets accepted by older unjournaled gateways. A local administrator who can replace the application and its entire state is outside this defense. A successful isolated test is not proof of every physical-device, runtime-version, or internet condition.

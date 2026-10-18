@@ -227,7 +227,7 @@ console.log('\n【地址必须带加密密钥】');
 {
   const tunnel = require('./tunnel.js');
   const cases = [
-    ['https://hybrid-store-blink-locations.trycloudflare.com', true],
+    ['https://fixture-normal.trycloudflare.com', true],
     ['Post "https://api.trycloudflare.com/tunnel": context deadline exceeded', false],
     ['https://www.trycloudflare.com', false],
     ['https://dash.trycloudflare.com', false],

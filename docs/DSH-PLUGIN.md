@@ -14,16 +14,15 @@ offering a connection or changing the gateway state.
 ## Installation
 
 Install a tested release tarball through your DSH plugin manager. No separate
-npm publication is required. Preview.14's versioned release URL is:
+npm publication is required. Preview.16's versioned release URL is:
 
 ```text
-dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.14/pocket-bridge-1.0.0-preview.14.tgz
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.16/pocket-bridge-1.0.0-preview.16.tgz
 ```
 
-This source branch prepares preview.15. Until its assets are published, the
-command above remains the published preview.14 example; do not infer that a
-new version is available from the source package version alone. Use the exact
-verified tarball URL from [Releases](https://github.com/jyb114/pocket-bridge/releases).
+Use the exact versioned asset from [Releases](https://github.com/jyb114/pocket-bridge/releases).
+Source changes and a marketplace listing are separate from a published asset.
+The marketplace catalog must point to the same release tarball and checksum.
 
 That command targets an npm DSH Web profile. A desktop application's plugin
 manager owns its own profile: install the same tarball through that manager
@@ -39,7 +38,8 @@ download a binary, alter a profile, or change a firewall rule.
 
 The plugin currently declares `@deepseek-ai/cordis` `~4.0.4`,
 `@deepseek-ai/schemastery` `~3.18.4`, and
-`@deepseek-ai/dsh-home-paths` `0.1.7-rc.2 || 0.2.0-rc.2` as host peers.
+`@deepseek-ai/dsh-home-paths` `0.1.7-rc.2 || 0.2.0-rc.2 || 0.2.1-rc.2` as host peers.
+Its `engines.dsh` declaration lists those same three exact prereleases.
 These declarations identify the intended package combinations; they are not
 a compatibility promise for every desktop wrapper or another DSH release.
 The settings entry also depends on the host exposing its Web settings UI.

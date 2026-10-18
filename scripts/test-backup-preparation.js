@@ -11,8 +11,10 @@ const START = 1700000000000;
 const DEVICE = 'synthetic-device-0001';
 const OTHER_DEVICE = 'synthetic-device-0002';
 const ORIGIN = 'https://synthetic-backup.trycloudflare.com';
+const PRIMARY_ORIGIN = 'https://synthetic-primary.trycloudflare.com';
 const OTHER_ORIGIN = 'https://synthetic-replacement.trycloudflare.com';
 const GENERATION = 'c'.repeat(32);
+const PRIMARY_GENERATION = 'd'.repeat(32);
 const TOKEN = 'synthetic-device-token';
 const NONCE = '1'.repeat(48);
 const CHALLENGE = '2'.repeat(48);
@@ -35,7 +37,7 @@ function rejects(operation, code = INVALID) {
     return true;
   });
 }
-function fixture() {
+function fixture(sourceRole = 'primary') {
   const state = {
     time: START, serial: 0, receipts: new Map(), active: new Set([DEVICE, OTHER_DEVICE]), reissues: [], entropyCalls: 0,
     context: {
@@ -43,7 +45,8 @@ function fixture() {
       instanceId: '11111111-1111-4111-8111-111111111111',
       bootId: '22222222-2222-4222-8222-222222222222',
       port: 43123, accessVersion: 'a'.repeat(64), e2eeVersion: 'b'.repeat(64),
-      backup: { phase: 'ready', reachable: true, checkedAt: START, origin: ORIGIN, generation: GENERATION }
+      backup: { phase: 'ready', reachable: true, checkedAt: START, origin: ORIGIN, generation: GENERATION },
+      primary: { phase: 'ready', reachable: true, checkedAt: START, origin: PRIMARY_ORIGIN, generation: PRIMARY_GENERATION }
     }
   };
   const options = {
@@ -64,9 +67,11 @@ function fixture() {
     }
   };
   const api = createBackupPreparation(options);
-  const owner = minted => ({ preparationId: minted.preparationId, deviceId: DEVICE });
+  const sourceOrigin = state.context[sourceRole].origin;
+  const target = { ...state.context[sourceRole === 'primary' ? 'backup' : 'primary'] };
+  const owner = minted => ({ preparationId: minted.preparationId, deviceId: DEVICE, sourceOrigin });
   const proof = minted => ({ nonce: minted.nonce, challenge: minted.challenge });
-  const mint = (extra = {}) => api.mint({ deviceId: DEVICE, origin: ORIGIN, generation: GENERATION, nonce: NONCE, challenge: CHALLENGE, ...extra });
+  const mint = (extra = {}) => api.mint({ deviceId: DEVICE, sourceOrigin, origin: target.origin, generation: target.generation, nonce: NONCE, challenge: CHALLENGE, ...extra });
   const redeem = (minted, extra = {}) => {
     const result = api.redeem({ ticket: minted.ticket, origin: minted.origin, ...proof(minted), ...extra });
     state.receipts.set(minted.preparationId, result.receipt);
@@ -76,7 +81,7 @@ function fixture() {
     receipt: state.receipts.get(minted.preparationId), ...extra });
   const complete = (minted, extra = {}) => api.complete({ ...owner(minted), origin: minted.origin, generation: minted.generation, ...proof(minted), ...extra });
   const finish = minted => { confirm(minted); return complete(minted); };
-  return { state, options, api, owner, proof, mint, redeem, confirm, complete, finish };
+  return { state, options, api, owner, proof, mint, redeem, confirm, complete, finish, sourceOrigin };
 }
 
 check('factory rejects missing or non-function dependencies', () => {
@@ -211,6 +216,20 @@ const unavailableContexts = [
     ['invalid backup origin ' + String(value), c => { c.backup.origin = value; }])
 ];
 
+// Apply every malformed slot fixture to each role; neither published endpoint
+// may be guessed from a previously used hostname or substituted for the other.
+for (const [label, change] of [...unavailableContexts]) {
+  const before = fixture().state.context, after = structuredClone(before);
+  change(after);
+  if (JSON.stringify(before.backup) !== JSON.stringify(after.backup)) {
+    unavailableContexts.push(['primary ' + label, context => {
+      const projected = { ...context, backup: context.primary };
+      change(projected); context.primary = projected.backup;
+    }]);
+  }
+}
+unavailableContexts.push(['identical origins', c => { c.primary.origin = c.backup.origin; }]);
+
 check('disabled, unsupported, stale, future and malformed context fail every protected phase', () => {
   for (const [label, change] of unavailableContexts) {
     for (const phase of ['mint', 'redeem', 'complete', 'status']) {
@@ -252,8 +271,91 @@ const changedBindings = [
   ['access key version', c => { c.accessVersion = 'd'.repeat(64); }],
   ['E2EE key version', c => { c.e2eeVersion = 'e'.repeat(64); }],
   ['origin', c => { c.backup.origin = OTHER_ORIGIN; }],
-  ['generation', c => { c.backup.generation = 'f'.repeat(32); }]
+  ['generation', c => { c.backup.generation = 'f'.repeat(32); }],
+  ['source origin', c => { c.primary.origin = OTHER_ORIGIN; }],
+  ['source generation', c => { c.primary.generation = 'f'.repeat(32); }],
+  ['slot swap', c => { [c.primary, c.backup] = [c.backup, c.primary]; }]
 ];
+
+check('both current source slots prepare only their opposite configured target', () => {
+  for (const role of ['primary', 'backup']) {
+    const f = fixture(role), before = structuredClone(f.state.context), minted = f.mint();
+    const target = f.state.context[role === 'primary' ? 'backup' : 'primary'];
+    assert.equal(minted.origin, target.origin); assert.equal(minted.generation, target.generation);
+    rejects(() => f.complete(minted));
+    const redeemed = f.redeem(minted);
+    assert.deepEqual(f.state.reissues, [{ id: DEVICE, authority: new URL(target.origin).host }]);
+    assert.equal(redeemed.token, TOKEN); rejects(() => f.redeem(minted));
+    rejects(() => f.complete(minted));
+    f.finish(minted); assert.equal(f.api.status(f.owner(minted)).phase, 'completed');
+    assert.deepEqual(f.state.context, before, 'preparation must never swap or rewrite configured roles');
+    f.api.revoke(f.owner(minted)); rejects(() => f.api.status(f.owner(minted)));
+  }
+});
+
+check('unknown, stale and noncanonical source origins cannot select a target', () => {
+  for (const sourceOrigin of [undefined, null, '', {}, new String(PRIMARY_ORIGIN), OTHER_ORIGIN,
+    'https://unknown.example', 'http://localhost:43123', 'https://localhost:43123',
+    'http://127.0.0.1:43123', 'http://[::1]:43123', PRIMARY_ORIGIN + '/', PRIMARY_ORIGIN + '/dsh-lite',
+    PRIMARY_ORIGIN + ':443', PRIMARY_ORIGIN.toUpperCase(), 'https://user@synthetic-primary.trycloudflare.com']) {
+    const f = fixture(); rejects(() => f.mint({ sourceOrigin }), UNAVAILABLE);
+    assert.equal(f.state.entropyCalls, 0); assert.equal(f.state.reissues.length, 0);
+  }
+  for (const role of ['primary', 'backup']) {
+    const f = fixture(role);
+    f.state.context[role].origin = OTHER_ORIGIN;
+    rejects(() => f.mint(), UNAVAILABLE);
+    assert.equal(f.state.entropyCalls, 0);
+    const source = f.state.context[role];
+    rejects(() => f.mint({ sourceOrigin: source.origin, origin: source.origin, generation: source.generation }), CHANGED);
+    assert.equal(f.state.entropyCalls, 0);
+  }
+});
+
+check('source-only receipt, status and cancellation never accept another authenticated origin', () => {
+  for (const role of ['primary', 'backup']) {
+    for (const sourceOrigin of [undefined, null, '', OTHER_ORIGIN, 'http://localhost:43123']) {
+      const f = fixture(role), minted = f.mint(); f.redeem(minted);
+      for (const from of [sourceOrigin, minted.origin]) {
+        rejects(() => f.confirm(minted, { sourceOrigin: from }), CHANGED);
+        rejects(() => f.api.status({ ...f.owner(minted), sourceOrigin: from }), CHANGED);
+        rejects(() => f.api.revoke({ ...f.owner(minted), sourceOrigin: from }), CHANGED);
+      }
+      f.finish(minted); f.api.revoke(f.owner(minted));
+    }
+  }
+});
+
+check('primary-target preparations retain all gates and can cancel after either role changes', () => {
+  for (const [label, change] of [...changedBindings, ...unavailableContexts]) {
+    for (const phase of ['mint', 'redeem', 'confirm', 'complete', 'status', 'revoke']) {
+      if (phase === 'mint' && changedBindings.some(([, candidate]) => candidate === change)) continue;
+      const f = fixture('backup'), minted = phase === 'mint' ? null : f.mint();
+      if (['confirm', 'complete'].includes(phase)) f.redeem(minted);
+      if (phase === 'complete') f.confirm(minted);
+      change(f.state.context);
+      if (phase === 'revoke') { assert.deepEqual(f.api.revoke(f.owner(minted)), { ok: true }); continue; }
+      const action = phase === 'status' ? () => f.api.status(f.owner(minted)) : () => f[phase](minted);
+      assert.doesNotThrow(() => rejects(action, [CHANGED, UNAVAILABLE]), label + ' during ' + phase);
+      if (phase === 'redeem') assert.equal(f.state.reissues.length, 0);
+    }
+  }
+});
+
+check('replacing either slot requires a fresh issue with the newly advertised pair', () => {
+  for (const sourceRole of ['primary', 'backup']) {
+    for (const changedRole of ['primary', 'backup']) {
+      const f = fixture(sourceRole), old = f.mint();
+      f.state.context[changedRole].origin = OTHER_ORIGIN;
+      f.state.context[changedRole].generation = 'e'.repeat(32);
+      rejects(() => f.redeem(old), CHANGED);
+      const source = f.state.context[sourceRole], target = f.state.context[sourceRole === 'primary' ? 'backup' : 'primary'];
+      const fresh = f.mint({ sourceOrigin: source.origin, origin: target.origin, generation: target.generation });
+      f.redeem(fresh); f.confirm(fresh, { sourceOrigin: source.origin }); f.complete(fresh);
+      assert.equal(f.api.status({ ...f.owner(fresh), sourceOrigin: source.origin }).phase, 'completed');
+    }
+  }
+});
 
 check('installation, boot, port, keys, origin and generation stay bound on every protected action', () => {
   for (const [label, change] of changedBindings) {
@@ -428,7 +530,7 @@ check('new factory instances never inherit old pending, redeemed or completed re
     rejects(() => restarted.status(f.owner(minted)));
     rejects(() => restarted.complete({ nonce: NONCE, challenge: CHALLENGE, ...f.owner(minted), origin: ORIGIN, generation: GENERATION }));
     rejects(() => restarted.revoke(f.owner(minted)));
-    const fresh = restarted.mint({ nonce: NONCE, challenge: CHALLENGE, deviceId: DEVICE, origin: ORIGIN, generation: GENERATION });
+    const fresh = restarted.mint({ nonce: NONCE, challenge: CHALLENGE, deviceId: DEVICE, sourceOrigin: PRIMARY_ORIGIN, origin: ORIGIN, generation: GENERATION });
     assert.notEqual(fresh.ticket, minted.ticket);
     assert.equal(restarted.status(f.owner(fresh)).phase, 'pending');
   }
@@ -439,7 +541,7 @@ check('a new boot with repeated entropy cannot re-create an old ticket or prepar
   const minted = f.mint();
   f.state.context.bootId = '44444444-4444-4444-8444-444444444444';
   const restarted = createBackupPreparation(f.options);
-  const replacement = restarted.mint({ nonce: NONCE, challenge: CHALLENGE, deviceId: DEVICE, origin: ORIGIN, generation: GENERATION });
+  const replacement = restarted.mint({ nonce: NONCE, challenge: CHALLENGE, deviceId: DEVICE, sourceOrigin: PRIMARY_ORIGIN, origin: ORIGIN, generation: GENERATION });
   assert.notEqual(replacement.ticket, minted.ticket);
   assert.notEqual(replacement.preparationId, minted.preparationId);
   assert.notEqual(replacement.bootId, minted.bootId);
@@ -498,7 +600,7 @@ check('global capacity is bounded across devices and expired records free space'
     records.push(f.mint({ deviceId }));
   }
   rejects(() => f.mint(), 'backup-preparation-busy');
-  f.api.revoke({ preparationId: records[0].preparationId, deviceId: 'synthetic-capacity-device-0' });
+  f.api.revoke({ preparationId: records[0].preparationId, deviceId: 'synthetic-capacity-device-0', sourceOrigin: f.sourceOrigin });
   f.mint();
   rejects(() => f.mint(), 'backup-preparation-busy');
   f.state.time += TTL_MS;
@@ -538,7 +640,7 @@ check('repeated entropy cannot collide with live tickets or preparation IDs or r
     if (replacement) {
       assert.notEqual(replacement.ticket, minted.ticket);
       assert.notEqual(replacement.preparationId, minted.preparationId);
-      assert.equal(f.api.status({ preparationId: replacement.preparationId, deviceId: OTHER_DEVICE }).phase, 'pending');
+      assert.equal(f.api.status({ preparationId: replacement.preparationId, deviceId: OTHER_DEVICE, sourceOrigin: f.sourceOrigin }).phase, 'pending');
     }
     assert.equal(f.api.status(f.owner(minted)).phase, 'pending');
     assert.equal(f.redeem(minted).token, TOKEN);
