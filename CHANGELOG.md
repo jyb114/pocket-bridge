@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0-preview.17 - Reliable local DSH startup
+
+- Fix the desktop console's Start DSH action by sending it through strict local controls with exact Host, Origin, protocol and port checks, without requiring a phone authentication cookie.
+- Report HTTP and malformed-response failures clearly instead of displaying a JSON parsing error. Share an in-flight start across repeated requests so they do not launch duplicate DSH processes.
+- Direct users to exit DSH from its own application when they want to close it.
+- Keep Preview.16 compatibility and live acceptance records historical. Targeted Preview.17 validation is pending and must be recorded separately.
+
 ## 1.0.0-preview.16 - Flash-1017 and safer mobile recovery
 
 - Recognize the verified native Windows DSH 0.2.1-rc.2 runtime and add that exact version to the optional plugin's engine and peer gates. Keep unknown versions blocked. Follow the connected host's model catalog; do not rewrite upstream model streams.

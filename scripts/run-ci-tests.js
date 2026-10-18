@@ -81,6 +81,7 @@ const SUITE = [
   ['test-proof-enforcement.js', ['--static-only'], '第三道门的源码检查；真网关实测在 CI 中显式跳过'],
   ['test-upload-handler.js', [], '上传处理器：路径穿越、来源、大小（自带服务）'],
   ['test-console-restart-wait.js', [], 'Console waits for a distinct gateway boot, reports blocked drains and keeps transport failures separate from completed restart (isolated DOM/GET; no gateway restart)'],
+  ['test-console-dsh-start.js', [], 'Local DSH Start uses strict Origin/Host/port admission, one in-flight dispatch and clear non-JSON errors (owned HTTP/DOM fixtures; no native launch)'],
   ['test-reload-gateway.js', [], 'Scoped reload verifies own installation, exact health PID/boot and local Origin before scheduled restart (isolated mock/owned HTTP; no native actions)', { platform: 'win32' }],
   ['test-daemon-operation-stop.js', [], 'Daemon admission leases fence delayed gateway/tunnel starts after stop and preserve uncertain child ownership (actual orchestration with synthetic HTTP/children; no native actions)'],
   ['test-tray-gateway-stop.js', [], 'Tray verifies scoped gateway identity, waits graceful shutdown and owns only pinned tunnel processes (PowerShell synthetic HTTP/CIM/process fixtures; no tray UI or real signals)', { platform: 'win32' }],

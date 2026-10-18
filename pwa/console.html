@@ -599,6 +599,7 @@ function applyI18n() {
 applyI18n();
 
 var state = { data: null, busy: false, restartWait: null };
+var targetStartPending = null;
 function $(id) { return document.getElementById(id); }
 
 function esc(s) {
@@ -824,20 +825,19 @@ function renderTargets(list) {
     btns.className = 'btns';
 
     if (t.installed && !t.running) {
-      btns.appendChild(mkBtn(tr('启动'), 'primary', function () {
+      var startButton = mkBtn(targetStartPending ? tr('正在启动 DSH…') : tr('启动'), 'primary', function () {
         targetAction(t.id, 'start', tr('启动 {name}', { name: t.short }));
-      }));
+      });
+      startButton.disabled = !!targetStartPending;
+      btns.appendChild(startButton);
     } else if (t.running) {
       btns.appendChild(mkBtn(tr('打开'), '', function () {
         window.open('/?target=dsh', '_blank', 'noopener,noreferrer');
       }));
-      btns.appendChild(mkBtn(tr('停止'), 'ghost', function () {
-        if (!confirm(tr('停止 {name} ？\n\n{note}', {
-          name: t.short,
-          note: tr('DSH 自己的窗口也会关掉。')
-        }))) return;
-        targetAction(t.id, 'stop', tr('停止 {name}', { name: t.short }));
-      }));
+      var quitNote = document.createElement('span');
+      quitNote.className = 'hint';
+      quitNote.textContent = tr('如需停止 DSH，请在 DSH 应用中退出。');
+      btns.appendChild(quitNote);
     }
     card.appendChild(btns);
     box.appendChild(card);
@@ -1582,16 +1582,42 @@ function waitForRestart(msg, startingBootId) {
   });
 }
 
+function readConsoleActionResponse(response) {
+  var denied = response.status === 401 || response.status === 403;
+  var failure = denied ? t('本机控制请求被拒绝。请从这台电脑的本机控制台重新打开页面。')
+    : t('本机服务返回了无效响应（HTTP {status}）。请刷新状态并检查本机日志；不要连续重试。', { status: response.status });
+  var type = response.headers && response.headers.get('content-type') || '';
+  if (!/^application\/json(?:\s*;|$)/i.test(type)) return Promise.reject(new Error(failure));
+  return response.json().catch(function () { throw new Error(failure); }).then(function (value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(failure);
+    if (!response.ok) throw new Error(typeof value.message === 'string' ? value.message : failure);
+    return value;
+  });
+}
+
 function targetAction(id, act, label) {
+  if (id !== 'dsh' || act !== 'start') return Promise.resolve({ ok: false });
+  if (targetStartPending) return targetStartPending;
   toast(t('正在{label}…', { label: label }));
-  fetch('/__targets/action', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ target: id, action: act })
-  }).then(function (r) { return r.json(); }).then(function (j) {
+  targetStartPending = Promise.resolve().then(function () {
+    return fetch('/__console/action', {
+      method: 'POST', cache: 'no-store', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'start-dsh' })
+    });
+  }).then(readConsoleActionResponse).then(function (j) {
     toast(j.message || (j.ok ? t('完成') : t('失败')));
-    load();
-  }).catch(function (e) { toast(t('失败：{msg}', { msg: e.message })); });
+    return load().then(function () { return j; });
+  }).catch(function (e) {
+    toast(t('失败：{msg}', { msg: e.message }));
+    return { ok: false };
+  }).then(function (result) {
+    targetStartPending = null;
+    renderTargets(state.data && state.data.targets);
+    return result;
+  });
+  renderTargets(state.data && state.data.targets);
+  return targetStartPending;
 }
 
 // ── 绑定 ─────────────────────────────────────────────────────────────────────
@@ -2108,6 +2134,10 @@ if (window.DshI18n && window.DshI18n.register) {
     'DSH 进程检测失败，尚无法确认是否正在运行。请刷新重试。': { en: 'DSH process discovery failed. Its running state could not be confirmed. Refresh to retry.', es: 'Falló la detección de procesos de DSH. No se pudo confirmar si está en marcha. Actualiza para reintentar.' },
     '没有找到，装好之后刷新': { en: 'Not found — install it, then refresh', es: 'No encontrado; instálalo y actualiza' },
     '启动': { en: 'Start', es: 'Iniciar' },
+    '正在启动 DSH…': { en: 'Starting DSH…', es: 'Iniciando DSH…' },
+    '如需停止 DSH，请在 DSH 应用中退出。': { en: 'To stop DSH, quit from the DSH application.', es: 'Para detener DSH, sal desde la aplicación DSH.' },
+    '本机控制请求被拒绝。请从这台电脑的本机控制台重新打开页面。': { en: 'Local control was denied. Reopen the local console on this computer.', es: 'Se denegó el control local. Vuelve a abrir la consola local en este ordenador.' },
+    '本机服务返回了无效响应（HTTP {status}）。请刷新状态并检查本机日志；不要连续重试。': { en: 'The local service returned an invalid response (HTTP {status}). Refresh the status and check local logs; do not retry repeatedly.', es: 'El servicio local devolvió una respuesta no válida (HTTP {status}). Actualiza el estado y revisa los registros locales; no repitas el intento continuamente.' },
     '启动 {name}': { en: 'Starting {name}', es: 'Iniciando {name}' },
     '停止': { en: 'Stop', es: 'Detener' },
     '停止 {name}': { en: 'Stopping {name}', es: 'Deteniendo {name}' },

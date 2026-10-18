@@ -3257,6 +3257,48 @@ function serveDshLiteAddresses(req, res) {
   });
 }
 
+let consoleDshStartPending = null;
+
+// Starting a desktop app is a local control, not a phone target action. Do not
+// grant the public /__targets/action route an authentication exemption.
+async function requestConsoleDshStart(req, body) {
+  const reply = (status, code, message) => ({ status, body: { ok: false, code, message } });
+  const denied = () => reply(403, 'invalid-source', 'Use this computer\'s local console to start DSH.');
+  if (!isLoopback(req) || req.method !== 'POST') return denied();
+  const headers = req.headers || {};
+  if (Object.keys(headers).some(name => /^(?:cf-|x-forwarded-)|^(?:forwarded|x-real-ip|true-client-ip|via|x-original-host)$/i.test(name))) return denied();
+  try {
+    const protocol = req.socket?.encrypted ? 'https:' : 'http:';
+    const expectedOrigin = `${protocol}//${headers.host}`;
+    const parsed = new URL(expectedOrigin);
+    const expectedPort = req.socket?.encrypted ? HTTPS_PORT : PORT;
+    if (parsed.origin !== expectedOrigin || !['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) ||
+        Number(parsed.port || (protocol === 'https:' ? 443 : 80)) !== expectedPort ||
+        headers.origin !== expectedOrigin || headers['sec-fetch-site'] === 'cross-site') return denied();
+  } catch (_) { return denied(); }
+  if (String(headers['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return reply(415, 'json-required', 'The local control requires a JSON request.');
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).length !== 1 || body.action !== 'start-dsh') {
+    return reply(400, 'invalid-start-request', 'Invalid DSH start request.');
+  }
+  if (desktopLifecycle.status().phase !== 'running') return reply(503, 'gateway-not-running', 'Wait for the bridge to finish restarting.');
+  if (consoleDshStartPending) return reply(409, 'dsh-start-in-progress', 'DSH startup is already in progress. Wait for the status to refresh.');
+  const operation = Promise.resolve().then(() => require('./targets.js').dsh.start(pickLang(req)));
+  consoleDshStartPending = operation;
+  try {
+    const result = await operation;
+    if (!result || typeof result.ok !== 'boolean' || typeof result.message !== 'string') throw Error('invalid-start-result');
+    return { status: 200, body: { ok: result.ok, code: result.ok ? 'dsh-start-complete' : 'dsh-start-failed',
+      message: result.message, ...(result.already === true ? { already: true } : {}) } };
+  } catch (_) {
+    return reply(503, 'dsh-start-failed', 'DSH could not be started. Check the local logs and current status before retrying.');
+  } finally {
+    if (consoleDshStartPending === operation) consoleDshStartPending = null;
+  }
+}
+
 function handleConsole(req, res, u) {
   if (u.pathname === '/__private-https') {
     if (!isLoopback(req)) {
@@ -3359,12 +3401,32 @@ function handleConsole(req, res, u) {
       return true;
     }
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let size = 0, tooLarge = false;
+    req.on('data', (c) => {
+      if (tooLarge) return;
+      size += c.length;
+      if (size > 65536) {
+        tooLarge = true; chunks.length = 0;
+        res.writeHead(413, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ok: false, code: 'console-request-too-large' }));
+        return;
+      }
+      chunks.push(c);
+    });
     // 这个回调里有 await（发测试通知要等推送结果），必须是 async
     req.on('end', async () => {
+      if (tooLarge || res.destroyed || res.writableEnded) return;
       let body = {};
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
       catch (err) { body = {}; }
+
+      if (body?.action === 'start-dsh') {
+        const result = await requestConsoleDshStart(req, body);
+        if (res.destroyed || res.writableEnded) return;
+        res.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(result.body));
+        return;
+      }
 
       if (body?.action === 'stop-gateway' || body?.action === 'restart-gateway') {
         const stopped = requestControlledGatewayAction(req, body);

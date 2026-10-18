@@ -126,6 +126,7 @@ function consoleRender(list, language = 'zh') {
     location: { reload() { throw Error('language change must not reload'); } },
     esc: value => String(value == null ? '' : value).replace(/</g, '&lt;'), desktopIcon: () => '',
     mkBtn: (label, cls, onclick) => ({ label, cls, onclick }),
+    targetStartPending: null,
     targetAction() { throw Error('rendering must not launch an action'); },
     window: { open() { throw Error('rendering must not navigate'); } } });
   page.window = page;
