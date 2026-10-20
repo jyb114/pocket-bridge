@@ -3452,7 +3452,12 @@
           note.setAttribute('role', 'status');
           bar.append(note);
         }
-        if (!draft.pending && !draft.uncertain) setTimeout(function () { if (input.isConnected) { input.focus(); input.select(); } }, 0);
+        if (!draft.pending && !draft.uncertain) setTimeout(function () {
+          // A delayed renderer task must not replace a selection the user has
+          // already made, or steal focus after they chose another control.
+          var active = document.activeElement;
+          if (input.isConnected && (!active || active === document.body || active === document.documentElement)) { input.focus(); input.select(); }
+        }, 0);
         return;
       }
 
@@ -4573,6 +4578,8 @@
       if (draft) {
         setTimeout(function () {
           if (!area.isConnected) return;
+          var active = document.activeElement;
+          if (active && active !== document.body && active !== document.documentElement) return;
           try {
             area.focus();
             var caret = Number.isSafeInteger(draft.caret) ? draft.caret : area.value.length;

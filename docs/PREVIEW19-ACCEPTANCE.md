@@ -18,6 +18,10 @@ pnpm operation downloaded the actual candidate archive, reported installation
 complete and enabled the component. All **186 installed archive members**
 were compared byte for byte with the verified candidate.
 
+This installation preceded the editor-focus correction described below and
+the addition of this acceptance document. Its 186-member archive is not
+presented as byte-identical to the final release package.
+
 The Settings > Pocket Bridge panel opened successfully. Start upgraded its
 stable managed gateway source from Preview.18 to Preview.19. Refresh confirmed
 that gateway running; Stop was confirmed through the visible control. Hashes
@@ -33,7 +37,7 @@ reply was replaced with a simulated successful response.
 
 A separate desktop Edge browser used the real production Quick HTTPS
 entrance at **390 by 650 pixels**. Production was still the installed
-Preview.18, whose mobile runtime this distribution-only change retains.
+Preview.18. These live observations preceded the Preview.19 editor-focus fix.
 This is not presented as a compiled Preview.19 installer acceptance.
 
 Through the visible controls, the browser added an existing isolated
@@ -61,7 +65,20 @@ in-memory regressions were rejected: missing readiness polling, retained
 faded nodes and early slow-load notification. Production banner code was not
 changed.
 
-The explicit npm distribution mode keeps the source checkout private and
+Release rechecking exposed a real delayed-focus race. In isolated Chromium,
+the user clicked and selected all queued-message text before the editor's
+pending focus callback ran. That callback collapsed the selection to the
+end, so replacement text appended to the old message. The inline-goal
+callback also selected a partially typed draft. Both original callbacks
+were reproduced with actual browser pointer and keyboard input. The fix
+respects an already focused control while retaining automatic focus for
+untouched editors; strict text-retention assertions are not weakened.
+The resulting 201-check browser suite passed three independent repeats.
+Four in-memory negative variants were rejected: removing either editor's
+user-focus protection or disabling either editor's untouched auto-focus.
+
+The explicit npm distribution mode keeps the source package marked
+`private: true` in the public repository and
 makes only the verified package stage publishable. Package, controller,
 managed-installation and publication-workflow checks remain separate from
 real UI evidence. A successful npm publication dry run does not establish

@@ -3,11 +3,12 @@
 ## 1.0.0-preview.19 - Prepare verified npm distribution
 
 - Add repository, homepage and issue-reporting metadata required to associate an npm package with this project.
-- Add an explicit `--npm` build mode that makes only the verified temporary distribution stage publishable. Keep the source checkout private and retain the existing public-file allowlist, source hashes, dependency closure and disabled install hooks.
+- Add an explicit `--npm` build mode that makes only the verified temporary distribution stage publishable. Keep the source package marked `private: true` and retain the existing public-file allowlist, source hashes, dependency closure and disabled install hooks; the repository remains public.
 - Preserve the package name, Cordis component, managed gateway directory and Windows upgrade identity. The normal GitHub plugin archive and Windows installer continue to use their existing packaging path.
 - Explain the distinction between website listing, a configured Discover index and actual npm publication. Public Discover availability still requires a publishable account, package-name permission, a real publication and a community index refresh.
 - Retain the admitted DSH versions and Preview.18's mobile UI. Distribution preparation does not expand runtime compatibility or establish physical-phone acceptance.
 - Make the isolated first-load banner regression use an independent virtual clock. Preserve strict visibility/removal assertions and verify timing boundaries without depending on a busy runner's wall-clock sleep.
+- Preserve the user's selection, typed text and chosen control when a queued-message or inline-goal editor's delayed focus callback runs. Restore untouched editors normally. Real Chromium input reproduced both failures before the fix; strict input-retention assertions remain in place.
 
 ## 1.0.0-preview.18 - More room for mobile conversations
 
