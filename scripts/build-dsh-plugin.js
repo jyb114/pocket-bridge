@@ -222,6 +222,8 @@ function npmCliPath() {
 }
 function buildPluginPackage(options) {
   if (!options?.outputDirectory) fail('Specify an output directory.');
+  const distribution = options.distribution === undefined ? 'github' : options.distribution;
+  if (!['github', 'npm'].includes(distribution)) fail('Unknown plugin distribution.');
   const root = path.resolve(options.root || path.join(__dirname, '..'));
   const output = path.resolve(options.outputDirectory);
   if (output === root || output.startsWith(root + path.sep)) fail('Artifacts must be outside the source checkout.');
@@ -236,7 +238,18 @@ function buildPluginPackage(options) {
   validateDependencyClosure(files, manifest);
   // Explicit files avoids npm's inferred ignore rules changing the package. This
   // modification lives only in the stage; the repository package stays intact.
-  files.set('package.json', Buffer.from(JSON.stringify({ ...manifest, files: [...selected, SOURCE_MANIFEST].sort() }, null, 2) + '\n'));
+  const stagedManifest = { ...manifest, files: [...selected, SOURCE_MANIFEST].sort() };
+  if (distribution === 'npm') {
+    if (manifest.private !== true) fail('The source checkout must remain private.');
+    if (manifest.repository?.type !== 'git' || manifest.repository?.url !== 'git+https://github.com/jyb114/pocket-bridge.git') {
+      fail('npm distribution requires the verified Pocket Bridge repository metadata.');
+    }
+    // Only the explicit, fully verified distribution stage is publishable.
+    // The community catalog currently resolves dist-tags.latest, even for previews.
+    stagedManifest.private = false;
+    stagedManifest.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public', tag: 'latest' };
+  }
+  files.set('package.json', Buffer.from(JSON.stringify(stagedManifest, null, 2) + '\n'));
   const source = { schemaVersion: 1, package: { name: manifest.name, version: manifest.version },
     files: [...files].map(([relative, bytes]) => ({ relative, size: bytes.length, sha256: sha256(bytes) })).sort((a, b) => a.relative.localeCompare(b.relative, 'en')) };
   files.set(SOURCE_MANIFEST, Buffer.from(JSON.stringify(source, null, 2) + '\n'));
@@ -266,7 +279,7 @@ function buildPluginPackage(options) {
     // Fail if a concurrent editor changed any input after the snapshot.
     for (const [relative, bytes] of original) if (!readRegular(root, relative).equals(bytes)) fail(`Source changed during packaging: ${relative}`);
     const artifactBytes = fs.readFileSync(stagedArchive);
-    const report = { schemaVersion: 1, artifact: artifactName, package: { name: manifest.name, version: manifest.version },
+    const report = { schemaVersion: 1, distribution, artifact: artifactName, package: { name: manifest.name, version: manifest.version },
       bytes: artifactBytes.length, sha256: sha256(artifactBytes), publicFileCount: checked.files.size,
       sourceManifestFileCount: checked.source.files.length, runtimeDependencyCount: checked.runtimeDependencyCount,
       installHooks: false, privateDataIncluded: false, archivedTargetsIncluded: false,
@@ -282,7 +295,8 @@ module.exports = { buildPluginPackage, allowedPublicPath, safeRelative, validate
   validateDependencyClosure, readArchive, verifyArchive, SOURCE_MANIFEST, sha256 };
 if (require.main === module) {
   try {
-    if (process.argv.length !== 3) fail('Usage: node scripts/build-dsh-plugin.js <artifact-directory>');
-    console.log(JSON.stringify(buildPluginPackage({ outputDirectory: process.argv[2] }), null, 2));
+    const npm = process.argv[2] === '--npm';
+    if (process.argv.length !== (npm ? 4 : 3)) fail('Usage: node scripts/build-dsh-plugin.js [--npm] <artifact-directory>');
+    console.log(JSON.stringify(buildPluginPackage({ outputDirectory: process.argv[npm ? 3 : 2], distribution: npm ? 'npm' : 'github' }), null, 2));
   } catch (error) { console.error(`Plugin packaging failed: ${error.message}`); process.exitCode = 1; }
 }

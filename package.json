@@ -1,6 +1,6 @@
 {
   "name": "pocket-bridge",
-  "version": "1.0.0-preview.18",
+  "version": "1.0.0-preview.19",
   "private": true,
   "description": "An unofficial DSH-only gateway for using DeepSeek Harness on your Windows PC from a phone browser.",
   "keywords": [
@@ -13,6 +13,14 @@
   ],
   "license": "MIT",
   "author": "Pocket Bridge contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jyb114/pocket-bridge.git"
+  },
+  "homepage": "https://github.com/jyb114/pocket-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/jyb114/pocket-bridge/issues"
+  },
   "engines": {
     "node": ">=24",
     "dsh": "0.1.7-rc.2 || 0.2.0-rc.2 || 0.2.1-rc.2"

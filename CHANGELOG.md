@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-preview.19 - Prepare verified npm distribution
+
+- Add repository, homepage and issue-reporting metadata required to associate an npm package with this project.
+- Add an explicit `--npm` build mode that makes only the verified temporary distribution stage publishable. Keep the source checkout private and retain the existing public-file allowlist, source hashes, dependency closure and disabled install hooks.
+- Preserve the package name, Cordis component, managed gateway directory and Windows upgrade identity. The normal GitHub plugin archive and Windows installer continue to use their existing packaging path.
+- Explain the distinction between website listing, a configured Discover index and actual npm publication. Public Discover availability still requires a publishable account, package-name permission, a real publication and a community index refresh.
+- Retain the admitted DSH versions and Preview.18's mobile UI. Distribution preparation does not expand runtime compatibility or establish physical-phone acceptance.
+- Make the isolated first-load banner regression use an independent virtual clock. Preserve strict visibility/removal assertions and verify timing boundaries without depending on a busy runner's wall-clock sleep.
+
 ## 1.0.0-preview.18 - More room for mobile conversations
 
 - Combine the phone's conversation heading and connection indicator into one navigation row. Keep session actions and activity controls in the labelled menu, and expose model, tool, permission and goal choices through an expandable composer control. Move the existing controls rather than duplicating their state; restore their desktop positions at wider widths.
