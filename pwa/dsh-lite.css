@@ -195,6 +195,26 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
 .panel-overlay .addr-row { border-color: var(--line); background: var(--surface); }
 .panel-overlay .addr-url { color: var(--muted); }
 .panel-overlay .addr-hint { color: #3d7a49; }
+.screen-overlay.panel-overlay.control-overlay { inset: auto; padding: 12px 12px var(--control-bottom, 112px); justify-content: flex-end; align-items: center; background: #10182738; }
+.control-card { display: flex; flex-direction: column; flex: 0 1 auto; width: min(100%, 440px); max-height: min(460px, var(--control-space, 70vh)); min-height: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); box-shadow: 0 16px 48px #10182730; overflow: hidden; }
+.control-card .screen-bar { flex: none; min-height: 42px; padding: 0 0 8px; gap: 8px; }
+.control-card .screen-bar strong { font-size: .96rem; }
+.control-card .screen-bar > .screen-action { flex: none; width: 44px; min-height: 44px; padding: 0; font-size: 1.35rem; border: 0; border-radius: 50%; }
+.control-card .panel-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 10px; }
+.control-card .panel-line { margin: 0 0 10px; font-size: .81rem; line-height: 1.5; }
+.control-card .pick-row { margin: 0 0 6px; padding: 10px; border-radius: 12px; font-size: .85rem; }
+.control-card .picker-back { min-height: 36px; margin-bottom: 8px; padding: 4px 8px; border: 0; border-radius: 9px; background: var(--surface); color: var(--accent); }
+.control-tabs { display: flex; gap: 4px; padding: 3px; margin-bottom: 12px; border-radius: 12px; background: var(--surface); }
+.control-tabs button { flex: 1; min-height: 38px; border: 0; border-radius: 9px; color: var(--muted); background: transparent; }
+.control-tabs button[aria-selected="true"] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 4px #10182714; }
+.control-card .goal-form { margin: 8px 0 0; gap: 8px; }
+.control-card .goal-form .goal-input { min-height: 72px; max-height: 120px; font-size: .88rem; }
+.control-card .files-status { margin: 8px 0 0; font-size: .81rem; }
+.control-card .plan-controls > .screen-action, .control-card .compact-run { width: 100%; }
+.backup-reminder-settings { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.backup-reminder-settings label { color: var(--ink); font-weight: 600; }
+.backup-reminder-settings select, .backup-reminder-settings input { width: 100%; max-width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); font: inherit; }
+.backup-reminder-settings .panel-line { margin: 0; font-size: .82rem; }
 /* 余额 / 连接地址面板（复用抓屏那层遮罩） */
 .panel-body { color: #e7eef7; font-size: .92rem; }
 .panel-line { margin: 0 0 10px; }

@@ -1,63 +1,111 @@
-# Release notes - 1.0.0-preview.19
+# Release notes - 1.0.0-preview.20
 
-Prepare a verified npm distribution without changing the running DSH protocol,
-and preserve user input when editing queued messages or goals. The source
-package remains marked `private: true`; the GitHub repository is public. Only an explicit
-`node scripts/build-dsh-plugin.js --npm <artifact-directory>` build makes its
-controlled temporary package stage publishable, with repository metadata,
-the public registry, access and distribution tag.
+Make the phone's conversation controls more compact and remove avoidable
+waits while preserving drafts and the existing encrypted connection.
 
-The npm candidate retains the same package identity, Cordis component and
-managed gateway location. Its public-file allowlist, source manifest, complete
-runtime dependency closure and disabled lifecycle hooks remain enforced.
-Normal GitHub archives and the Windows installer retain their existing build
-path. Existing pairing records, uploads and private state remain upgrade data.
+## Compact model, goal and plan controls
 
-## Discover availability
+Model and reasoning choices now share one compact card. Its back action
+returns to the model list without replacing the dialog. A successful picker
+choice closes after 150 ms instead of 700 ms; failed choices remain visible
+with their error.
 
-The community website accepts the GitHub release tarball. Its generated
-Discover index currently requires verified npm metadata, an exact version and
-a publication timestamp. These are separate distribution paths. A configured
-local test index or successful `npm publish --dry-run` is not a public npm
-publication and does not establish public Discover availability.
+Goal, plan and context-compaction controls use separate tabs. The message
+draft stays separate from goal input. Opening the goal tab no longer fetches
+plan selection and command lists; those reads start when the plan tab is
+opened. This removes unnecessary work rather than weakening runtime checks.
 
-The DSH custom plugin market must also be enabled and given a trusted index
-source. The stock host does not configure one by default. Read the complete
-[distribution instructions](docs/DSH-PLUGIN.md#preparing-an-npm-distribution)
-before publishing. Package-name permission and npm account authorization must
-be established separately from the GitHub account.
+Plan entry and exit actions cannot run concurrently. Closing or disposing
+the interface removes dialog listeners and clears its page-inert state, so
+a remounted page remains usable. A completed goal or stale context cannot
+be presented as a confirmed edit; uncertain text remains available for
+review and a fresh read.
+
+## Backup-address reminder frequency
+
+Choose every 1, 3 or 5 qualifying entries, a custom interval from 1 to 9,999,
+or never. The default is every entry. The preference and count belong to the
+current browser origin. Only a fresh navigation or reload counts, after
+authentication and encryption are ready. Reconnection, conversation changes
+and returning to an existing page do not add entries.
+
+Choosing **Never** disables all automatic popups, including changed-address notices.
+The manual backup panel remains available. A disabled backup route is
+reported as disabled with setup guidance, and unavailable browser storage
+is reported instead of promising a persistent interval. A copied backup
+address contains no credentials; a different origin still needs its own
+login and encryption setup. No connection or content protection is bypassed.
 
 ## Verification and compatibility
 
-Official npm DSH Web 0.2.1-rc.2 was operated in a separate Windows profile:
-enable the custom market, add the community index, search, add a clearly
-labelled local validation index, inspect the candidate, install its real
-archive through the host's pnpm operation, enable it, open Pocket Bridge
-Settings, start and diagnose the matching gateway, cancel and confirm Stop,
-then disable and re-enable the component. Local fixtures are not presented
-as a public registry listing. Model replies and transport responses are not
-fabricated. Version-specific final observations are recorded separately.
+The real candidate interface was operated against **DSH 0.2.1-rc.2** to
+select the account-provided Flash model and Off reasoning, retain the message
+draft, create/pause/clear a goal with independent state readbacks, and confirm
+plan entry and exit through readbacks. The real compaction attempt returned
+that it could not produce a useful summary, which the interface displayed
+as a failure. A model attempt also reported insufficient provider balance;
+no successful model reply is claimed for this round. A candidate-loopback
+send without a registered device proof was safely rejected rather than
+bypassing the prompt-state check.
+
+The complete isolated run passed **136 suites, with 0 skipped and 0 failed**;
+six live-only segments are explicitly excluded from that count. The strict
+public secret scan was clean. The 38-check compact-controls suite, 203-check
+actions suite and three backup suites passed. Controlled adapter results are
+kept separate from real DSH operations.
+
+The installed **Preview.19** public route separately accepted one QA message
+into history and cleared its draft, then displayed insufficient provider
+balance. Its backup later passed the same-boot reachability probe and actual
+browser preparation, including a new window's login, encrypted connection
+and stored state. These observations do not establish Preview.20 installation
+or a successful model answer. In the actual candidate at 390 by 650 pixels,
+every-three-entry reminders were also saved and checked through three real
+reloads: counts 4, 5 and 6 produced no popup, no popup and one popup. The
+manual panel reported that candidate's unsupported/disabled backup state
+honestly. Other frequency variants remain isolated-test evidence.
+Both local Preview.20 GitHub and npm distribution packages passed their
+public inventory and source-hash checks: 188 public members including the
+manifest, 187 source entries and 63 runtime dependencies, without lifecycle
+hooks, private files or archived integrations. The source remains
+`private: true`. Compiled Preview.20 installation and its post-installation
+production recheck remain unperformed in this record. See
+[Preview.20 acceptance](docs/PREVIEW20-ACCEPTANCE.md) for the exact boundaries.
 
 The exact host gates are unchanged. Optional plugin declarations for
-0.1.7-rc.2, 0.2.0-rc.2 and 0.2.1-rc.2 are distinct from rerunning every
-workflow on every host. The desktop baseline remains official 0.2.1-rc.2.
-Physical iPhone/Android and cellular acceptance remain separate from desktop
-browser phone viewports. See the [compatibility matrix](docs/DSH-COMPATIBILITY.md).
+0.1.7-rc.2, 0.2.0-rc.2 and 0.2.1-rc.2 do not establish that every workflow
+has been rerun on each host. This round makes no new physical iPhone/Android,
+cellular or old-wrapper compatibility claim. See the
+[compatibility matrix](docs/DSH-COMPATIBILITY.md).
 
 Personal notification scripts, account authorization and connection secrets
-are not part of the public source, npm package or Windows installer.
+remain outside the public source, npm package and Windows installer.
 
-The isolated first-load banner test now uses a deterministic virtual clock.
-It retains strict visibility/removal checks and adds timing boundaries. The
-production banner code is unchanged. The complete 135-suite isolated run
-passed; six live-only segments are explicitly excluded and are not counted
-as passed. Read the separate [Preview.19 acceptance record](docs/PREVIEW19-ACCEPTANCE.md).
+## Distribution status
 
-Delayed focus restoration no longer cancels a user's selection, selects a
-partially typed goal, or takes focus back from another control. Both queue
-and goal editors still restore focus when the user has not begun interacting.
-Real isolated Chromium input reproduced the original failures before the fix;
-these regressions are separate from the earlier live tunnel acceptance.
+The community website's Preview.19 GitHub tarball update has been submitted
+as [PR #8350](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/8350)
+and is awaiting review. Its website listing and the generated npm-backed
+Discover index are separate distribution paths.
+
+npm account authorization and publication remain pending. The explicit
+`node scripts/build-dsh-plugin.js --npm <artifact-directory>` build prepares
+a verified publishable stage; the source package remains `private: true`.
+A local test index, a successful installation from it, or
+`npm publish --dry-run` is not a public npm publication and does not establish
+name ownership or Discover availability. The existing public-file allowlist,
+source hashes, dependency closure, disabled hooks and private-state retention
+remain in place. Read the
+[distribution instructions](docs/DSH-PLUGIN.md#preparing-an-npm-distribution).
+
+## Previous release: 1.0.0-preview.19
+
+Prepared the explicit verified npm distribution path while retaining the
+normal GitHub archive and installer path. Real npm-host plugin installation,
+private-state retention, separate HTTPS phone-view operations and strict
+delayed-focus regressions remain recorded in
+[Preview.19 acceptance](docs/PREVIEW19-ACCEPTANCE.md). They are historical
+results, not a substitute for the final Preview.20 checks.
 
 ## Previous release: 1.0.0-preview.18
 

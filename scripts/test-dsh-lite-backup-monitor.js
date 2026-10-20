@@ -28,32 +28,32 @@ function address(f) { return f.ids.get('dsh-lite-backup-address').value; }
 let checks = 0;
 async function check(name, run) { await run(); checks++; console.log('PASS ' + name); }
 (async () => {
-  await check('closed main page notices B then C once each; unchanged health and reconnect never re-prompt', async () => {
+  await check('closed main page monitors B and C without extra popups; manual views show the latest address', async () => {
     const f = await start(); close(f);
-    await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 2); assert.equal(address(f), B + '/dsh-lite'); close(f);
+    await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), B + '/dsh-lite'); close(f);
     await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 2);
     f.setReady(false); f.control.update(); f.setReady(true); f.nextConnection(); f.control.update(); await flush();
     assert.equal(f.overlays, 2);
-    await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 3); assert.equal(address(f), C + '/dsh-lite');
+    await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 2); f.control.show(); await flush(); assert.equal(f.overlays, 3); assert.equal(address(f), C + '/dsh-lite');
     assert.equal(f.preparations, 0); assert.equal(f.opened.length, 0); assert.equal(f.copies.length, 0);
     assert.doesNotMatch(JSON.stringify([...f.storage.values()]), /SECRET|#|\/k\//);
   });
-  for (const kind of ['same URL new generation', 'new URL same generation']) await check(kind + ' is a new notice version', async () => {
+  for (const kind of ['same URL new generation', 'new URL same generation']) await check(kind + ' updates the manual warning without bypassing reminder frequency', async () => {
     const f = await start(); close(f);
     await poll(f, data(f, kind.startsWith('same') ? origin : B, kind.startsWith('same') ? 'b' : 'a'));
-    assert.equal(f.overlays, 2); assert.equal(f.ids.get('dsh-lite-backup-changed').hidden, false);
+    assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(f.ids.get('dsh-lite-backup-changed').hidden, false);
   });
   await check('open panel updates in place and closing that version suppresses only that version', async () => {
     const f = await start(); await poll(f, data(f, B, 'b'));
     assert.equal(f.overlays, 1); assert.equal(address(f), B + '/dsh-lite'); close(f);
     await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 1);
-    await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 2);
+    await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 1);
   });
   await check('backup current entry symmetrically watches rebuilt primary', async () => {
     const f = await start({ origin }); close(f); f.tick(20000);
     const changed = data(f); changed.tunnels.primary = { ...primarySlot, generation: generation('d'), origin: B, url: B + '/dsh-lite', checkedAt: f.now };
     f.setData(changed); f.control.update(); await flush();
-    assert.equal(f.overlays, 2); assert.equal(address(f), B + '/dsh-lite'); assert.notEqual(address(f), origin + '/dsh-lite');
+    assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), B + '/dsh-lite'); assert.notEqual(address(f), origin + '/dsh-lite');
   });
   await check('source-only generation replacement invalidates preparation without alternate-change popup', async () => {
     const f = await start(); f.setPrepared({ phase: 'prepared', origin, generation: generation('a'), message: 'Prepared fixture' }); close(f);
@@ -67,17 +67,17 @@ async function check(name, run) { await run(); checks++; console.log('PASS ' + n
     assert.equal(f.overlays, 1); await poll(f, data(f)); assert.equal(f.overlays, 1);
     f.control.show(); await flush(); assert.match(f.ids.get('dsh-lite-backup-status').textContent, /尚未验证/);
   });
-  await check('unavailable then rebuilt generation prompts, without claiming prepared', async () => {
+  await check('unavailable then rebuilt generation stays quiet; manual view never claims prepared', async () => {
     const f = await start(); close(f); const bad = data(f); bad.tunnels.backup.phase = 'rebuilding';
     await poll(f, bad); assert.equal(f.overlays, 1);
-    await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 2); assert.match(f.ids.get('dsh-lite-backup-status').textContent, /尚未验证/);
+    await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.match(f.ids.get('dsh-lite-backup-status').textContent, /尚未验证/);
   });
-  await check('another modal defers B and coalesces C; only latest C is shown', async () => {
+  await check('updates behind another modal stay quiet; a manual view shows latest C', async () => {
     const f = await start(); close(f); f.external(true);
     await poll(f, data(f, B, 'b')); assert.equal(f.overlays, 1);
     await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 1);
     f.external(false); f.control.update(); await flush();
-    assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
+    assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
   });
   for (const oldResult of ['success', 'failure']) await check('A→B→C out-of-order ' + oldResult + ' cannot overwrite C or restore old candidate', async () => {
     const f = await start(); close(f); f.tick(20000);
@@ -101,8 +101,8 @@ async function check(name, run) { await run(); checks++; console.log('PASS ' + n
     f.control.update(); await flush(); const pending = f.reads.at(-1);
     f.visibility(true); await flush(); assert.equal(pending.init.signal.aborted, true); assert.equal(f.timers.size, 0);
     const count = f.reads.length; f.tick(120000); f.control.update(); await flush(); assert.equal(f.reads.length, count);
-    f.setData(data(f, C, 'd')); f.visibility(false); await flush(); assert.equal(address(f), C + '/dsh-lite');
-    resolveB(); await flush(); assert.equal(address(f), C + '/dsh-lite'); assert.equal(f.overlays, 2);
+    f.setData(data(f, C, 'd')); f.visibility(false); await flush(); assert.equal(f.overlays, 1);
+    resolveB(); await flush(); assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(address(f), C + '/dsh-lite'); assert.equal(f.overlays, 2);
   });
   await check('visible heartbeat is single-flight and bounded at 20 seconds on success', async () => {
     const f = await start(); close(f); const count = f.reads.length;
@@ -117,18 +117,18 @@ async function check(name, run) { await run(); checks++; console.log('PASS ' + n
       const count = f.reads.length; f.tick(delay - 1); f.control.update(); await flush(); assert.equal(f.reads.length, count);
       f.tick(1); f.control.update(); await flush(); assert.equal(f.reads.length, count + 1); assert.equal(f.overlays, 1);
     }
-    f.tick(120000); f.setData(data(f, B, 'b')); f.control.update(); await flush(); assert.equal(f.overlays, 2);
+    f.tick(120000); f.setData(data(f, B, 'b')); f.control.update(); await flush(); assert.equal(f.overlays, 1);
   });
-  await check('disabled clears deferred new version and polls slowly; explicit re-enable notices latest', async () => {
+  await check('disabled state polls slowly; explicit re-enable updates manual view without another popup', async () => {
     const f = await start(); close(f); f.external(true); await poll(f, data(f, B, 'b'));
     await poll(f, data(f, B, 'b', { enabled: false })); f.external(false); f.control.update(); await flush(); assert.equal(f.overlays, 1);
     const count = f.reads.length; await poll(f, data(f, C, 'd'), 59999); assert.equal(f.reads.length, count);
-    f.tick(1); f.control.update(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
+    f.tick(1); f.control.update(); await flush(); assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
   });
   await check('read failure clears a deferred B; later current C is the only alert', async () => {
     const f = await start(); close(f); f.external(true); await poll(f, data(f, B, 'b'));
     await poll(f, Error('failed refresh')); f.external(false); f.control.update(); await flush(); assert.equal(f.overlays, 1);
-    await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
+    await poll(f, data(f, C, 'd')); assert.equal(f.overlays, 1); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
   });
   await check('poll hides stale manual selection candidate; timeout clears and late response cannot restore it', async () => {
     const f = await start(); f.tick(20000); const done = f.deferRead(data(f, B, 'b')); f.control.update(); await flush();
@@ -149,11 +149,11 @@ async function check(name, run) { await run(); checks++; console.log('PASS ' + n
     const bad = data(f, B, 'b'); bad.tunnels.primary.origin = 'https://unknown.trycloudflare.com';
     await poll(f, bad); assert.equal(f.overlays, 1); assert.equal(f.copies.length, 0);
   });
-  await check('overdue deferred B is revalidated before any popup and only C appears', async () => {
+  await check('overdue monitor result stays quiet and a manual view revalidates latest C', async () => {
     const f = await start(); close(f); f.external(true); await poll(f, data(f, B, 'b'));
     f.tick(20000); const done = f.deferRead(data(f, C, 'd')); f.external(false); f.control.update();
     await flush(); assert.equal(f.overlays, 1, 'do not flash overdue B before its recheck');
-    done(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
+    done(); await flush(); assert.equal(f.overlays, 1); f.setData(data(f, C, 'd')); f.control.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite');
   });
   await check('unresolved clipboard permission cannot suspend new-version monitoring', async () => {
     const f = await start(); let done;
@@ -198,10 +198,11 @@ async function check(name, run) { await run(); checks++; console.log('PASS ' + n
     const f = await start({ data: Error('initial fixture failure') }); assert.equal(f.overlays, 0);
     await poll(f, data(f)); assert.equal(f.overlays, 1); assert.equal(address(f), origin + '/dsh-lite');
   });
-  await check('document-wide shown version survives remount but does not hide a later version', async () => {
-    const f = await start(); close(f); await poll(f, data(f, B, 'b')); close(f); f.control.dispose();
-    const next = f.mount(); next.update(); await flush(); assert.equal(f.overlays, 2);
-    f.tick(20000); f.setData(data(f, C, 'd')); next.update(); await flush(); assert.equal(f.overlays, 3); next.dispose();
+  await check('document-wide frequency survives remount while manual view still receives later versions', async () => {
+    const f = await start(); close(f); await poll(f, data(f, B, 'b')); f.control.dispose();
+    const next = f.mount(); next.update(); await flush(); assert.equal(f.overlays, 1);
+    f.tick(20000); f.setData(data(f, C, 'd')); next.update(); await flush(); assert.equal(f.overlays, 1);
+    next.show(); await flush(); assert.equal(f.overlays, 2); assert.equal(address(f), C + '/dsh-lite'); next.dispose();
   });
   console.log(`${checks} visible-page backup-monitor scenarios passed (isolated fixtures only).`);
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

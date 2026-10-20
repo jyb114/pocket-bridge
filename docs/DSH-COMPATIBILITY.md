@@ -1,12 +1,23 @@
 # DSH compatibility and actual test coverage
 
-Updated 2026-10-18 (UTC), preview.18. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime. Older rows below describe their original acceptance runs; they are not all rerun for each new release. Preview.18 changes the Lite layout and public asset loading; it does not expand the admitted DSH versions. Its focused results are recorded in [Preview.18 acceptance](PREVIEW18-ACCEPTANCE.md).
+Updated 2026-10-20 (UTC), Preview.20 candidate. New Bridge releases focus on DSH. Earlier GitHub installers remain historical releases; their Codex or Dot features are not part of the new DSH-only runtime. Older rows below describe their original acceptance runs; they are not all rerun for each new release. Preview.20 changes compact controls and local backup reminder preferences; it does not expand the admitted DSH versions. Its observed results and pending checks are recorded in [Preview.20 acceptance](PREVIEW20-ACCEPTANCE.md). Preview.18's layout and public asset loading results remain in [Preview.18 acceptance](PREVIEW18-ACCEPTANCE.md).
 
 Version detection selects an adapter after checking the local runtime and its observed protocol. A recognized version, a running service, or a successful automated fixture is not proof that every feature works. The exact distribution and the operated workflow matter.
 
 Preview.19 adds verified npm distribution preparation, not additional admitted
 runtime versions. Its actual npm Web 0.2.1-rc.2 installation and separate
 HTTPS phone-view recheck are recorded in [Preview.19 acceptance](PREVIEW19-ACCEPTANCE.md).
+
+The Preview.20 candidate was operated against the actual **DSH 0.2.1-rc.2**
+runtime. The visible controls selected the account-provided Flash model and
+Off reasoning while preserving the message draft. Goal creation, pause and
+clear returned active, paused and null readbacks; plan entry and exit were
+also confirmed by readback. Compaction returned an actual failure to produce
+a useful summary, and a model attempt returned insufficient provider balance;
+neither is counted as successful output. These observations are separate from isolated browser fixtures;
+this round does not establish physical iPhone/Android, cellular, old-version
+or universal feature compatibility. npm publication still requires account
+authorization; no public Discover availability is claimed.
 
 ## Desktop baseline
 

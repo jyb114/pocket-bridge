@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-preview.20 - Faster compact conversation controls
+
+- Keep model and reasoning choices in one compact card with a back action instead of replacing the dialog. Close successful picker choices after 150 ms rather than 700 ms.
+- Separate goal, plan and context-compaction tabs. Preserve the message draft independently from goal input, and fetch plan selection and command lists only when the plan tab is opened.
+- Serialize plan entry and exit actions. Reject stale or completed-goal confirmation, retain uncertain input for review, and clean up dialog listeners and page-inert state during controller disposal.
+- Add backup-address reminder choices for every 1, 3 or 5 qualifying entries, a custom 1-9,999 interval, or never. Save preferences and counts per browser origin; count only a fresh navigation or reload after authentication and encryption are ready. Reconnection, conversation changes and returning to the page do not count. Choosing **Never** also suppresses automatic changed-address notices; the manual panel remains available. Report disabled backup service and unavailable browser storage honestly.
+- Keep exact DSH admission and encrypted content boundaries unchanged. Record actual candidate operations on DSH 0.2.1-rc.2 separately from isolated regressions, the observed compaction/provider failures, and untested physical iPhone/Android behavior in [Preview.20 acceptance](docs/PREVIEW20-ACCEPTANCE.md).
+- Keep npm publication pending account authorization. The community website's Preview.19 tarball update is submitted as [PR #8350](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/8350), pending review; this does not establish public Discover availability.
+
 ## 1.0.0-preview.19 - Prepare verified npm distribution
 
 - Add repository, homepage and issue-reporting metadata required to associate an npm package with this project.

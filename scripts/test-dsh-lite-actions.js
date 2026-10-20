@@ -133,9 +133,11 @@ async function run() {
     await select('First fixture');
     await page.eval(`document.getElementById('message-input').value='Preserved action draft';document.getElementById('message-input').dispatchEvent(new Event('input',{bubbles:true}))`);
     await pointer('[data-kind="goal"]');
-    await wait(`!!document.querySelector('.plan-controls button')`);
+    check(await page.eval(`!!document.querySelector('.control-overlay .control-card')`), true, 'conversation controls stay in a compact in-page card');
+    check(await page.eval(`document.querySelector('.control-card').getBoundingClientRect().height<innerHeight*.8`), true, 'controls retain visible conversation space');
+    await pointer('[data-control-tab="compact"]');
     await page.eval(`__actions.holdList=true`);
-    await pointer('.screen-overlay button', '压缩上下文');
+    await pointer('.compact-run');
     await wait(`__actions.resolvers.length===1`);
     await close();
     await select('Second fixture');
@@ -145,16 +147,16 @@ async function run() {
     check(await page.eval(`document.getElementById('message-input').value`), 'Preserved action draft', 'canceled command admission preserves its conversation draft');
 
     await pointer('[data-kind="goal"]');
-    await wait(`!!document.querySelector('.plan-controls button')`);
+    await pointer('[data-control-tab="compact"]');
     await page.eval(`__actions.result={result:{kind:'failure',text:''}}`);
-    await pointer('.screen-overlay button', '压缩上下文');
+    await pointer('.compact-run');
     await wait(`document.querySelector('.goal-compact-result')?.textContent.includes('失败')`);
     check((await commands()).at(-1), ['command', 's1', '/compact'], 'compact uses the exact captured conversation');
     check(await page.eval(`document.querySelector('.goal-compact-result').textContent.includes('完成')`), false, 'empty failure text must never become a completed compact');
     await page.eval(`__actions.result={}`);
-    await pointer('.screen-overlay button', '压缩上下文');
-    await wait(`document.querySelectorAll('.goal-compact-result').length===2&&document.querySelectorAll('.goal-compact-result')[1].textContent.includes('未确认')`);
-    match(await page.eval(`document.querySelectorAll('.goal-compact-result')[1].textContent`), /未确认/, 'an unrecognized command response is explicitly unconfirmed');
+    await pointer('.compact-run');
+    await wait(`document.querySelectorAll('.goal-compact-result').length===1&&document.querySelector('.goal-compact-result').textContent.includes('未确认')`);
+    match(await page.eval(`document.querySelector('.goal-compact-result').textContent`), /未确认/, 'an unrecognized command response is explicitly unconfirmed without accumulating result panels');
     await close();
 
     await pointer('[data-kind="perm"]');
