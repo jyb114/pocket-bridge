@@ -14,15 +14,23 @@ offering a connection or changing the gateway state.
 ## Installation
 
 Install a tested release tarball through your DSH plugin manager. Direct
-tarball installation does not require npm publication. Preview.18's versioned release URL is:
+tarball installation does not require npm publication. After Preview.20 is
+published, its versioned release URL is:
 
 ```text
-dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.18/pocket-bridge-1.0.0-preview.18.tgz
+dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.20/pocket-bridge-1.0.0-preview.20.tgz
 ```
 
 Use the exact versioned asset from [Releases](https://github.com/jyb114/pocket-bridge/releases).
 Source changes and a marketplace listing are separate from a published asset.
 The marketplace catalog must point to the same release tarball and checksum.
+
+The community website's Preview.19 catalog update is submitted as
+[PR #8350](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/8350)
+and is awaiting review. npm authorization and publication remain pending.
+That website submission does not publish a package or add it to the generated
+npm-backed Discover index. Preview.20's mobile controls do not change these
+distribution requirements or the exact supported host declarations below.
 
 That command targets an npm DSH Web profile. A desktop application's plugin
 manager owns its own profile: install the same tarball through that manager

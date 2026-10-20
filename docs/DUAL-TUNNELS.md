@@ -34,17 +34,26 @@ executable or apparent target matches.
 
 ## Saving and using the backup
 
-On each new mobile-page visit and full reload, after the current login and
-end-to-end encryption are verified, the page reminds you to check and save the
-other entry. Disabled installations stay quiet. The authenticated visible page
-continues checking after the reminder is closed. A newly observed other-entry
-origin or generation prompts once for that version, including a new generation
-at the same address. Closing one version does not suppress the next version.
-An already open panel updates in place; another active dialog is not replaced,
-and deferred changes are coalesced/rechecked before showing the latest value.
-Internal conversation changes, SPA navigation, reconnection and foreground
-restoration do not repeat a reminder for the same observed version. The Settings
-entry remains available for a manual check. Copy requires your tap.
+Choose an automatic reminder after every 1, 3 or 5 qualifying entries, a custom
+interval from 1 to 9,999, or never. The default is every entry. A fresh
+mobile-page navigation or full reload counts once only after the current
+login and end-to-end encryption are verified. Preferences and counts are
+local to this browser origin. Internal conversation changes, SPA navigation,
+reconnection, foreground restoration and controller remounts do not count.
+
+Choosing **Never** suppresses all automatic popups, including a newly observed
+other-entry origin or generation. With another interval, an address change
+does not bypass the chosen frequency or open a second reminder during the
+same entry. The Settings entry remains available for a manual check in every
+mode. A disabled installation is identified as disabled with setup guidance,
+and an unavailable route is not presented as ready. If browser storage cannot
+retain the preference or count, the panel explains that the interval may
+reset after a reload; a chosen **Never** remains quiet for the current page.
+
+The authenticated visible page continues checking after the reminder is
+closed. An already open panel updates in place; another active dialog is not
+replaced, and deferred changes are coalesced/rechecked before showing the
+latest value. Copy requires your tap.
 
 Checks reuse the visible page's existing ten-second heartbeat: normally at least
 20 seconds after a successful check, 60 seconds while disabled, and 20/40/80/120
@@ -62,8 +71,9 @@ current entry, without swapping the daemon's slots or affecting other devices.
 An old or unknown origin is not guessed. The current address is never offered
 as its own fallback. When the other slot is unavailable, the page says there
 is no other reachable address. When that slot returns or rebuilds, the next
-successful check shows its current address; a new origin/generation gets a new
-reminder and still requires explicit preparation. A newly observed identity or unavailable state clears any
+successful check shows its current address. A new origin/generation still
+requires explicit preparation, but cannot bypass the reminder frequency.
+A newly observed identity or unavailable state clears any
 previous preparation claim; returning to an old identity cannot restore it.
 Uncertain/failed status reads clear address candidates rather than presenting a
 cached address as current. Copy rechecks metadata; a changed or closed intent

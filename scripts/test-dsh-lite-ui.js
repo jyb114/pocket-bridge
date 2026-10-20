@@ -1867,6 +1867,7 @@ async function run() {
     })()`);
     await new Promise(resolve => setTimeout(resolve, 50));
     await planPage.eval(`document.querySelector('.composer-pick[data-kind="goal"]').click()`);
+    await planPage.eval(`document.querySelector('[data-control-tab="plan"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 60));
     state = await planPage.eval(`({exit:[...document.querySelectorAll('.plan-controls button')].some(b=>b.textContent==='退出计划模式'),
       textarea:!!document.querySelector('.goal-form textarea')})`);
@@ -1879,6 +1880,7 @@ async function run() {
     await planPage.eval(`(() => { document.querySelector('.screen-overlay .screen-action').click();
       window.DshLiteAdapter.readSelection = async () => ({plan:{active:false,pending:true}});
       document.querySelector('.composer-pick[data-kind="goal"]').click(); })()`);
+    await planPage.eval(`document.querySelector('[data-control-tab="plan"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 60));
     state = await planPage.eval(`document.querySelector('.plan-controls').textContent`);
     assert.match(state, /下一步骤生效/, '计划模式待生效时不能当作已经切换完毕');
@@ -1887,6 +1889,7 @@ async function run() {
       window.DshLiteAdapter.readSelection = async () => ({plan:null});
       window.DshLiteAdapter.listCommands = async () => [{name:'compact'}];
       document.querySelector('.composer-pick[data-kind="goal"]').click(); })()`);
+    await planPage.eval(`document.querySelector('[data-control-tab="plan"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 60));
     assert.match(await planPage.eval(`document.querySelector('.plan-controls').textContent`), /不支持计划模式/,
       '无 plan 插件的精简工具配置应明确说不支持');
@@ -1916,6 +1919,7 @@ async function run() {
       '旧版缺少工具配置列表时，点“模式”应明确说明不支持');
     await legacy.eval(`document.querySelector('.screen-overlay .screen-action').click();
       document.querySelector('.composer-pick[data-kind="goal"]').click()`);
+    await legacy.eval(`document.querySelector('[data-control-tab="plan"]').click()`);
     await new Promise(resolve => setTimeout(resolve, 40));
     state = await legacy.eval(`(() => { const panel=document.querySelector('.screen-overlay');
       return {text:panel.textContent,plan:panel.querySelector('.plan-controls')?.textContent,
@@ -1926,8 +1930,8 @@ async function run() {
     assert.match(state.plan || state.text, /不支持.*计划模式/,
       '缺少 runCommand 时，计划区应说明无法切换计划模式');
     assert.equal(state.enabledPlan, 0, '不能展示可点击但注定报错的计划按钮');
-    await legacy.eval(`[...document.querySelectorAll('.screen-overlay button')]
-      .find(x=>x.textContent.includes('压缩上下文')).click()`);
+    await legacy.eval(`document.querySelector('[data-control-tab="compact"]').click();
+      document.querySelector('.compact-run').click()`);
     await new Promise(resolve => setTimeout(resolve, 40));
     assert.match(await legacy.eval(`document.querySelector('.goal-compact-result')?.textContent || ''`),
       /不支持.*压缩上下文/, '缺少 runCommand 时，压缩操作应说明版本不支持');

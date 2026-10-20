@@ -141,6 +141,7 @@ const SUITE = [
   ['test-dsh-lite-ui.js', [], '轻量 DSH 手机界面和多题交互（隔离浏览器）'],
   ['test-browser-cleanup-scope.js', [], 'Browser test cleanup touches only its owned connection, child process and profile; never global window titles'],
   ['test-dsh-lite-actions.js', [], 'Actual isolated Chromium project creation, busy admission, encrypted adapter file/image actions and preserved drafts'],
+  ['test-dsh-lite-controls.js', [], 'Compact model/effort and conversation-control cards preserve drafts, serialize plan commands and release modal state on disposal (isolated Chromium)'],
   ['test-dsh-lite-switch.js', [], '官方 DSH 页面上的轻量模式按钮保留完整认证和加密地址'],
   ['test-review-boundaries.js', [], '历史状态与加密失败边界（隔离，不碰真会话）'],
   ['test-narrow-kill.js', ['--static-only'], '窄杀进程：源码检查；本机 cloudflared 查询显式跳过'],
@@ -185,7 +186,7 @@ for (const [file, args, why, environment] of SUITE) {
 
   // 「环境里没有这个东西」和「测试失败」是两回事，不能混。
   // 混了的话，CI 要么永远红，要么逼着人把真失败也当成环境问题忽略掉。
-  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js', 'test-dsh-lite-backup-browser.js', 'test-backup-preparation-browser.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
+  const envMissing = ['test-dsh-lite-ui.js', 'test-dsh-lite-actions.js', 'test-dsh-lite-controls.js', 'test-dsh-lite-backup-browser.js', 'test-backup-preparation-browser.js'].includes(file) && /找不到 Edge 或 Chrome/.test(out);
   if (['test-proof-enforcement.js', 'test-dict-trim.js', 'test-prove-injection.js',
     'test-device-renewal.js', 'test-narrow-kill.js', 'test-pair-key-carry.js'].includes(file)) {
     skippedLiveSegments++;

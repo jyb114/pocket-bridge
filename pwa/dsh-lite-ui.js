@@ -191,8 +191,24 @@
       win.__dshLiteBackupDocumentState = backupDocumentState;
     }
     if (!Array.isArray(backupDocumentState.notified)) backupDocumentState.notified = [];
-    var disposed = false, loading = false, serial = 0, panel = null, nodes = null, snapshot = null;
+    var reminderKey = 'dsh-lite-backup-reminder-v1';
+    if (!backupDocumentState.reminder) {
+      backupDocumentState.reminder = { every: 1, count: 0, persistent: true };
+      try {
+        var storedReminder = win.localStorage.getItem(reminderKey);
+        if (storedReminder) {
+          var parsedReminder = JSON.parse(storedReminder);
+          if (parsedReminder && parsedReminder.version === 1 && Number.isSafeInteger(parsedReminder.every) &&
+              parsedReminder.every >= 0 && parsedReminder.every <= 9999 && Number.isSafeInteger(parsedReminder.count) && parsedReminder.count >= 0) {
+            backupDocumentState.reminder.every = parsedReminder.every;
+            backupDocumentState.reminder.count = parsedReminder.count;
+          }
+        }
+      } catch (_) { backupDocumentState.reminder.persistent = false; }
+    }
+    var disposed = false, loading = false, serial = 0, panel = null, nodes = null, snapshot = null, reminderNotice = '';
     var checking = null, nextCheck = 0, failures = 0, readSerial = 0, readCancels = new Set(), copyWaitCancel = null;
+    var focusPromptTimer = null, promptAfter = 0;
     var targetIdentity = '';
     var autoValue = null, changed = false, previous = '', storageKey = 'dsh-lite-backup-generation';
     var preparation = win.PocketBridgeBackupPrepare && win.PocketBridgeBackupPrepare.createSource({
@@ -209,6 +225,37 @@
       return node;
     }
     function ready() { return !disposed && options.ready() === true; }
+    function persistReminder() {
+      var preference = backupDocumentState.reminder;
+      try {
+        var encoded = JSON.stringify({ version: 1, every: preference.every, count: preference.count });
+        win.localStorage.setItem(reminderKey, encoded);
+        preference.persistent = win.localStorage.getItem(reminderKey) === encoded;
+      } catch (_) { preference.persistent = false; }
+      return preference.persistent;
+    }
+    function countDocumentEntry() {
+      if (!backupDocumentState.eligible || backupDocumentState.counted) return;
+      backupDocumentState.counted = true;
+      var preference = backupDocumentState.reminder;
+      preference.count = preference.count < Number.MAX_SAFE_INTEGER ? preference.count + 1 : 1;
+      var persisted = persistReminder();
+      // A failed write cannot promise a multi-reload interval. Fail visibly to
+      // the default entry reminder; an explicit never choice remains quiet.
+      backupDocumentState.entryDue = preference.every > 0 && (!persisted || preference.count % preference.every === 0);
+    }
+    function renderReminderSettings(message) {
+      if (!nodes || !nodes.reminderSummary) return;
+      if (typeof message === 'string') reminderNotice = message;
+      var preference = backupDocumentState.reminder;
+      nodes.reminderSummary.textContent = preference.every === 0 ?
+        t('已关闭所有自动提醒。请从设置中手动查看备用地址；地址更新也不会自动弹出。') :
+        t('每 {n} 次完整进入或刷新后提醒一次；切换对话、重连和返回页面不计数。').replace('{n}', String(preference.every));
+      nodes.reminderFeedback.textContent = reminderNotice ? t(reminderNotice) : '';
+      nodes.reminderFeedback.setAttribute('data-i18n', reminderNotice);
+      nodes.reminderFeedback.hidden = !reminderNotice;
+      nodes.reminderStorage.hidden = preference.persistent;
+    }
     function safeSlot(data) {
       var tunnels = data && data.tunnels;
       var result = { enabled: !!(tunnels && tunnels.enabled === true), supported: !!(tunnels && tunnels.supported === true),
@@ -256,16 +303,16 @@
       if (id && backupDocumentState.notified.indexOf(id) < 0) backupDocumentState.notified.push(id);
     }
     function accept(value) {
-      var observed = backupDocumentState.observed, id = reminderIdentity(value);
+      countDocumentEntry();
       backupDocumentState.observed = true;
       snapshot = value; observeTarget(value); remember(value);
       failures = 0; nextCheck = Date.now() + (value.enabled ? 20000 : 60000);
       autoValue = null;
-      if (!value.enabled) { backupDocumentState.consumed = true; return; }
       if (panel && panel.isConnected) { backupDocumentState.consumed = true; markNotified(value); return; }
-      if ((backupDocumentState.eligible && !backupDocumentState.consumed) ||
-          (observed && id && backupDocumentState.notified.indexOf(id) < 0)) autoValue = value;
-      else if (!observed) markNotified(value); // Restoration/unknown navigation establishes a quiet baseline.
+      // Frequency governs every automatic popup, including a changed address.
+      // Monitoring still refreshes open/manual views without another prompt.
+      if (backupDocumentState.reminder.every > 0 && backupDocumentState.eligible &&
+          backupDocumentState.entryDue && !backupDocumentState.consumed) autoValue = value;
     }
     function failedRead() {
       snapshot = null; autoValue = null; observeTarget(null);
@@ -276,6 +323,10 @@
       readSerial++;
       if (copyWaitCancel) copyWaitCancel();
       Array.from(readCancels).forEach(function (cancel) { cancel(); });
+    }
+    function cancelFocusPrompt() {
+      if (focusPromptTimer !== null) win.clearTimeout(focusPromptTimer);
+      focusPromptTimer = null;
     }
     function observeTarget(value) {
       var identity = identityFor(value);
@@ -305,6 +356,8 @@
       if (nodes.prepare) nodes.prepare.disabled = !valid || loading || !preparation || preparation.busy() || new URL(snapshot.url).origin === entryOrigin;
       nodes.warning.hidden = !changed;
       nodes.using.hidden = !(snapshot && snapshot.currentRole === 'backup');
+      if (nodes.enableHelp) nodes.enableHelp.hidden = !!valid;
+      renderReminderSettings();
       nodes.current.textContent = snapshot && snapshot.currentUrl ? t('当前使用入口：') + ' ' + snapshot.currentUrl : '';
       nodes.current.hidden = !nodes.current.textContent;
       var preparationResult = preparation && preparation.result();
@@ -315,7 +368,7 @@
         !ready() ? '请先完成当前页面的登录与加密验证。' :
         snapshot && snapshot.code === 'tunnel-migration-unconfirmed' ? '当前主通道的管理归属未确认，备用启动已暂停以保留现有连接。请在电脑上先“停止桥接”，确认停止后再“启动桥接”，然后重新检查；期间手机连接会中断。' :
         snapshot && !snapshot.supported ? '当前连接方式不支持备用隧道。' :
-        snapshot && !snapshot.enabled ? '备用隧道未开启。请在电脑控制台中选择是否启用。' :
+        snapshot && !snapshot.enabled ? '备用隧道尚未开启，因此目前没有备用地址。请在电脑的桥控制台“备用外网通道”卡片中点击“开启备用通道”，再回到这里重新检查。' :
         snapshot && !snapshot.currentRole ? '当前地址不属于已确认的主备入口，无法安全选择另一条入口。请使用电脑提供的最新地址。' :
         !valid ? '当前没有另一条已验证可达的备用地址。请稍后重新检查。' :
         preparationResult && preparationResult.phase !== 'prepared' ? preparationResult.message :
@@ -425,6 +478,8 @@
       if (disposed) return;
       if (panel && panel.isConnected) { render(); return; }
       backupDocumentState.consumed = true; autoValue = null;
+      cancelFocusPrompt();
+      reminderNotice = '';
       serial++; cancelReads(); checking = null; loading = false; snapshot = initial || null;
       if (initial) { observeTarget(initial); remember(initial); markNotified(initial); }
       panel = options.overlay(t('保存当前备用地址'), function (body, box) {
@@ -433,7 +488,7 @@
         if (heading) heading.setAttribute('data-i18n', '保存当前备用地址');
         var close = box.querySelector('.screen-bar button');
         if (close) close.setAttribute('data-i18n', '关闭');
-        var explanation = element('p', 'panel-line', '每次进入或刷新页面，请检查并保存另一条入口。在线前台会定期检查，另一入口更新后会再次提醒；后台或离线无法实时通知。新地址仍需手动准备和验证。');
+        var explanation = element('p', 'panel-line', '请保存另一条已验证入口，以便当前地址失效时恢复连接。自动提醒频率可在下方设置；地址更新会显示在此面板，不会额外打断你。后台或离线无法实时检查，新地址仍需手动准备和验证。');
         var status = element('p', 'panel-line');
         status.id = 'dsh-lite-backup-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
         var warning = element('p', 'backup-warning', '备用地址已更换。旧地址可能失效；请在新地址重新完成登录与加密设置。');
@@ -457,6 +512,53 @@
           win.open(snapshot.url, '_blank', 'noopener,noreferrer');
         });
         var check = button('dsh-lite-backup-check', '重新检查备用地址', function () { refresh(false); });
+        var enableHelp = button('dsh-lite-backup-enable-help', '查看开启方法', function () {
+          enableNote.hidden = !enableNote.hidden;
+          enableHelp.setAttribute('aria-expanded', String(!enableNote.hidden));
+        });
+        var enableNote = element('p', 'panel-line backup-enable-help', '在电脑上打开 Pocket Bridge 控制台，找到“备用外网通道”卡片，点击“开启备用通道”。等待外部连通检查通过后，回到手机点击“重新检查备用地址”，再点击“准备备用入口”。此操作会新增一条公网连接，但不会替你完成手机登录和加密验证。');
+        enableNote.id = 'dsh-lite-backup-enable-note'; enableNote.hidden = true;
+        enableHelp.setAttribute('aria-controls', enableNote.id);
+        enableHelp.setAttribute('aria-expanded', 'false');
+        var reminderSettings = element('section', 'backup-reminder-settings');
+        var reminderLabel = element('label', 'panel-line', '备用地址自动提醒');
+        reminderLabel.htmlFor = 'dsh-lite-backup-reminder-frequency';
+        var frequency = element('select', 'backup-reminder-frequency');
+        frequency.id = 'dsh-lite-backup-reminder-frequency'; frequency.setAttribute('aria-label', t('备用地址自动提醒'));
+        frequency.setAttribute('data-i18n-aria', '备用地址自动提醒');
+        [['1', '每次完整进入或刷新'], ['3', '每 3 次完整进入或刷新'], ['5', '每 5 次完整进入或刷新'], ['custom', '自定义次数'], ['0', '永不自动提醒']].forEach(function (item) {
+          var option = element('option', '', item[1]); option.value = item[0]; frequency.append(option);
+        });
+        var preference = backupDocumentState.reminder;
+        frequency.value = [0, 1, 3, 5].indexOf(preference.every) >= 0 ? String(preference.every) : 'custom';
+        var custom = element('input', 'backup-reminder-custom');
+        custom.id = 'dsh-lite-backup-reminder-custom'; custom.type = 'number'; custom.min = '1'; custom.max = '9999'; custom.step = '1'; custom.inputMode = 'numeric';
+        custom.value = String(preference.every || 1); custom.hidden = frequency.value !== 'custom';
+        custom.setAttribute('aria-label', t('自定义完整进入或刷新次数（1–9999）'));
+        custom.setAttribute('data-i18n-aria', '自定义完整进入或刷新次数（1–9999）');
+        frequency.addEventListener('change', function () { custom.hidden = frequency.value !== 'custom'; renderReminderSettings(''); });
+        custom.addEventListener('input', function () { renderReminderSettings(''); });
+        var reminderSave = element('button', 'screen-action', '保存提醒设置');
+        reminderSave.id = 'dsh-lite-backup-reminder-save'; reminderSave.type = 'button';
+        reminderSave.addEventListener('click', function () {
+          var selected = frequency.value === 'custom' ? Number(custom.value) : Number(frequency.value);
+          if (!Number.isSafeInteger(selected) || selected < (frequency.value === 'custom' ? 1 : 0) || selected > 9999) {
+            renderReminderSettings('请输入 1–9999 的整数。'); return;
+          }
+          preference.every = selected; preference.count = 0; backupDocumentState.counted = true; backupDocumentState.entryDue = false; autoValue = null;
+          var stored = persistReminder();
+          renderReminderSettings(stored ? '已保存；从下一次完整进入或刷新开始重新计数。' :
+            '设置仅在本页生效。浏览器未能持久保存，无法保证下次刷新时的提醒频率。');
+        });
+        var reminderSummary = element('p', 'panel-line');
+        reminderSummary.id = 'dsh-lite-backup-reminder-summary';
+        var reminderFeedback = element('p', 'panel-line backup-reminder-feedback');
+        reminderFeedback.id = 'dsh-lite-backup-reminder-feedback'; reminderFeedback.hidden = true;
+        reminderFeedback.setAttribute('role', 'status'); reminderFeedback.setAttribute('aria-live', 'polite'); reminderFeedback.setAttribute('aria-atomic', 'true');
+        var reminderStorage = element('p', 'backup-warning', '浏览器无法保存提醒设置或计数。刷新后可能恢复为每次提醒；无法保证跨刷新频率。');
+        reminderStorage.id = 'dsh-lite-backup-reminder-storage';
+        var reminderScope = element('p', 'panel-line', '此设置只保存在本浏览器的当前地址中；不同手机、浏览器和隧道地址分别计数，不会同步。仅完成登录与加密验证后的完整进入或刷新计一次。');
+        reminderSettings.append(reminderLabel, frequency, custom, reminderSave, reminderSummary, reminderFeedback, reminderStorage, reminderScope);
         var current = element('p', 'panel-line backup-current');
         current.id = 'dsh-lite-backup-current';
         var using = element('p', 'backup-warning', '你已从备用通道进入，当前页将它作为正在使用的入口。电脑上的主备槽位不会因此互换。');
@@ -464,8 +566,9 @@
         var preparationNote = element('p', 'panel-line', '首次使用请点击“准备备用入口”，在新窗口完成此浏览器的登录与加密验证。只有你主动点击并确认后才会传递凭据；复制地址始终不含凭据。');
         preparationNote.id = 'dsh-lite-backup-preparation';
         var risk = element('p', 'panel-line', '主备通道仍依赖同一台电脑、网络和 Cloudflare，不能保证在这些服务故障时可用。');
-        body.append(explanation, current, status, warning, using, address, actions, preparationNote, risk);
-        nodes = { current: current, status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check, prepare: prepare };
+        body.append(explanation, current, status, warning, using, address, actions, enableNote, preparationNote, reminderSettings, risk);
+        nodes = { current: current, status: status, warning: warning, using: using, address: address, copy: copy, select: select, open: open, check: check, prepare: prepare,
+          enableHelp: enableHelp, reminderSummary: reminderSummary, reminderFeedback: reminderFeedback, reminderStorage: reminderStorage };
       }, options.opener);
       var closePanel = panel.__liteClose, openedPanel = panel;
       panel.__liteClose = function (restoreFocus) {
@@ -480,7 +583,10 @@
       if (!initial) refresh(false);
     }
     function maybePrompt() {
-      if (!autoValue || !ready() || doc.hidden || doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) return;
+      if (!autoValue || !ready() || doc.hidden || Date.now() < promptAfter || doc.querySelector('.screen-overlay, .modal-backdrop:not([hidden])')) return;
+      var focused = doc.activeElement;
+      if (focused && (/^(INPUT|TEXTAREA|SELECT)$/i.test(focused.tagName || '') || focused.isContentEditable ||
+          (typeof focused.closest === 'function' && focused.closest('[contenteditable="true"]')))) return;
       var pending = autoValue; autoValue = null;
       if (pending.current && pending.current() && (!pending.url ||
           (Date.now() - pending.checkedAt <= MAX_AGE && pending.checkedAt <= Date.now() + 5000))) show(pending);
@@ -503,6 +609,7 @@
       if (disposed) return;
       if (preparation) preparation.update();
       if (!ready() || doc.hidden) {
+        cancelFocusPrompt();
         serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null;
         nextCheck = 0; observeTarget(null); render(); return;
       }
@@ -519,6 +626,7 @@
       if (event.persisted) { backupDocumentState.eligible = false; invalidate(); }
     }
     function invalidate() {
+      cancelFocusPrompt();
       if (preparation) preparation.cancel();
       serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null; nextCheck = 0;
       observeTarget(null);
@@ -526,17 +634,27 @@
       panel = null; nodes = null;
     }
     function visibility() {
-      if (doc.hidden) { serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null; nextCheck = 0; observeTarget(null); render(); }
+      if (doc.hidden) { cancelFocusPrompt(); serial++; cancelReads(); checking = null; loading = false; snapshot = null; autoValue = null; nextCheck = 0; observeTarget(null); render(); }
       else update();
+    }
+    function focusChanged() {
+      if (disposed || !autoValue) return;
+      // Blur precedes the click on Send or another control. Give that gesture
+      // time to finish before considering the pending reminder again.
+      promptAfter = Date.now() + 400;
+      cancelFocusPrompt();
+      focusPromptTimer = win.setTimeout(function () { focusPromptTimer = null; if (!disposed) maybePrompt(); }, 400);
     }
     win.addEventListener('pageshow', restore);
     win.addEventListener('pagehide', invalidate);
     doc.addEventListener('visibilitychange', visibility);
+    doc.addEventListener('focusout', focusChanged);
     return { show: function () { show(); }, update: update, dispose: function () {
       if (preparation) preparation.dispose();
       disposed = true; invalidate();
       win.removeEventListener('pageshow', restore); win.removeEventListener('pagehide', invalidate);
       doc.removeEventListener('visibilitychange', visibility);
+      doc.removeEventListener('focusout', focusChanged);
     } };
   }
 
@@ -2917,7 +3035,10 @@
     // 画面本身是敏感的，所以它走和会话内容同一道加密门（桥侧每抓一次都写日志）。
     var screenOverlay = null;
     var overlaySerial = 0;
+    var openOverlays = new Set();
+    var planOperations = new Map();
     function wireOverlay(box, heading, closeButton, opener) {
+      openOverlays.add(box);
       heading.id = 'dsh-lite-overlay-title-' + (++overlaySerial);
       box.setAttribute('role', 'dialog');
       box.setAttribute('aria-modal', 'true');
@@ -2928,13 +3049,14 @@
       box.__liteClose = function (restoreFocus) {
         if (closed) return;
         closed = true;
+        openOverlays.delete(box);
         box.remove();
         if (screenOverlay === box) screenOverlay = null;
         if (app && !document.querySelector('.screen-overlay')) app.inert = false;
         if (restoreFocus !== false) {
           var target = opener && opener.isConnected && !opener.closest('[hidden]') && opener.getClientRects().length ? opener :
             opener && opener.closest('#composer-picks') && refs.composerOptions && refs.composerOptions.getClientRects().length ? refs.composerOptions : refs.railSettings;
-          if (target && typeof target.focus === 'function') target.focus();
+          if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
         }
       };
       closeButton.addEventListener('click', function () { box.__liteClose(); });
@@ -3083,7 +3205,8 @@
     // 两项都**不需要桥端新代码** —— `/__deepseek/balance` 和 `/__routes`
     // 本来就是控制台在用的端点，手机这边带着会话 cookie 直接问就行。
     // 挂在设置菜单里（菜单本身已经在 HTML 里，只是往里加按钮，不动结构）。
-    function overlay(title, build, openerOverride) {
+    function overlay(title, build, openerOverride, options) {
+      options = options || {};
       closeSettingsMenu();
       closeComposerOptions();
       // 同时开两个面板没有意义，只会互相盖住 —— 先把已有的收掉。
@@ -3093,20 +3216,53 @@
         .forEach(function (node) { if (node.__liteClose) node.__liteClose(false); else node.remove(); });
       var opener = openerOverride || document.activeElement;
       var box = el('div', 'screen-overlay panel-overlay');
+      var surface = box;
+      if (options.compact) {
+        box.classList.add('control-overlay');
+        surface = el('div', 'control-card');
+        box.append(surface);
+      }
       var bar = el('div', 'screen-bar');
       var heading = el('strong', '', title);
       bar.append(heading);
       var shut = el('button', 'screen-action', t('关闭'));
       bar.append(shut);
       var body = el('div', 'panel-body');
-      box.append(bar, body);
+      surface.append(bar, body);
       keep(box);
       document.body.append(box);
       wireOverlay(box, heading, shut, opener);
+      if (options.compact) {
+        shut.textContent = '×';
+        shut.setAttribute('aria-label', t('关闭'));
+        var viewport = window.visualViewport;
+        function positionControl() {
+          if (!box.isConnected) return;
+          var height = viewport ? viewport.height : window.innerHeight;
+          var top = viewport ? viewport.offsetTop : 0;
+          var left = viewport ? viewport.offsetLeft : 0;
+          var width = viewport ? viewport.width : window.innerWidth;
+          var anchor = refs.composer.getBoundingClientRect();
+          var bottom = Math.min(Math.max(12, top + height - anchor.top + 8), Math.max(12, height - 220));
+          box.style.top = top + 'px'; box.style.left = left + 'px';
+          box.style.height = height + 'px'; box.style.width = width + 'px';
+          box.style.setProperty('--control-bottom', bottom + 'px');
+          box.style.setProperty('--control-space', Math.max(120, height - bottom - 12) + 'px');
+        }
+        window.addEventListener('resize', positionControl);
+        if (viewport) { viewport.addEventListener('resize', positionControl); viewport.addEventListener('scroll', positionControl); }
+        var originalClose = box.__liteClose;
+        box.__liteClose = function (restoreFocus) {
+          window.removeEventListener('resize', positionControl);
+          if (viewport) { viewport.removeEventListener('resize', positionControl); viewport.removeEventListener('scroll', positionControl); }
+          originalClose(restoreFocus);
+        };
+        positionControl();
+      }
       box.addEventListener('click', function (e) { if (e.target === box) box.__liteClose(); });
       build(body, box);
       var firstInput = body.querySelector('input:not([disabled]), textarea:not([disabled])');
-      if (firstInput) firstInput.focus();
+      if (firstInput && !options.compact) firstInput.focus();
       return box;
     }
     function jsonGet(path) {
@@ -3220,11 +3376,31 @@
       if (refs.settingsMenu) refs.settingsMenu.hidden = true;
       if (!state.sessionId) { setSidebar(true); return; }
       var sessionId = state.sessionId;
+      var contextVersion = state.contextVersion;
       overlay(t(title), function (body, box) {
         body.textContent = t('正在读取…');
-        Promise.all([Promise.resolve().then(loader), options.selection ? refreshSelection() : null]).then(function (parts) {
-          if (state.sessionId !== sessionId || !box.isConnected) return;
-          var items = parts[0];
+        var pending = false;
+        function current() { return !state.disposed && state.sessionId === sessionId && state.contextVersion === contextVersion && box.isConnected; }
+        function choose(row, id, effort, item, name) {
+          if (!current() || pending) return;
+          pending = true;
+          row.disabled = true;
+          row.textContent = name + ' · ' + t('正在切换…');
+          Promise.resolve().then(function () {
+            if (!current()) throw new Error(t('对话已切换，请重新打开。'));
+            return onPick(id, effort, item);
+          }).then(function () {
+            if (!current()) return;
+            row.textContent = name + ' ✓ ' + t('已切换');
+            setTimeout(function () { if (current()) box.__liteClose(); }, 150);
+          }).catch(function (error) {
+            if (!current()) return;
+            pending = false; row.disabled = false;
+            row.textContent = name + ' · ' + safeError(error, t('失败'));
+          });
+        }
+        function renderItems(items) {
+          if (!current()) return;
           body.textContent = '';
           if (typeof options.note === 'function') {
             var note = options.note(items);
@@ -3266,43 +3442,50 @@
                   description: effort.description || '' };
               });
               row.addEventListener('click', function () {
-                if (state.sessionId !== sessionId) return;
-                pickList(t('思考强度') + ' · ' + displayName,
-                  function () { return Promise.resolve(efforts); },
-                  function (effortId) { return onPick(String(id), String(effortId), item); },
-                  { opener: refs.composerPicks.querySelector('[data-kind="model"]'),
-                    isSelected: function (effortId) {
-                    var chosen = state.selection.modelSelection;
-                    return !!chosen && chosen.model === String(id) && chosen.reasoningEffort === effortId;
-                  } });
+                if (!current() || pending) return;
+                var returnIndex = Array.prototype.indexOf.call(body.querySelectorAll('.pick-row'), row);
+                body.replaceChildren();
+                var back = el('button', 'picker-back', '‹ ' + t('返回模型列表'));
+                back.type = 'button';
+                back.addEventListener('click', function () {
+                  if (pending || !current()) return;
+                  renderItems(items);
+                  var destination = body.querySelectorAll('.pick-row')[returnIndex];
+                  if (destination && !destination.disabled) destination.focus({ preventScroll: true });
+                });
+                body.append(back, el('p', 'panel-line', displayName + ' · ' + t('思考强度')));
+                efforts.forEach(function (effort) {
+                  var pick = el('button', 'pick-row', String(effort.name));
+                  pick.type = 'button';
+                  var chosen = state.selection.modelSelection;
+                  pick.setAttribute('aria-selected', String(!!chosen && chosen.model === String(id) && chosen.provider === String(item.provider || '') && chosen.reasoningEffort === String(effort.id)));
+                  if (effort.description) pick.append(el('small', '', String(effort.description)));
+                  pick.addEventListener('click', function () { choose(pick, String(id), String(effort.id), item, String(effort.name)); });
+                  body.append(pick);
+                });
+                back.focus({ preventScroll: true });
               });
               body.append(row);
               return;
             }
             row.addEventListener('click', function () {
-              if (state.sessionId !== sessionId) { row.textContent = t('对话已切换，请重新打开。'); return; }
-              row.disabled = true;
-              row.textContent = displayName + ' —— ' + t('正在切换…');
-              onPick(String(id), '', item).then(function () {
-                row.textContent = displayName + ' ✓ ' + t('已切换');
-                setTimeout(function () { if (box && box.isConnected) box.__liteClose(); }, 700);
-              }).catch(function (err) {
-                row.disabled = false;
-                row.textContent = displayName + '（' + t('失败') + '：' + ((err && err.message) || t('未知')) + '）';
-              });
+              choose(row, String(id), '', item, displayName);
             });
             body.append(row);
           });
+        }
+        Promise.all([Promise.resolve().then(loader), options.selection ? refreshSelection() : null]).then(function (parts) {
+          renderItems(parts[0]);
         }).catch(function (err) {
           if (box.isConnected) body.textContent = t('读不到列表：') + ((err && err.message) || t('未知'));
         });
-      }, options.opener);
+      }, options.opener, { compact: true });
     }
     function showModels() {
       if (typeof adapter.listModels !== 'function' || typeof adapter.selectModel !== 'function') {
         overlay(t('选择模型'), function (body) {
           body.append(el('p', 'panel-line', t('此版本不支持选择模型，请在电脑端操作。')));
-        }, refs.composerPicks.querySelector('[data-kind="model"]'));
+        }, refs.composerPicks.querySelector('[data-kind="model"]'), { compact: true });
         return;
       }
       pickList('选择模型',
@@ -3575,10 +3758,48 @@
     function showGoalModes() {
       if (!state.sessionId) { setSidebar(true); return; }
       var sessionId = state.sessionId;
-      overlay(t('目标'), function (body, box) {
-        body.append(el('p', 'panel-line', state.goalError ? t('目标状态暂时无法读取。') : state.goal
-          ? t('目标显示在输入框上方那条里，点铅笔可以改。')
-          : t('还没有设定目标。')));
+      var contextVersion = state.contextVersion;
+      overlay(t('对话控制'), function (rootBody, box) {
+        var tabs = el('div', 'control-tabs');
+        tabs.setAttribute('role', 'tablist');
+        tabs.setAttribute('aria-label', t('对话控制'));
+        var panes = {}, tabButtons = {}, planLoaded = false;
+        ['goal', 'plan', 'compact'].forEach(function (key, index) {
+          var button = el('button', '', t(['目标', '计划模式', '压缩上下文'][index]));
+          button.type = 'button'; button.setAttribute('role', 'tab');
+          button.dataset.controlTab = key;
+          button.id = box.getAttribute('aria-labelledby') + '-tab-' + key;
+          var pane = el('section', 'control-pane');
+          pane.id = button.id + '-pane'; pane.dataset.controlPane = key;
+          pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', button.id);
+          button.setAttribute('aria-controls', pane.id);
+          tabButtons[key] = button; panes[key] = pane;
+          button.addEventListener('click', function () { selectControl(key); });
+          button.addEventListener('keydown', function (event) {
+            var offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+            if (!offset && event.key !== 'Home' && event.key !== 'End') return;
+            event.preventDefault();
+            var keys = ['goal', 'plan', 'compact'];
+            var next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (keys.indexOf(key) + offset + 3) % 3;
+            selectControl(keys[next]); tabButtons[keys[next]].focus();
+          });
+          tabs.append(button);
+        });
+        rootBody.append(tabs, panes.goal, panes.plan, panes.compact);
+        function current() { return !state.disposed && state.sessionId === sessionId && state.contextVersion === contextVersion && box.isConnected; }
+        function selectControl(key) {
+          Object.keys(panes).forEach(function (name) {
+            panes[name].hidden = name !== key;
+            tabButtons[name].setAttribute('aria-selected', String(name === key));
+            tabButtons[name].tabIndex = name === key ? 0 : -1;
+          });
+          if (key === 'plan' && !planLoaded) { planLoaded = true; loadPlan(); }
+        }
+        var body = panes.goal;
+        body.append(el('p', 'panel-line', t('目标单独保存在当前对话，保存后 DSH 可能立即开始执行；消息草稿会保留。')));
+        var goalStateNote = el('p', 'panel-line', state.goalError ? t('目标状态暂时无法读取。') : state.goal && state.goal.phase !== 'complete'
+          ? t('目标显示在输入框上方那条里，点铅笔可以改。') : t('还没有设定目标。'));
+        body.append(goalStateNote);
 
         if (typeof adapter.goalAction !== 'function') {
           body.append(el('p', 'panel-line', t('此版本不支持目标，请在电脑端操作。')));
@@ -3586,72 +3807,122 @@
           var input = el('textarea', 'goal-input');
           input.rows = 3;
           input.setAttribute('aria-label', t('目标内容'));
-          input.value = state.goal ? state.goal.objective : '';
+          input.value = state.goal && state.goal.phase !== 'complete' ? state.goal.objective : '';
           input.placeholder = t('写一句话说明目标');
-          var save = el('button', 'screen-action', state.goal ? t('保存目标') : t('设定目标'));
+          var save = el('button', 'screen-action', state.goal && state.goal.phase !== 'complete' ? t('保存目标') : t('设定目标'));
+          var uncertainGoal = !!state.goalError;
+          var goalPending = false;
           var goalFeedback = el('p', 'files-status');
           goalFeedback.hidden = true;
           save.type = 'button';
+          save.disabled = uncertainGoal;
           save.addEventListener('click', function () {
+            if (!current() || uncertainGoal || goalPending) return;
             var text = input.value.trim();
             if (!text) { goalFeedback.textContent = t('目标不能是空的。'); goalFeedback.hidden = false; return; }
             save.disabled = true;
+            goalPending = true;
             goalFeedback.hidden = true;
+            var previousGoal = state.goal;
+            var editing = !!(previousGoal && previousGoal.phase !== 'complete');
             var done = Promise.resolve().then(function () {
-              if (state.sessionId !== sessionId) throw new Error(t('对话已切换，请重新打开。'));
-              return state.goal
+              if (!current()) throw new Error(t('对话已切换，请重新打开。'));
+              return editing
                 ? adapter.goalAction(sessionId, 'edit',
-                  { id: state.goal.id, revision: state.goal.revision, objective: text })
+                  { id: previousGoal.id, revision: previousGoal.revision, objective: text })
                 : adapter.goalAction(sessionId, 'create', { objective: text });
             });
-            done.then(function () { return refreshGoal(); }).then(function () {
-              if (!box.isConnected || state.sessionId !== sessionId) return;
-              save.disabled = false;
-              var confirmed = !state.goalError && state.goal && state.goal.objective === text;
+            done.then(function () { if (current()) return refreshGoal(); }).then(function () {
+              if (!current()) return;
+              goalPending = false;
+              var confirmed = !state.goalError && state.goal && state.goal.id &&
+                ['active', 'paused', 'blocked'].indexOf(state.goal.phase) >= 0 && state.goal.objective === text &&
+                (editing ? state.goal.id === previousGoal.id : !previousGoal || state.goal.id !== previousGoal.id);
+              uncertainGoal = !confirmed; save.disabled = uncertainGoal; reread.hidden = confirmed;
+              if (confirmed) {
+                save.textContent = t('保存目标');
+                goalStateNote.textContent = t('目标显示在输入框上方那条里，点铅笔可以改。');
+              }
               goalFeedback.textContent = confirmed ? t('目标已保存。') : t('目标请求已发送，当前结果未确认，请重新读取。');
               goalFeedback.dataset.state = confirmed ? 'success' : 'error';
               goalFeedback.hidden = false;
             }).catch(function (err) {
-              if (!box.isConnected || state.sessionId !== sessionId) return;
-              save.disabled = false;
+              if (!current()) return;
+              goalPending = false;
+              uncertainGoal = true; save.disabled = true; reread.hidden = false;
               goalFeedback.textContent = safeError(err, t('目标操作失败。'));
               goalFeedback.dataset.state = 'error';
               goalFeedback.hidden = false;
             });
           });
+          var reread = el('button', 'screen-action', t('重新读取目标'));
+          reread.type = 'button'; reread.hidden = !uncertainGoal;
+          reread.addEventListener('click', function () {
+            if (!current()) return;
+            reread.disabled = true;
+            refreshGoal().then(function () {
+              if (!current()) return;
+              reread.disabled = false; uncertainGoal = !!state.goalError; save.disabled = uncertainGoal;
+              reread.hidden = !uncertainGoal;
+              goalFeedback.textContent = uncertainGoal ? t('目标状态暂时无法读取。') : t('已重新读取目标，请检查后保存。');
+              goalFeedback.dataset.state = uncertainGoal ? 'error' : 'success'; goalFeedback.hidden = false;
+            });
+          });
           var form = el('div', 'goal-form');
-          form.append(input, save, goalFeedback);
+          form.append(input, save, reread, goalFeedback);
           body.append(form);
         }
 
         var planHost = el('div', 'plan-controls', t('正在检查计划模式…'));
-        body.append(planHost);
-        var hasPlanCommand = null;
+        panes.plan.append(planHost);
+        var hasPlanCommand = null, watchedPlan = null;
+        function releasePlan(operation) {
+          if (planOperations.get(sessionId) === operation) planOperations.delete(sessionId);
+        }
+        function showPendingPlan() {
+          var operation = planOperations.get(sessionId);
+          if (!operation) return false;
+          planHost.replaceChildren(el('p', 'panel-line', t('正在切换…')));
+          if (watchedPlan !== operation) {
+            watchedPlan = operation;
+            operation.promise.then(function () { if (current()) loadPlan(); });
+          }
+          return true;
+        }
         function planAction(title, line) {
           var button = el('button', 'screen-action', t(title));
           button.type = 'button';
           button.addEventListener('click', function () {
-            if (state.sessionId !== sessionId || !box.isConnected) return;
-            button.disabled = true;
+            if (!current() || planOperations.has(sessionId)) return;
+            var operation = {};
+            planOperations.set(sessionId, operation);
+            Array.prototype.forEach.call(planHost.querySelectorAll('button'), function (action) { action.disabled = true; });
             button.textContent = t('正在切换…');
-            Promise.resolve().then(function () { return adapter.runCommand(sessionId, line); }).then(function (reply) {
+            operation.promise = Promise.resolve().then(function () {
+              if (!current()) return;
+              return adapter.runCommand(sessionId, line);
+            }).then(function (reply) {
+              if (!current()) return;
               var result = reply && reply.result;
               if (result && (result.kind === 'error' || result.kind === 'failure'))
                 throw new Error(result.text || result.message || t('计划模式切换失败。'));
               return refreshSelection();
             }).then(function () {
-              if (state.sessionId === sessionId && box.isConnected) renderPlanControls();
+              releasePlan(operation);
+              if (!current()) return;
+              renderPlanControls();
             }).catch(function (error) {
-              if (state.sessionId !== sessionId || !box.isConnected) return;
-              button.disabled = false;
-              button.textContent = t(title);
+              releasePlan(operation);
+              if (!current()) return;
+              renderPlanControls();
               planHost.append(el('p', 'files-status', safeError(error, t('计划模式切换失败。'))));
-            });
+            }).finally(function () { releasePlan(operation); });
           });
           planHost.append(button);
         }
         function renderPlanControls() {
-          if (state.sessionId !== sessionId || !box.isConnected) return;
+          if (!current()) return;
+          if (showPendingPlan()) return;
           planHost.replaceChildren();
           if (typeof adapter.runCommand !== 'function') {
             planHost.append(el('p', 'panel-line', t('此版本不支持计划模式，请在电脑端操作。')));
@@ -3672,30 +3943,35 @@
             planAction('退出计划模式', '/plan off');
           }
         }
-        Promise.all([
+        function loadPlan() {
+          if (!current() || showPendingPlan()) return;
+          Promise.all([
           refreshSelection(),
           typeof adapter.listCommands === 'function' ? Promise.resolve().then(function () {
+            if (!current()) return;
             return adapter.listCommands(sessionId);
           }).then(function (commands) {
             hasPlanCommand = Array.isArray(commands) && commands.some(function (command) {
               return String(command && (command.name || command.command) || '').replace(/^\//, '').toLowerCase() === 'plan';
             });
           }).catch(function () { hasPlanCommand = null; }) : Promise.resolve()
-        ]).then(renderPlanControls);
+        ]).then(renderPlanControls); }
 
         // 压缩上下文放在目标面板里，不占用输入区下沿。
         // 真正干活的是 runCompact()（走 commands/execute，不是把 `/compact` 当消息发）。
         var compact = el('button', 'screen-action', t('压缩上下文'));
+        compact.classList.add('compact-run');
         compact.type = 'button';
         compact.addEventListener('click', function () {
+          if (!current()) return;
           compact.disabled = true;
           // 就地显示进度和结果，不另开面板
-          var slot = el('div', 'goal-compact-result');
-          body.append(slot);
+          var slot = panes.compact.querySelector('.goal-compact-result');
           runCompact(slot, function () { compact.disabled = false; });
         });
-        body.append(compact);
-      }, refs.composerPicks.querySelector('[data-kind="goal"]'));
+        panes.compact.append(el('p', 'panel-line', t('压缩当前对话的上下文；消息草稿会保留。')), compact, el('div', 'goal-compact-result'));
+        selectControl('goal');
+      }, refs.composerPicks.querySelector('[data-kind="goal"]'), { compact: true });
     }
     // 「工具配置」= agent preset（DSH 的工具组合），走 agentPresets/select。
     // 目标（goal）不在这个列表里 —— 它是 `/goal` 命令（见上面的说明）。
@@ -3958,7 +4234,7 @@
         readCurrent();
       };
       if (host) render(host);
-      else overlay(t('授权范围'), render, refs.composerPicks.querySelector('[data-kind="perm"]'));
+      else overlay(t('授权范围'), render, refs.composerPicks.querySelector('[data-kind="perm"]'), { compact: true });
     }
     // The narrow status line under the composer mirrors DSH's connection and
     // balance indicators. Codex and connection switching remain in Settings.
@@ -4197,7 +4473,7 @@
       var compatibility = el('button', 'menu-extra', t('连接与兼容性'));
       compatibility.type = 'button';
       compatibility.addEventListener('click', showCompatibility);
-      var backup = el('button', 'menu-extra', t('保存备用地址'));
+      var backup = el('button', 'menu-extra', t('备用地址与提醒'));
       backup.id = 'dsh-lite-backup-settings'; backup.type = 'button';
       backup.addEventListener('click', function () { if (backupRecovery) backupRecovery.show(); });
       menu.append(bal, addr, backup, compatibility);
@@ -4920,6 +5196,7 @@
         invalidateSendReview();
         state.connecting++;
         state.filesLoad++;
+        Array.from(openOverlays).forEach(function (box) { if (box.__liteClose) box.__liteClose(false); });
         mountCleanups.forEach(function (cleanup) { try { cleanup(); } catch (_) {} });
         clearDownloadUrls();
         listeners.forEach(function (entry) { entry[0].removeEventListener(entry[1], entry[2]); });

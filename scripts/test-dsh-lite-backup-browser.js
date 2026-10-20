@@ -87,11 +87,11 @@ async function run() {
     assert.equal(await page.eval(`performance.getEntriesByType('navigation')[0].type`), 'reload');
     assert.equal(await page.eval(`document.getElementById('dsh-lite-backup-dialog').getAttribute('role')`), 'dialog');
     assert.equal(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), true, '320px fixture has no horizontal overflow');
-    await page.eval(`document.getElementById('dsh-lite-backup-check').focus()`);
+    await page.eval(`document.getElementById('dsh-lite-backup-reminder-save').focus()`);
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
     assert.equal(await page.eval(`document.activeElement.closest('.screen-bar') !== null`), true, 'Tab wraps inside dialog');
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', modifiers: 8, windowsVirtualKeyCode: 9 });
-    assert.equal(await page.eval(`document.activeElement.id`), 'dsh-lite-backup-check', 'Shift+Tab wraps to the final enabled action');
+    assert.equal(await page.eval(`document.activeElement.id`), 'dsh-lite-backup-reminder-save', 'Shift+Tab wraps to the final enabled action');
     for (const lang of ['zh', 'en', 'es']) {
       await page.eval(`window.DshI18n.setLang(${JSON.stringify(lang)})`);
       const copyLabel = await page.eval(`document.getElementById('dsh-lite-backup-copy').textContent`);
@@ -136,8 +136,10 @@ async function run() {
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
     await until(`!document.getElementById('dsh-lite-backup-dialog')`);
     await page.eval(`__backup.primary.generation='eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';__advanceBackup(20001)`);
+    await sleep(150); assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'changed addresses never bypass the entry reminder interval');
+    await page.eval(`document.getElementById('dsh-lite-backup-settings').click()`);
     await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://recovered-primary.trycloudflare.com/dsh-lite'`);
-    assert.equal(await page.eval(`document.getElementById('dsh-lite-backup-changed').hidden`), false, 'same URL new generation reminds on backup-current entry');
+    assert.equal(await page.eval(`document.getElementById('dsh-lite-backup-changed').hidden`), false, 'manual settings show same URL new-generation warning');
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
     await page.eval(`__advanceBackup(20001)`); await sleep(100);
     assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'same shown version is not repeated by polling');
@@ -145,6 +147,8 @@ async function run() {
     await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://fixture-backup.trycloudflare.com/dsh-lite'`);
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
     await page.eval(`__backup.backup.origin='https://updated-backup.trycloudflare.com';__backup.backup.url=__backup.backup.origin+'/dsh-lite';__backup.backup.generation='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';__advanceBackup(20001)`);
+    await sleep(150); assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false);
+    await page.eval(`document.getElementById('dsh-lite-backup-settings').click()`);
     await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://updated-backup.trycloudflare.com/dsh-lite'`);
     assert.equal(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), true, 'updated reminder still fits 320px');
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
@@ -152,10 +156,39 @@ async function run() {
     await page.eval(`__fixtureHidden=true;document.dispatchEvent(new Event('visibilitychange'));__backup.backup.origin='https://latest-backup.trycloudflare.com';__backup.backup.url=__backup.backup.origin+'/dsh-lite';__backup.backup.generation='ffffffffffffffffffffffffffffffff';__advanceBackup(120000)`);
     await sleep(100); assert.equal(await page.eval(`__backupReads`), beforeHidden, 'hidden-page metadata monitoring pauses');
     await page.eval(`__fixtureHidden=false;document.dispatchEvent(new Event('visibilitychange'))`);
+    await sleep(150); assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'foreground monitoring does not add an extra reminder');
+    await page.eval(`document.getElementById('dsh-lite-backup-settings').click()`);
     await until(`document.getElementById('dsh-lite-backup-address')?.value === 'https://latest-backup.trycloudflare.com/dsh-lite'`);
     assert.equal(await page.eval(`__opened.length`), 0, 'change notices never automatically prepare/open another origin');
+    // Native select/number controls and actual full browser reloads share only
+    // this origin's local preference. All gateway metadata remains synthetic.
+    const preferenceKey = 'dsh-lite-backup-reminder-v1';
+    for (const every of [3, 5, 4]) {
+      await page.eval(`const frequency=document.getElementById('dsh-lite-backup-reminder-frequency');frequency.value=${JSON.stringify(every === 4 ? 'custom' : String(every))};frequency.dispatchEvent(new Event('change'));document.getElementById('dsh-lite-backup-reminder-custom').value=${JSON.stringify(String(every))};document.getElementById('dsh-lite-backup-reminder-save').click();`);
+      assert.equal(await page.eval(`JSON.parse(localStorage.getItem(${JSON.stringify(preferenceKey)})).every`), every);
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+      for (let visit = 1; visit <= every; visit++) {
+        await page.send('Page.reload'); await until(`window.__dshLiteBackupDocumentState?.counted === true`);
+        assert.equal(await page.eval(`JSON.parse(localStorage.getItem(${JSON.stringify(preferenceKey)})).count`), visit);
+        assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), visit === every, 'actual reload frequency ' + every + ' visit ' + visit);
+      }
+    }
+    await page.eval(`document.getElementById('dsh-lite-backup-reminder-frequency').value='0';document.getElementById('dsh-lite-backup-reminder-save').click()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    for (let visit = 0; visit < 2; visit++) {
+      await page.send('Page.reload'); await until(`window.__dshLiteBackupDocumentState?.counted === true`);
+      assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'never remains quiet across reload');
+    }
+    await page.eval(`__backup.backup.generation='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';__advanceBackup(20001)`);
+    await sleep(150); assert.equal(await page.eval(`!!document.getElementById('dsh-lite-backup-dialog')`), false, 'never also suppresses changed-address popup');
+    await page.eval(`document.getElementById('dsh-lite-backup-settings').click()`); await until(`document.getElementById('dsh-lite-backup-reminder-frequency')`);
+    assert.equal(await page.eval(`document.getElementById('dsh-lite-backup-reminder-frequency').value`), '0');
+    await page.eval(`document.getElementById('dsh-lite-backup-reminder-frequency').value='1';document.getElementById('dsh-lite-backup-reminder-save').click()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await page.send('Page.reload'); await until(`document.getElementById('dsh-lite-backup-dialog')`);
+    assert.equal(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), true, 'frequency controls fit the 320px browser');
     assert.equal(page.exceptions.length, 0, 'browser reports no uncaught exception');
-    console.log('Backup mobile browser fixture passed: real initial-entry/refresh gating, synthetic relative-origin selection/recovery, auth wait, navigation/back/reconnect, focus trap/Escape, 320px layout, ZH/EN/ES, bare copying, denied clipboard, closed-panel version changes and paused/resumed monitoring.');
+    console.log('Backup mobile browser fixture passed: initial/reload gating, actual 3/5/custom/never reload preferences, synthetic relative-origin recovery, auth wait, navigation/back/reconnect, focus trap/Escape, 320px layout, ZH/EN/ES, bare copying, denied clipboard and quiet monitoring.');
   } finally {
     if (browser) { try { await browser.send('Browser.close'); } catch (_) {} try { browser.ws.close(); } catch (_) {} }
     await new Promise(resolve => server.close(resolve));

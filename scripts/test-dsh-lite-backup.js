@@ -22,11 +22,12 @@ const healthy = (patch = {}, tunnelPatch = {}) => ({ ok: true, tunnels: {
 } });
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 function fixture(options = {}) {
-  const ids = new Map(), events = new Map(), documentEvents = new Map(), copies = [], opened = [], storage = new Map();
+  const ids = new Map(), events = new Map(), documentEvents = new Map(), copies = [], opened = [], storage = options.storage || new Map();
   const reads = [], timers = new Map(), plannedReads = []; let tick = now, clockId = 0, connection = 1, ready = options.ready !== false, overlays = 0, externalOverlay = false;
   let preparations = 0, invalidations = 0, preparedResult = null, preparationOptions;
   let next = options.data || healthy(), responsePatch = {}, pending = null;
   if (options.previous) storage.set('dsh-lite-backup-generation', options.previous);
+  if (options.reminder) storage.set('dsh-lite-backup-reminder-v1', JSON.stringify({ version: 1, ...options.reminder }));
   function node(tag) {
     return { tagName: tag.toUpperCase(), children: [], attributes: {}, handlers: {}, hidden: false, disabled: false, isConnected: true,
       textContent: '', value: '',
@@ -46,7 +47,7 @@ function fixture(options = {}) {
   const DateMock = class extends Date { static now() { return tick; } };
   const context = { document, URL, Number, Promise, Date: DateMock, AbortController, location: { origin: options.origin || primaryOrigin },
     performance: options.legacy ? { navigation: { type: options.navigation === 'reload' ? 1 : 0 } } : { getEntriesByType: () => options.unknown ? [] : [{ type: options.navigation || 'reload' }] },
-    localStorage: { getItem: key => { if (options.blockStorage) throw Error('blocked'); return storage.get(key); }, setItem: (key, value) => { if (options.blockStorage) throw Error('blocked'); storage.set(key, value); } },
+    localStorage: { getItem: key => { if (options.blockStorage) throw Error('blocked'); return storage.get(key); }, setItem: (key, value) => { if (options.blockStorage || options.blockWrite) throw Error('blocked'); if (!options.ignoreWrite) storage.set(key, value); } },
     __dshE2eeSecret: 'SYNTHETIC_PRIMARY_SECRET_NOT_FOR_CLIPBOARD',
     navigator: options.noClipboard ? {} : { clipboard: { writeText: async value => { if (options.denyClipboard) throw Error('denied'); copies.push(value); } } },
     open: (...args) => opened.push(args),
@@ -85,6 +86,7 @@ function fixture(options = {}) {
     hold() { let resolve; pending = { promise: new Promise(r => { resolve = r; }), resolve: () => { resolve(); pending = null; } }; return pending; },
     tick(ms) { tick += ms; }, external(value) { externalOverlay = value; },
     fire(type, event = {}) { for (const fn of events.get(type) || []) fn(event); },
+    documentFire(type, event = {}) { for (const fn of documentEvents.get(type) || []) fn(event); },
     visibility(hidden) { document.hidden = hidden; for (const fn of documentEvents.get('visibilitychange') || []) fn(); }
   };
 }
@@ -130,7 +132,11 @@ function fixture(options = {}) {
     assert.equal(f.reads.length, 2);
   }
   {
-    const f = fixture({ data: healthy({}, { enabled: false }) }); f.control.update(); await flush(); assert.equal(f.overlays, 0);
+    const f = fixture({ data: healthy({}, { enabled: false }) }); f.control.update(); await flush(); assert.equal(f.overlays, 1);
+    assert.match(f.ids.get('dsh-lite-backup-status').textContent, /尚未开启/);
+    assert.equal(f.ids.get('dsh-lite-backup-enable-help').hidden, false);
+    f.ids.get('dsh-lite-backup-enable-help').click(); assert.equal(f.ids.get('dsh-lite-backup-enable-note').hidden, false);
+    assert.equal(f.ids.get('dsh-lite-backup-address').value, '', 'disabled state never invents a backup URL');
     f.control.show(); await flush(); assert.equal(f.ids.get('dsh-lite-backup-copy').disabled, true);
   }
   for (const patch of [{ url: null }, { phase: 'starting' }, { phase: 'unreachable' }, { phase: 'rebuilding' }, { reachable: false }, { checkedAt: now - 180001 }, { checkedAt: now + 6000 }, { generation: '' },
@@ -288,6 +294,87 @@ function fixture(options = {}) {
     const f = fixture({ lang }); f.control.update(); await flush();
     const text = f.ids.get('dsh-lite-backup-dialog').title + f.ids.get('dsh-lite-backup-preparation').textContent + f.ids.get('dsh-lite-backup-status').textContent;
     if (lang !== 'zh') assert.doesNotMatch(text, /[\u4e00-\u9fff]/);
+  }
+  // Only a successfully decrypted fresh document counts. Store no connection
+  // token, secret, preparation state, or source-origin identity in this key.
+  const reminderKey = 'dsh-lite-backup-reminder-v1';
+  for (const every of [1, 3, 5, 7]) {
+    const shared = new Map([[reminderKey, JSON.stringify({ version: 1, every, count: 0 })]]);
+    for (let visit = 1; visit <= every * 2; visit++) {
+      const f = fixture({ storage: shared }); f.control.update(); await flush();
+      assert.equal(f.overlays, visit % every === 0 ? 1 : 0, 'every ' + every + ': visit ' + visit);
+      assert.equal(JSON.parse(shared.get(reminderKey)).count, visit);
+      f.fire('hashchange'); f.fire('popstate'); f.setReady(false); f.control.update();
+      f.setReady(true); f.nextConnection(); f.control.update(); await flush();
+      assert.equal(JSON.parse(shared.get(reminderKey)).count, visit, 'routes/reconnect never count as another entry');
+      f.control.dispose();
+    }
+    assert.doesNotMatch(shared.get(reminderKey), /SECRET|#|https?:|\/k\//);
+  }
+  {
+    const shared = new Map([[reminderKey, JSON.stringify({ version: 1, every: 3, count: 1 })]]);
+    for (const navigation of ['back_forward', 'prerender']) {
+      const f = fixture({ storage: shared, navigation }); f.control.update(); await flush();
+      assert.equal(JSON.parse(shared.get(reminderKey)).count, 1); assert.equal(f.overlays, 0); f.control.dispose();
+    }
+    const f = fixture({ storage: shared, ready: false }); f.control.update(); await flush();
+    assert.equal(JSON.parse(shared.get(reminderKey)).count, 1);
+    f.setReady(true); f.patchResponse({ headers: { get: () => null } }); f.control.update(); await flush();
+    assert.equal(JSON.parse(shared.get(reminderKey)).count, 1, 'unverified metadata does not count');
+    f.patchResponse({}); f.tick(20000); f.control.update(); await flush();
+    assert.equal(JSON.parse(shared.get(reminderKey)).count, 2); assert.equal(f.overlays, 0);
+  }
+  for (const focused of [{ tagName: 'TEXTAREA' }, { tagName: 'INPUT' }, { tagName: 'DIV', isContentEditable: true }]) {
+    const f = fixture(); f.document.activeElement = focused; f.control.update(); await flush();
+    assert.equal(f.overlays, 0, 'pending reminder cannot take input focus');
+    f.document.activeElement = null; f.documentFire('focusout'); f.control.update(); await flush();
+    assert.equal(f.overlays, 0, 'blur cannot intercept the following Send/control click');
+    f.tick(399); f.control.update(); await flush(); assert.equal(f.overlays, 0);
+    f.tick(1); for (const callback of [...f.timers.values()]) callback(); await flush(); assert.equal(f.overlays, 1);
+  }
+  {
+    const f = fixture(); f.control.update(); await flush();
+    f.ids.get('dsh-lite-backup-reminder-frequency').value = '3'; f.ids.get('dsh-lite-backup-reminder-save').click();
+    assert.equal(JSON.parse(f.storage.get(reminderKey)).every, 3); assert.equal(JSON.parse(f.storage.get(reminderKey)).count, 0);
+    f.control.update(); await flush(); assert.match(f.ids.get('dsh-lite-backup-reminder-summary').textContent, /3/);
+    assert.match(f.ids.get('dsh-lite-backup-reminder-feedback').textContent, /已保存/);
+    assert.equal(f.ids.get('dsh-lite-backup-reminder-feedback').attributes['aria-live'], 'polite');
+    f.tick(20000); f.control.update(); await flush();
+    assert.match(f.ids.get('dsh-lite-backup-reminder-summary').textContent, /3/);
+    assert.match(f.ids.get('dsh-lite-backup-reminder-feedback').textContent, /已保存/, 'a metadata render cannot erase save feedback');
+    f.control.dispose();
+    for (let visit = 1; visit <= 3; visit++) {
+      const next = fixture({ storage: f.storage }); next.control.update(); await flush(); assert.equal(next.overlays, visit === 3 ? 1 : 0); next.control.dispose();
+    }
+  }
+  {
+    const f = fixture(); f.control.update(); await flush();
+    const frequency = f.ids.get('dsh-lite-backup-reminder-frequency'), custom = f.ids.get('dsh-lite-backup-reminder-custom');
+    frequency.value = 'custom'; frequency.handlers.change(); assert.equal(custom.hidden, false);
+    for (const value of ['', '0', '-1', '1.5', '10000', 'Infinity']) {
+      custom.value = value; f.ids.get('dsh-lite-backup-reminder-save').click();
+      assert.equal(JSON.parse(f.storage.get(reminderKey)).every, 1); assert.match(f.ids.get('dsh-lite-backup-reminder-feedback').textContent, /1–9999/);
+      f.control.update(); await flush();
+      assert.match(f.ids.get('dsh-lite-backup-reminder-feedback').textContent, /1–9999/, 'invalid count feedback survives a normal render');
+      assert.match(f.ids.get('dsh-lite-backup-reminder-summary').textContent, /每 1 次/, 'invalid draft never replaces the actual saved frequency');
+    }
+    custom.value = '7'; f.ids.get('dsh-lite-backup-reminder-save').click(); assert.equal(JSON.parse(f.storage.get(reminderKey)).every, 7);
+  }
+  {
+    const shared = new Map([[reminderKey, JSON.stringify({ version: 1, every: 0, count: 0 })]]);
+    for (let visit = 1; visit <= 3; visit++) {
+      const f = fixture({ storage: shared }); f.control.update(); await flush(); assert.equal(f.overlays, 0);
+      f.tick(20000); f.setData(healthy({ generation: otherGeneration })); f.control.update(); await flush();
+      assert.equal(f.overlays, 0, 'never also disables changed-address popups');
+      f.control.show(); await flush(); assert.equal(f.overlays, 1, 'never preserves manual settings access');
+      assert.match(f.ids.get('dsh-lite-backup-reminder-summary').textContent, /关闭所有自动/); f.control.dispose();
+    }
+  }
+  for (const mode of ['blockStorage', 'blockWrite', 'ignoreWrite']) {
+    const f = fixture({ [mode]: true, reminder: { every: 3, count: 0 } }); f.control.update(); await flush();
+    assert.equal(f.overlays, 1, mode + ' cannot silently promise a multi-reload interval');
+    assert.equal(f.ids.get('dsh-lite-backup-reminder-storage').hidden, false);
+    assert.match(f.ids.get('dsh-lite-backup-reminder-storage').textContent, /无法保证/);
   }
   assert.match(ui, /backupRecovery\.update\(\)/); assert.match(ui, /backupRecovery\.dispose\(\)/);
   console.log('Backup entry reminder: first-entry/reload gating, exact relative origin selection, both directions, recovery, preparation invalidation, copy fallback, cancellation, timing and ZH/EN/ES checks passed.');
