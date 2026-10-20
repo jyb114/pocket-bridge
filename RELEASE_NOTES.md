@@ -1,7 +1,8 @@
 # Release notes - 1.0.0-preview.19
 
-Prepare a verified npm distribution without changing the running DSH protocol
-or the phone interface. The source checkout remains private. Only an explicit
+Prepare a verified npm distribution without changing the running DSH protocol,
+and preserve user input when editing queued messages or goals. The source
+package remains marked `private: true`; the GitHub repository is public. Only an explicit
 `node scripts/build-dsh-plugin.js --npm <artifact-directory>` build makes its
 controlled temporary package stage publishable, with repository metadata,
 the public registry, access and distribution tag.
@@ -51,6 +52,12 @@ It retains strict visibility/removal checks and adds timing boundaries. The
 production banner code is unchanged. The complete 135-suite isolated run
 passed; six live-only segments are explicitly excluded and are not counted
 as passed. Read the separate [Preview.19 acceptance record](docs/PREVIEW19-ACCEPTANCE.md).
+
+Delayed focus restoration no longer cancels a user's selection, selects a
+partially typed goal, or takes focus back from another control. Both queue
+and goal editors still restore focus when the user has not begun interacting.
+Real isolated Chromium input reproduced the original failures before the fix;
+these regressions are separate from the earlier live tunnel acceptance.
 
 ## Previous release: 1.0.0-preview.18
 

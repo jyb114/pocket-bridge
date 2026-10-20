@@ -95,6 +95,14 @@ async function run() {
     const panelText = () => page.eval(`document.querySelector('.screen-overlay .panel-body')?.textContent||''`);
     const commands = () => page.eval(`__actions.calls.filter(x=>x[0]==='command')`);
     const close = () => pointer('.screen-overlay .screen-bar .screen-action:last-child');
+    async function holdEditorFocus(selector, marker) {
+      // Delay only the actual source callback, not any adapter result or user
+      // input. This makes a delayed renderer task deterministic and observable.
+      await page.eval(`(()=>{const original=window.setTimeout;__actions.editorFocus={trace:[]};window.setTimeout=function(fn,delay,...args){if(delay===0&&typeof fn==='function'&&fn.toString().includes(${JSON.stringify(marker)})){window.setTimeout=original;__actions.editorFocus.release=()=>{const node=document.querySelector(${JSON.stringify(selector)});__actions.editorFocus.trace.push({phase:'before-restore',focused:document.activeElement===node,start:node.selectionStart,end:node.selectionEnd});fn.apply(window,args);__actions.editorFocus.trace.push({phase:'after-restore',focused:document.activeElement===node,start:node.selectionStart,end:node.selectionEnd});};return original(()=>{},0);}return original.call(this,fn,delay,...args);};})()`);
+    }
+    const focusReady = () => wait(`typeof __actions.editorFocus.release==='function'`);
+    const releaseFocus = () => page.eval(`__actions.editorFocus.release()`);
+    const focusTrace = () => page.eval(`__actions.editorFocus.trace`);
     async function select(title) {
       if (!await page.eval(`!document.body.classList.contains('sidebar-hidden')`)) await pointer('#projects-toggle');
       await pointer('#session-list button', title);
@@ -195,10 +203,30 @@ async function run() {
     check(await page.eval(`document.querySelector('.goal-form .files-status').textContent.includes('目标已保存')`), false, 'failed goal readback cannot show saved');
     await close();
     await page.eval(`__actions.failGoal=false;__actions.failGoalWrite=true`);
+    await holdEditorFocus('#goal-bar .goal-input', 'input.focus(); input.select();');
     await pointer('#goal-bar [data-kind="edit"]');
+    await focusReady();
+    await releaseFocus();
+    check(await page.eval(`(()=>{const node=document.querySelector('#goal-bar .goal-input');return [document.activeElement===node,node.selectionStart,node.selectionEnd]})()`), [true, 0, await page.eval(`document.querySelector('#goal-bar .goal-input').value.length`)], 'an untouched goal editor still receives automatic focus and full selection');
+    await pointer('#goal-bar [data-kind="cancel"]');
+    await holdEditorFocus('#goal-bar .goal-input', 'input.focus(); input.select();');
+    await pointer('#goal-bar [data-kind="edit"]');
+    await focusReady();
+    await pointer('#message-input');
+    await releaseFocus();
+    check(await page.eval(`document.activeElement.id`), 'message-input', 'late goal restoration cannot steal focus from a newly chosen composer');
+    check(await page.eval(`document.getElementById('message-input').value`), 'Preserved action draft', 'choosing another control retains the composer draft');
+    await pointer('#goal-bar [data-kind="cancel"]');
+    await holdEditorFocus('#goal-bar .goal-input', 'input.focus(); input.select();');
+    await pointer('#goal-bar [data-kind="edit"]');
+    await focusReady();
     await pointer('#goal-bar .goal-input');
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
-    await page.send('Input.insertText', { text: 'Retained inline goal' });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    await page.send('Input.insertText', { text: 'Retained inline goa' });
+    await releaseFocus();
+    check(await page.eval(`(()=>{const node=document.querySelector('#goal-bar .goal-input');return [node.selectionStart,node.selectionEnd]})()`), ['Retained inline goa'.length, 'Retained inline goa'.length], 'late goal focus restoration must preserve the caret after user typing: ' + JSON.stringify(await focusTrace()));
+    await page.send('Input.insertText', { text: 'l' });
     await pointer('#goal-bar [data-kind="save"]');
     await wait(`!!document.querySelector('#goal-bar [data-kind="read"]')`);
     check(await page.eval(`document.querySelector('#goal-bar .goal-input').value`), 'Retained inline goal', 'failed inline goal edit retains the exact text');
@@ -234,9 +262,31 @@ async function run() {
 
     await page.eval(`__actions.queued=[{id:'q1',text:'Original queue text'}];__actions.event({type:'session-status',sessionId:'s1',running:false})`);
     await wait(`document.querySelector('#queue-list [data-kind="edit"]')!==null`);
+    await holdEditorFocus('.queue-edit', 'area.setSelectionRange(caret, caret)');
     await pointer('#queue-list [data-kind="edit"]');
+    await focusReady();
+    await releaseFocus();
+    check(await page.eval(`(()=>{const node=document.querySelector('.queue-edit');return [document.activeElement===node,node.selectionStart,node.selectionEnd]})()`), [true, 'Original queue text'.length, 'Original queue text'.length], 'an untouched queue editor still restores focus and its saved caret');
+    await pointer('.queue-edit-box button', '取消');
+    await holdEditorFocus('.queue-edit', 'area.setSelectionRange(caret, caret)');
+    await pointer('#queue-list [data-kind="edit"]');
+    await focusReady();
+    await pointer('#message-input');
+    await releaseFocus();
+    check(await page.eval(`document.activeElement.id`), 'message-input', 'late queue restoration cannot steal focus from a newly chosen composer');
+    check(await page.eval(`document.getElementById('message-input').value`), 'Preserved action draft', 'leaving a queue edit retains the composer draft');
+    await pointer('.queue-edit-box button', '取消');
+    // Hold the actual editor's deferred focus callback until after real input
+    // has selected the old text. It must not collapse the user's selection.
+    await holdEditorFocus('.queue-edit', 'area.setSelectionRange(caret, caret)');
+    await pointer('#queue-list [data-kind="edit"]');
+    await focusReady();
     await pointer('.queue-edit');
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    check(await page.eval(`(()=>{const node=document.querySelector('.queue-edit');return [document.activeElement===node,node.selectionStart,node.selectionEnd]})()`), [true, 0, 'Original queue text'.length], 'actual Ctrl+A selects the complete queued draft');
+    await releaseFocus();
+    check(await page.eval(`(()=>{const node=document.querySelector('.queue-edit');return [node.selectionStart,node.selectionEnd]})()`), [0, 'Original queue text'.length], 'late editor focus restoration must preserve an existing user selection: ' + JSON.stringify(await focusTrace()));
     await page.send('Input.insertText', { text: 'Retained queue edit' });
     await page.eval(`__actions.failQueueWrite=true`);
     await pointer('.queue-edit-box button', '保存');
