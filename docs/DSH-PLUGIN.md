@@ -13,8 +13,8 @@ offering a connection or changing the gateway state.
 
 ## Installation
 
-Install a tested release tarball through your DSH plugin manager. No separate
-npm publication is required. Preview.18's versioned release URL is:
+Install a tested release tarball through your DSH plugin manager. Direct
+tarball installation does not require npm publication. Preview.18's versioned release URL is:
 
 ```text
 dsh plugin --profile web add https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.18/pocket-bridge-1.0.0-preview.18.tgz
@@ -247,9 +247,59 @@ the generated README lists or submit the entry to the marketplace app itself.
 The [current contribution rules](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
 require an installable `dsh.bundle`, working code, a repository at least one
 day old, a `dsh-plugin` topic, an accurate English description, passing CI,
-and maintainer review. npm publishing is optional: a verified prebuilt `.tgz`
-on GitHub Releases can be declared with `tarball`. A pinned release URL avoids
-breaking a versioned filename when the latest release changes.
+and maintainer review. The website accepts a verified prebuilt `.tgz` on
+GitHub Releases through `tarball`. A pinned release URL avoids breaking a
+versioned filename when the latest release changes.
+
+The website listing and DSH's experimental **Discover** tab are separate
+distribution paths. The community index generator currently skips entries
+without a verified npm package, exact version and publication timestamp.
+Adding a `tarball` to the website entry does not populate those fields. Its
+npm probe reads this repository's root package name, resolves that package's
+`latest` tag and verifies that the published `repository` points back here.
+An arbitrary `npm` key in the catalog YAML is not supported.
+
+DSH 0.2.1-rc.2's custom plugin market is optional and starts with no index
+sources. Enable it through the host's experimental plugin controls, then
+add a trusted source in **Plugins > Discover**. A website listing alone does
+not enable the market or add a source to the user's DSH profile.
+
+## Preparing an npm distribution
+
+Keep the source checkout `private: true`. Do not publish the installation
+directory or run `npm publish .` in the checkout: neither is the vetted
+distribution stage. Build the npm candidate explicitly into a fresh directory
+outside the checkout:
+
+```text
+node scripts/build-dsh-plugin.js --npm <empty-artifact-directory>
+npm publish <verified-tarball-path> --dry-run --ignore-scripts --json
+```
+
+This mode changes publication metadata only inside the controlled package
+stage, uses the same public-file allowlist and source hashes, and retains the
+existing package and Cordis identities. The regular GitHub archive remains
+private. Neither command publishes a package. A dry run does not reserve a
+name or verify npm account ownership, and local Discover installation does
+not prove that a public catalog has accepted the package.
+
+Before any later public publication, establish permission to publish
+`pocket-bridge` with the intended npm account. The public registry currently
+returns an old unpublished-name record; this proves neither ownership nor
+availability. Do not silently switch to another author's package. A namespace
+change would require a coordinated package, loader and catalog migration.
+
+The community probe currently uses **`latest`**, including when its target is
+a prerelease. Publishing only with the `preview` tag will not satisfy that
+probe. The explicit npm candidate records the public npm registry, public
+access and the `latest` tag so the intended channel can be reviewed before
+publication. After an authorized publish, verify registry bytes, repository,
+exact version, timestamp and tag, then wait for or request the community
+index refresh and repeat installation from that **public** index. Do not
+write a fictional npm record or claim public Discover availability beforehand.
+
+Rules: [index generation](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/lib/market-index.mjs)
+and [npm verification](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/probe-npm.mjs).
 
 [The catalog template in the source repository](https://github.com/jyb114/pocket-bridge/blob/main/packaging/dsh-plugin/catalog-entry.example.yml)
 contains placeholders and is not a ready submission. Replace them with the

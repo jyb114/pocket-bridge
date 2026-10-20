@@ -26,13 +26,13 @@ Capabilities depend on the installed DSH runtime, its plugins, and the connected
 ## Windows setup
 
 1. Install and sign in to DSH on the computer. Verify that it can open a project and reply locally.
-2. Download the DSH-only Windows setup from [Preview.18](https://github.com/jyb114/pocket-bridge/releases/tag/v1.0.0-preview.18). Older installers remain available in Releases.
+2. Download the DSH-only Windows setup from [GitHub Releases](https://github.com/jyb114/pocket-bridge/releases). Older installers remain available there.
 3. Install Pocket Bridge. An upgrade uses the saved installation location; choose a D: location for a new install if preferred.
 4. Open the desktop console and verify that the detected DSH runtime is running. The console remains local to the computer.
 5. Copy the complete HTTPS phone connection link. Keep its access key and `#k=` fragment private.
 6. Open the link on the phone. Select a project and conversation, or add a computer folder and create one. The host computer must remain awake and connected.
 
-Preview.18 gives phone conversations more space through a compact heading and expandable composer controls, and reduces the server work needed for first-miss public asset compression. The [release notes](RELEASE_NOTES.md) distinguish measured server work from real browser loading. The desktop console retains Preview.17's strict local **Start DSH** action. To close DSH, exit it from the DSH application.
+Preview.19 prepares a verified npm distribution for community Discover indexes. It does not by itself publish to npm or make the plugin appear in a public index; see the [distribution instructions](docs/DSH-PLUGIN.md#preparing-an-npm-distribution). It retains Preview.18's compact phone layout and public asset loading. The [release notes](RELEASE_NOTES.md) distinguish local installation verification from public distribution availability. The desktop console retains Preview.17's strict local **Start DSH** action. To close DSH, exit it from the DSH application.
 
 The Windows installer bundles Node.js and cloudflared with their license texts. It does not bundle DSH. Temporary tunnel addresses can change after a restart; use the newly copied link when that happens. A tunnel that is unavailable or disconnected does not mean a message was accepted. Do not repeatedly send an instruction with an uncertain delivery result.
 

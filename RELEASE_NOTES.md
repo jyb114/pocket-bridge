@@ -1,4 +1,58 @@
-# Release notes - 1.0.0-preview.18
+# Release notes - 1.0.0-preview.19
+
+Prepare a verified npm distribution without changing the running DSH protocol
+or the phone interface. The source checkout remains private. Only an explicit
+`node scripts/build-dsh-plugin.js --npm <artifact-directory>` build makes its
+controlled temporary package stage publishable, with repository metadata,
+the public registry, access and distribution tag.
+
+The npm candidate retains the same package identity, Cordis component and
+managed gateway location. Its public-file allowlist, source manifest, complete
+runtime dependency closure and disabled lifecycle hooks remain enforced.
+Normal GitHub archives and the Windows installer retain their existing build
+path. Existing pairing records, uploads and private state remain upgrade data.
+
+## Discover availability
+
+The community website accepts the GitHub release tarball. Its generated
+Discover index currently requires verified npm metadata, an exact version and
+a publication timestamp. These are separate distribution paths. A configured
+local test index or successful `npm publish --dry-run` is not a public npm
+publication and does not establish public Discover availability.
+
+The DSH custom plugin market must also be enabled and given a trusted index
+source. The stock host does not configure one by default. Read the complete
+[distribution instructions](docs/DSH-PLUGIN.md#preparing-an-npm-distribution)
+before publishing. Package-name permission and npm account authorization must
+be established separately from the GitHub account.
+
+## Verification and compatibility
+
+Official npm DSH Web 0.2.1-rc.2 was operated in a separate Windows profile:
+enable the custom market, add the community index, search, add a clearly
+labelled local validation index, inspect the candidate, install its real
+archive through the host's pnpm operation, enable it, open Pocket Bridge
+Settings, start and diagnose the matching gateway, cancel and confirm Stop,
+then disable and re-enable the component. Local fixtures are not presented
+as a public registry listing. Model replies and transport responses are not
+fabricated. Version-specific final observations are recorded separately.
+
+The exact host gates are unchanged. Optional plugin declarations for
+0.1.7-rc.2, 0.2.0-rc.2 and 0.2.1-rc.2 are distinct from rerunning every
+workflow on every host. The desktop baseline remains official 0.2.1-rc.2.
+Physical iPhone/Android and cellular acceptance remain separate from desktop
+browser phone viewports. See the [compatibility matrix](docs/DSH-COMPATIBILITY.md).
+
+Personal notification scripts, account authorization and connection secrets
+are not part of the public source, npm package or Windows installer.
+
+The isolated first-load banner test now uses a deterministic virtual clock.
+It retains strict visibility/removal checks and adds timing boundaries. The
+production banner code is unchanged. The complete 135-suite isolated run
+passed; six live-only segments are explicitly excluded and are not counted
+as passed. Read the separate [Preview.19 acceptance record](docs/PREVIEW19-ACCEPTANCE.md).
+
+## Previous release: 1.0.0-preview.18
 
 Give conversations more room on phones. The title and connection indicator now
 share one top row. Session actions and activity controls are available in the

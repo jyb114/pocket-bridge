@@ -7,7 +7,7 @@
 // 所以测试里大部分用例是**不该显示**与**该消失**。
 //
 // 跑法：把 pwa/first-load.js 丢进一个假 DOM 的 vm 里（真文件，不是复制品），
-// 用 __dshFirstLoadConfig 把三个时间调小，然后按时间线推进。
+// 用独立的虚拟时钟按时间线推进，不依赖繁忙 CI 上真实定时器恢复的时刻。
 'use strict';
 
 const assert = require('assert/strict');
@@ -18,15 +18,56 @@ const vm = require('vm');
 const BASE = path.resolve(__dirname, '..');
 const SRC = fs.readFileSync(path.join(BASE, 'pwa', 'first-load.js'), 'utf8');
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let bad = 0;
 const ok = (m) => console.log(`  ✓ ${m}`);
 const fail = (m) => { bad++; console.log(`  ✗ ${m}`); };
+
+/** 每个窗口独立推进 Date.now、timeout 和 interval，不触碰宿主事件循环。 */
+function fakeClock() {
+  let now = 1000;
+  let nextId = 1;
+  const timers = new Map();
+  function schedule(fn, ms, repeat) {
+    assert.equal(typeof fn, 'function');
+    const delay = Math.max(repeat ? 1 : 0, Number(ms) || 0);
+    const id = nextId++;
+    timers.set(id, { id, at: now + delay, delay, repeat, fn });
+    return id;
+  }
+  class ClockDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  }
+  return {
+    Date: ClockDate,
+    setTimeout: (fn, ms) => schedule(fn, ms, false),
+    setInterval: (fn, ms) => schedule(fn, ms, true),
+    clearTimeout: (id) => timers.delete(id),
+    clearInterval: (id) => timers.delete(id),
+    advance(ms) {
+      assert.ok(Number.isFinite(ms) && ms >= 0);
+      const target = now + ms;
+      let steps = 0;
+      while (true) {
+        const next = [...timers.values()].filter((timer) => timer.at <= target)
+          .sort((a, b) => a.at - b.at || a.id - b.id)[0];
+        if (!next) break;
+        assert.ok(++steps < 10000, '定时器没有停止推进');
+        now = next.at;
+        if (next.repeat) next.at += next.delay;
+        else timers.delete(next.id);
+        next.fn();
+      }
+      now = target;
+    }
+  };
+}
 
 /** 只会做这个脚本用到的那几件事的假 DOM */
 function fakeWindow(opts) {
   const o = opts || {};
   const store = Object.assign({}, o.store || {});
+  const clock = fakeClock();
 
   function makeEl(tag) {
     return {
@@ -71,7 +112,8 @@ function fakeWindow(opts) {
       setItem: (k, v) => { if (o.storageThrows) throw Error('quota'); store[k] = String(v); },
       removeItem: (k) => { delete store[k]; }
     },
-    setTimeout, clearTimeout, setInterval, clearInterval, Date,
+    setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    setInterval: clock.setInterval, clearInterval: clock.clearInterval, Date: clock.Date,
     __dshFirstLoadConfig: { slowMs: 40, stuckMs: 90, pollMs: 8 }
   };
   win.window = win;
@@ -81,6 +123,7 @@ function fakeWindow(opts) {
   win.__store = store;
   win.__doc = doc;
   win.__root = root;
+  win.__clock = clock;
   return win;
 }
 
@@ -132,10 +175,15 @@ const textOf = (win) => {
     const api = load(w);
     assert.ok(bannerOf(w), '一开始就该有横幅');
     w.renderApp();
-    await sleep(60);
+    w.__clock.advance(7);
+    assert.ok(visibleBanner(w), '首次轮询前不应提前假定界面已加载');
+    w.__clock.advance(1);
     if (visibleBanner(w)) fail('界面已经出来了，横幅还看得见');
     else ok('界面一出来横幅就收掉（先淡出，再摘掉）');
-    await sleep(420);
+    assert.ok(bannerOf(w), '淡出时仍应保留节点');
+    w.__clock.advance(349);
+    assert.ok(bannerOf(w), '350ms 淡出结束前不应提前移除节点');
+    w.__clock.advance(1);
     if (bannerOf(w)) fail('横幅淡出之后没被摘掉');
     else ok('淡出之后元素真的从 DOM 里摘掉了');
     assert.equal(w.__store['dsh-gw-loaded-once-v1'], '1');
@@ -147,20 +195,24 @@ const textOf = (win) => {
   {
     const w = fakeWindow({ store: { 'dsh-gw-loaded-once-v1': '1' }, languages: ['zh-CN'] });
     load(w);
-    await sleep(20);              // slowMs=40，还没到
+    w.__clock.advance(20);        // slowMs=40，还没到
     if (bannerOf(w)) fail('以前加载成功过，这次很快，却又弹横幅');
     else ok('加载快的时候：什么都不显示');
     w.renderApp();
-    await sleep(40);
+    w.__clock.advance(40);
     if (bannerOf(w)) fail('界面都出来了还有横幅');
     else ok('界面出来之后也不会有横幅');
+    w.__clock.advance(1000);
+    assert.equal(bannerOf(w), null, '快速加载完成后，取消的慢加载定时器不能重新显示横幅');
   }
 
   console.log('\n已经成功打开过、但这次确实慢：提示「这次偏慢」而不是「第一次」\n');
   {
     const w = fakeWindow({ store: { 'dsh-gw-loaded-once-v1': '1' }, languages: ['zh-CN'] });
     load(w);
-    await sleep(60);              // 超过 slowMs=40
+    w.__clock.advance(39);
+    assert.equal(bannerOf(w), null, 'slowMs 之前不能显示慢加载横幅');
+    w.__clock.advance(1);         // 恰好 slowMs=40
     const txt = textOf(w);
     if (!txt) fail('慢的时候没有提示');
     else if (!txt.includes('这次加载比平时慢')) fail('慢的时候用错了文案：' + txt);
@@ -172,13 +224,15 @@ const textOf = (win) => {
   {
     const w = fakeWindow({ languages: ['zh-CN'] });
     load(w);
-    await sleep(120);             // 超过 stuckMs=90
+    w.__clock.advance(88);        // 88ms 轮询仍未达到 stuckMs=90
+    assert.ok(!textOf(w).includes('控制台'), 'stuckMs 之前不应提示检查控制台');
+    w.__clock.advance(8);         // 96ms：达到阈值后的第一次轮询
     const txt = textOf(w);
     if (!txt || !txt.includes('控制台')) fail('等太久没有补充提示：' + txt);
     else ok('超过 45 秒补一句「到电脑上打开控制台看一眼」（只有一次）');
     const b = bannerOf(w);
     const lines = b.children.length;
-    await sleep(40);
+    w.__clock.advance(40);
     assert.equal(bannerOf(w).children.length, lines, '补充提示只该加一次，不该越堆越多');
     ok('那句补充提示只加一次，不会每轮堆一行');
   }
@@ -235,7 +289,7 @@ const textOf = (win) => {
       return el;
     })();
     w.__doc.body = body;
-    await sleep(30);
+    w.__clock.advance(30);
     if (bannerOf(w) && bannerOf(w).parentNode === body) ok('body 出现后横幅挪进 body');
     else fail('body 出现后没有挪进去（' + (bannerOf(w) ? bannerOf(w).parentNode === w.__doc.documentElement ? '还在 documentElement 上' : '不见了' : '横幅没了') + '）');
   }
@@ -246,7 +300,7 @@ const textOf = (win) => {
     load(w);
     assert.ok(visibleBanner(w), '存不了 localStorage 时也应该提示');
     w.renderApp();
-    await sleep(30);
+    w.__clock.advance(30);
     assert.ok(!visibleBanner(w), '界面出来之后照样要收掉');
     ok('localStorage 写不进去：不抛异常，横幅行为不变');
   }
@@ -275,8 +329,7 @@ const textOf = (win) => {
   }
 
   console.log(bad ? `\n${bad} 处问题\n` : '\n全部通过\n');
-  // 直接退：有几条用例故意让横幅一直挂着（「界面一直没出来」那种），
-  // 它内部的轮询定时器会一直占着事件循环 —— 不等它，否则这个测试永远不结束。
+  // 所有轮询都留在各窗口的虚拟时钟里，不会占用宿主事件循环。
   process.exit(bad ? 1 : 0);
 })().catch((e) => {
   console.error(e && e.stack || e);

@@ -4,6 +4,10 @@ Updated 2026-10-18 (UTC), preview.18. New Bridge releases focus on DSH. Earlier 
 
 Version detection selects an adapter after checking the local runtime and its observed protocol. A recognized version, a running service, or a successful automated fixture is not proof that every feature works. The exact distribution and the operated workflow matter.
 
+Preview.19 adds verified npm distribution preparation, not additional admitted
+runtime versions. Its actual npm Web 0.2.1-rc.2 installation and separate
+HTTPS phone-view recheck are recorded in [Preview.19 acceptance](PREVIEW19-ACCEPTANCE.md).
+
 ## Desktop baseline
 
 The preview.16 Windows desktop target is the official **DSH 0.2.1-rc.2** package. Its installer was checked against the official feed's SHA512 and Windows signature, then extracted and run in a separate D-drive home without replacing the existing installation. The original desktop UI selected the Account Flash-1017 model and returned the requested reply. The bridge separately checks the ASAR version, process/listener ownership and observed authenticated protocol before admitting the host. Current operated workflows are recorded in [Preview.16 acceptance](PREVIEW16-ACCEPTANCE.md).

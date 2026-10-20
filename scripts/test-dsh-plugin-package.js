@@ -85,6 +85,42 @@ try {
   const result = builder.buildPluginPackage({ root: fixture, outputDirectory: output, trackedPaths: allInputs });
   accepted = builder.verifyArchive(result.artifactPath);
 
+  check('only explicit npm distribution produces a publishable, source-verified archive', () => {
+    assert.equal(result.distribution, 'github');
+    assert.equal(accepted.manifest.private, true);
+    assert.equal(accepted.manifest.publishConfig, undefined);
+    const npmResult = builder.buildPluginPackage({ root: fixture,
+      outputDirectory: path.join(scratch, 'npm-artifacts'), trackedPaths: allInputs, distribution: 'npm' });
+    const npmArchive = builder.verifyArchive(npmResult.artifactPath);
+    assert.equal(npmResult.distribution, 'npm');
+    assert.equal(npmArchive.manifest.private, false);
+    assert.equal(npmArchive.manifest.name, accepted.manifest.name);
+    assert.deepEqual(npmArchive.manifest.repository, accepted.manifest.repository);
+    assert.deepEqual(npmArchive.manifest.publishConfig,
+      { registry: 'https://registry.npmjs.org', access: 'public', tag: 'latest' });
+    assert.deepEqual([...npmArchive.files.keys()], [...accepted.files.keys()]);
+    for (const [relative, bytes] of accepted.files) {
+      if (['package.json', builder.SOURCE_MANIFEST].includes(relative)) continue;
+      assert(npmArchive.files.get(relative).equals(bytes), relative + ' changed in npm mode');
+    }
+    assert(fs.readFileSync(packageFile).equals(sourceBefore), 'npm staging changed the source package');
+    assert.equal(JSON.parse(fs.readFileSync(packageFile)).private, true);
+  });
+  check('npm staging refuses unknown modes, a foreign repository and a publishable source checkout', () => {
+    const args = { root: fixture, trackedPaths: allInputs, distribution: 'npm' };
+    assert.throws(() => builder.buildPluginPackage({ ...args, distribution: 'other',
+      outputDirectory: path.join(scratch, 'unknown-mode') }), /Unknown plugin distribution/);
+    try {
+      put('package.json', JSON.stringify({ ...fixturePackage,
+        repository: { type: 'git', url: 'git+https://github.com/another/pocket-bridge.git' } }));
+      assert.throws(() => builder.buildPluginPackage({ ...args,
+        outputDirectory: path.join(scratch, 'foreign-repo') }), /repository metadata/);
+      put('package.json', JSON.stringify({ ...fixturePackage, private: false }));
+      assert.throws(() => builder.buildPluginPackage({ ...args,
+        outputDirectory: path.join(scratch, 'public-source') }), /source checkout must remain private/);
+    } finally { fs.writeFileSync(packageFile, sourceBefore); }
+  });
+
   check('a real npm tarball has the complete validated bundle and gateway source manifest', () => {
     assert(result.bytes > 10000);
     assert(result.publicFileCount > 100);
