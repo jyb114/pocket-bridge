@@ -23,7 +23,7 @@
   global.DshI18n.register({
     "对话控制": {"en":"Conversation controls","es":"Controles de conversación"},
     "返回模型列表": {"en":"Back to models","es":"Volver a modelos"},
-    "目标单独保存在当前对话，消息草稿会保留。": {"en":"The goal is saved separately for this conversation. Your message draft is preserved.","es":"El objetivo se guarda por separado en esta conversación. Se conserva el borrador del mensaje."},
+    "目标单独保存在当前对话，保存后 DSH 可能立即开始执行；消息草稿会保留。": {"en":"The goal belongs to this conversation. DSH may start it as soon as you save. Your message draft is preserved.","es":"El objetivo pertenece a esta conversación. DSH puede iniciarlo en cuanto lo guardes. Se conserva el borrador del mensaje."},
     "压缩当前对话的上下文；消息草稿会保留。": {"en":"Compact this conversation's context. Your message draft is preserved.","es":"Comprime el contexto de esta conversación. Se conserva el borrador del mensaje."},
     "备用地址与提醒": {"en":"Backup address and reminders","es":"Dirección alternativa y avisos"},
     "已关闭所有自动提醒。请从设置中手动查看备用地址；地址更新也不会自动弹出。": {"en":"All automatic reminders are off. Open Settings to view the backup address; address changes will not open a reminder.","es":"Todos los avisos automáticos están desactivados. Consulta la dirección alternativa en Ajustes; los cambios tampoco abrirán avisos."},

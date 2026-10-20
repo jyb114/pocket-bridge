@@ -3789,7 +3789,7 @@
           if (key === 'plan' && !planLoaded) { planLoaded = true; loadPlan(); }
         }
         var body = panes.goal;
-        body.append(el('p', 'panel-line', t('目标单独保存在当前对话，消息草稿会保留。')));
+        body.append(el('p', 'panel-line', t('目标单独保存在当前对话，保存后 DSH 可能立即开始执行；消息草稿会保留。')));
         var goalStateNote = el('p', 'panel-line', state.goalError ? t('目标状态暂时无法读取。') : state.goal && state.goal.phase !== 'complete'
           ? t('目标显示在输入框上方那条里，点铅笔可以改。') : t('还没有设定目标。'));
         body.append(goalStateNote);
@@ -4227,7 +4227,7 @@
         readCurrent();
       };
       if (host) render(host);
-      else overlay(t('授权范围'), render, refs.composerPicks.querySelector('[data-kind="perm"]'));
+      else overlay(t('授权范围'), render, refs.composerPicks.querySelector('[data-kind="perm"]'), { compact: true });
     }
     // The narrow status line under the composer mirrors DSH's connection and
     // balance indicators. Codex and connection switching remain in Settings.

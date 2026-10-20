@@ -128,6 +128,7 @@ async function run() {
     check(await page.eval(`document.querySelector('.control-card').getBoundingClientRect().height<innerHeight*.8`), true, 'model card leaves conversation space visible');
     await pointer('.control-card .pick-row', 'Reasoning fixture');
     await wait(`!!document.querySelector('.picker-back')`);
+    check(await page.eval(`document.querySelector('.picker-back').getBoundingClientRect().height>=44`), true, 'Back retains a phone-sized touch target');
     check(await page.eval(`__controls.firstCard===document.querySelector('.control-card')`), true, 'reasoning efforts stay in the same card');
     check(await page.eval(`__controls.calls.filter(row=>row[0]==='selectModel').length`), 0, 'opening efforts has no mutation');
     await pointer('.picker-back');
@@ -144,6 +145,8 @@ async function run() {
     const beforeLists = await page.eval(`__controls.calls.filter(row=>row[0]==='listCommands').length`);
     await page.eval(`__controls.holdList=true`);
     await pointer('[data-kind="goal"]');
+    check(await page.eval(`Array.from(document.querySelectorAll('.control-tabs button')).every(button=>button.getBoundingClientRect().height>=44)`), true, 'conversation tabs retain phone-sized touch targets');
+    check(await page.eval(`parseFloat(getComputedStyle(document.querySelector('.goal-form textarea')).fontSize)>=16`), true, 'goal input retains a readable mobile input size');
     const goalDraft = 'Independent goal draft, not a message.';
     await type('[data-control-pane="goal"] .goal-input', goalDraft);
     await pointer('[data-control-tab="compact"]');

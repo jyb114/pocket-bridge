@@ -34,6 +34,7 @@ does not claim a successful new model reply.
 | Attempt a model operation | The provider reported insufficient balance, and the error remained visible. | No successful model reply or recovery from exhausted provider balance is claimed. |
 | Attempt a candidate-loopback message without a registered device proof | The request was safely rejected with `prompt-state-context-unavailable`. | A loopback key does not create a device identity. The check was not bypassed, and no successful candidate-loopback send is claimed. |
 | Save the every-three-entry reminder and reload the actual candidate three times | After authentication and encrypted metadata were ready, stored counts were 4, 5 and 6; the popup was absent, absent and present respectively. | The local candidate's real metadata reported an unsupported/disabled backup route honestly. This verifies reminder timing, not a usable backup. |
+| Save every five, then Never, through the candidate's visible settings | Five actual reloads produced no popup on counts 1-4 and a popup on count 5. After saving Never, five more actual reloads produced no popup. | These were local candidate metadata reads, not physical-phone or production-tunnel reminder tests. |
 | Open the manual backup panel | The panel remained available and showed the actual disabled/unavailable route rather than a usable address. | Other intervals and storage failures are covered by isolated tests, not this real reload sequence. |
 
 These were source-candidate operations in a **390-by-650** desktop browser
@@ -75,8 +76,8 @@ encryption setup. If browser storage fails, the panel explains that the
 preference or count may not survive reload. This feature does not create an
 independent recovery network or bypass any connection check.
 
-The actual candidate's every-three-entry reload sequence and manual
-disabled-route panel are recorded above. Every-five, custom and never
+The actual candidate's every-three, every-five and never reload sequences and manual
+disabled-route panel are recorded above. Custom
 intervals, changed-address behavior and unavailable storage are covered
 separately by the isolated suites below. None has been certified on a
 physical phone or through a compiled Preview.20 installation.
@@ -85,7 +86,7 @@ physical phone or through a compiled Preview.20 installation.
 
 | Check | Status |
 | --- | --- |
-| Compact card, back action, independent drafts, lazy plan reads, serialized plan actions, stale goal protection and dialog disposal | Passed the 38-check controls suite using actual Chromium with a controlled adapter. |
+| Compact card, back action, independent drafts, lazy plan reads, serialized plan actions, stale goal protection and dialog disposal | Passed the 41-check controls suite using actual Chromium with a controlled adapter. |
 | Project, conversation, queue, attachment and input actions | Passed the 203-check actions suite using an isolated browser and controlled services. |
 | Reminder intervals, changed-address behavior, per-origin storage, disabled routes and unavailable storage | Passed `test-dsh-lite-backup.js`, `test-dsh-lite-backup-monitor.js` and `test-dsh-lite-backup-browser.js`. These are isolated fixtures; browser cases use actual Chromium. |
 | Complete isolated CI suite | 136 passed, 0 skipped, 0 failed. Six live-only segments are explicitly excluded and are not counted as passes. |

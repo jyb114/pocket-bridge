@@ -182,13 +182,67 @@ async function main() {
     assert(Date.now() - start < 250); assert.equal(fx.calls.length, 0);
   });
   await check('Multiple unresponsive candidates share the overall deadline', async fx => {
+    // Exercise the unchanged resolver with its own deterministic clock. Real
+    // timers may fire just before Date.now() reaches the deadline, admitting a
+    // legitimate extra 1 ms probe; a wall-clock child count is not invariant.
+    const vm = require('node:vm');
+    let now = 0, nextTimer = 1, outcome;
+    const timers = new Map(), lateCallbacks = [], candidates = [];
+    class ClockDate extends Date {
+      constructor(...args) { super(...(args.length ? args : [now])); }
+      static now() { return now; }
+    }
+    const clockSetTimeout = (callback, milliseconds) => {
+      assert(Number.isSafeInteger(milliseconds) && milliseconds > 0, 'every probe has a positive integer budget');
+      const id = nextTimer++;
+      timers.set(id, { at: now + milliseconds, callback });
+      return id;
+    };
+    const clockModule = { exports: {} };
+    const resolverPath = path.join(__dirname, 'dsh-plugin-node.js');
+    vm.runInNewContext(fs.readFileSync(resolverPath, 'utf8'), {
+      require, module: clockModule, exports: clockModule.exports, process, Buffer,
+      Date: ClockDate, setTimeout: clockSetTimeout, clearTimeout: id => timers.delete(id)
+    }, { filename: resolverPath });
     for (let index = 0; index < 8; index++) {
       const node = fx.addRuntime(`node-v24.${index}.0-win-x64`);
-      fx.behavior.set(node, () => {});
+      candidates.push(node);
+      fx.behavior.set(node, ({ callback }) => lateCallbacks.push(callback));
     }
-    const start = Date.now();
-    await unavailable(fx.resolve({ isElectron: true }, { totalTimeoutMs: 70 }));
-    assert(Date.now() - start < 200); assert(fx.killed.length <= 3);
+    const operation = clockModule.exports.resolveBridgeNode({ ...fx.options, isElectron: true },
+      { ...fx.deps, totalTimeoutMs: 70 });
+    operation.then(value => { outcome = { value }; }, error => { outcome = { error }; });
+    const flush = async () => { await Promise.resolve(); await new Promise(resolve => setImmediate(resolve)); };
+    for (let step = 0; step < 16 && !outcome; step++) {
+      await flush();
+      if (outcome) break;
+      assert.equal(timers.size, 1, 'only the current owned probe has an active deadline');
+      const [id, timer] = [...timers].sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      now = timer.at; timers.delete(id); timer.callback();
+      await flush();
+      if (step === 0) {
+        lateCallbacks[0](null, 'v24.18.1\n');
+        await flush();
+        assert.equal(outcome, undefined, 'a valid callback after the first probe deadline cannot admit that binary');
+        assert.equal(fx.calls.length, 2, 'late completion cannot disturb the second in-flight probe');
+      }
+    }
+    assert(outcome, 'the shared virtual deadline settles the resolver');
+    assert.equal(now, 70, 'all candidates share exactly the one 70 ms virtual deadline');
+    assert.equal(outcome.error && outcome.error.code, 'node-unavailable');
+    const expected = candidates.reverse().slice(0, 3);
+    assert.deepEqual(fx.calls.map(call => call.filename), expected, 'no fourth candidate or where.exe is queried');
+    assert.deepEqual(fx.calls.map(call => call.options.timeout), [30, 30, 10], 'the final probe receives only the remaining overall budget');
+    assert(fx.calls.every(call => call.args.length === 1 && call.args[0] === '--version'));
+    assert.deepEqual(fx.killed, expected, 'exactly the three owned unresponsive queries are stopped');
+    assert.equal(timers.size, 0, 'no resolver deadline remains after rejection');
+    const rejected = outcome;
+    lateCallbacks.forEach(callback => callback(null, 'v24.18.1\n'));
+    await flush();
+    assert.equal(outcome, rejected, 'late callbacks cannot replace the final unavailable result');
+    assert.deepEqual(fx.calls.map(call => call.filename), expected, 'late callbacks cannot begin fallback discovery');
+    assert.deepEqual(fx.killed, expected, 'late callbacks cannot stop a query twice');
+    assert.equal(timers.size, 0);
   });
   await check('A binary modified during --version is never returned', async fx => {
     fx.behavior.set(fx.systemNode, ({ callback }) => queueMicrotask(() => {

@@ -10,6 +10,11 @@ returns to the model list without replacing the dialog. A successful picker
 choice closes after 150 ms instead of 700 ms; failed choices remain visible
 with their error.
 
+Permission selection uses the same compact card. Back and tab controls keep
+44-pixel touch targets; editable goal and reminder fields use 16-pixel text.
+The goal panel explains that saving can start DSH immediately, while the
+message draft stays separate.
+
 Goal, plan and context-compaction controls use separate tabs. The message
 draft stays separate from goal input. Opening the goal tab no longer fetches
 plan selection and command lists; those reads start when the plan tab is
