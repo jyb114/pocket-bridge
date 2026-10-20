@@ -86,7 +86,7 @@ physical phone or through a compiled Preview.20 installation.
 
 | Check | Status |
 | --- | --- |
-| Compact card, back action, independent drafts, lazy plan reads, serialized plan actions, stale goal protection and dialog disposal | Passed the 41-check controls suite using actual Chromium with a controlled adapter. |
+| Compact card, focused back action, independent drafts, lazy plan reads, serialized plan actions, stale goal protection and dialog disposal | Passed the 43-check controls suite using actual Chromium with a controlled adapter. |
 | Project, conversation, queue, attachment and input actions | Passed the 203-check actions suite using an isolated browser and controlled services. |
 | Reminder intervals, changed-address behavior, per-origin storage, disabled routes and unavailable storage | Passed `test-dsh-lite-backup.js`, `test-dsh-lite-backup-monitor.js` and `test-dsh-lite-backup-browser.js`. These are isolated fixtures; browser cases use actual Chromium. |
 | Complete isolated CI suite | 136 passed, 0 skipped, 0 failed. Six live-only segments are explicitly excluded and are not counted as passes. |

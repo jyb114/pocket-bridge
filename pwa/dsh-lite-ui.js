@@ -3443,10 +3443,16 @@
               });
               row.addEventListener('click', function () {
                 if (!current() || pending) return;
+                var returnIndex = Array.prototype.indexOf.call(body.querySelectorAll('.pick-row'), row);
                 body.replaceChildren();
                 var back = el('button', 'picker-back', '‹ ' + t('返回模型列表'));
                 back.type = 'button';
-                back.addEventListener('click', function () { if (!pending) renderItems(items); });
+                back.addEventListener('click', function () {
+                  if (pending || !current()) return;
+                  renderItems(items);
+                  var destination = body.querySelectorAll('.pick-row')[returnIndex];
+                  if (destination && !destination.disabled) destination.focus({ preventScroll: true });
+                });
                 body.append(back, el('p', 'panel-line', displayName + ' · ' + t('思考强度')));
                 efforts.forEach(function (effort) {
                   var pick = el('button', 'pick-row', String(effort.name));
@@ -3457,6 +3463,7 @@
                   pick.addEventListener('click', function () { choose(pick, String(id), String(effort.id), item, String(effort.name)); });
                   body.append(pick);
                 });
+                back.focus({ preventScroll: true });
               });
               body.append(row);
               return;
