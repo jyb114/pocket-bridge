@@ -4,6 +4,24 @@
 
 A lightweight, unofficial phone interface for **DeepSeek Harness (DSH) running on your own Windows computer**. Open a browser on your phone to work with local projects and conversations, send instructions, respond to supported approvals, and transfer workspace files. Your computer runs DSH; Pocket Bridge provides the connection and a small browser interface.
 
+## Try the Windows preview
+
+**Already using DSH on Windows? Continue a conversation from your phone browser without installing a phone app.**
+
+[Download Windows x64 preview.12 (about 39 MB)](https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.12/PocketBridge-1.0.0-preview.12-win-x64-Setup.exe) · [Release notes](https://github.com/jyb114/pocket-bridge/releases/tag/v1.0.0-preview.12) · [Checksums](https://github.com/jyb114/pocket-bridge/releases/download/v1.0.0-preview.12/SHA256SUMS.txt)
+
+1. **Check DSH first:** it must be installed, signed in, and able to reply on your Windows computer.
+2. **Install and connect:** install Pocket Bridge, open its local console, and copy the complete HTTPS phone link. Keep the link and its keys private.
+3. **Try one conversation:** open the link in your phone browser, select a project, and send a harmless test message. Keep the computer awake and online.
+
+**Preview scope:** current releases support DSH only. Runtime capabilities vary by version. Physical iPhone/Android, cellular use, and some file-save flows still need independent validation; see the [acceptance record](docs/DSH-MOBILE-ACCEPTANCE.md). DSH and model-provider costs are separate. Read the [transport and privacy limits](#privacy-and-transport) before exposing a workspace.
+
+<img src="docs/assets/dsh-mobile-preview.png" alt="Pocket Bridge mobile interface with synthetic demonstration content" width="320">
+
+*Interface preview with synthetic content, not a recording of a live account or evidence of physical-phone acceptance.*
+
+Trying it on a real phone? Follow the [first-use checklist](docs/FIRST-USE-PILOT.md) and share a redacted result through [GitHub Issues](https://github.com/jyb114/pocket-bridge/issues). Please do not post a complete connection link, access key, or private conversation.
+
 **New releases focus exclusively on DSH.** Codex and Dot are retired from the new gateway and Windows installer. Previous combined releases and their installers remain available in [GitHub Releases](https://github.com/jyb114/pocket-bridge/releases), with no further integration updates. Upgrading preserves the installation directory, connection keys, device records, uploads, and existing local journals. It does not close Codex, delete its conversations, or remove your target applications.
 
 Pocket Bridge is independent and unofficial. It is not affiliated with or endorsed by DeepSeek, OpenAI, or Cloudflare. DSH, model access, and any provider fees are separate. See [third-party notices](THIRD-PARTY-NOTICES.md).
@@ -97,10 +115,6 @@ History is paged, unchanged message rows are reused, streaming updates are coale
 The computer's public-asset compression cache checks current source bytes and file identity on every request it receives. Brotli quality 5 reduces first-miss compression work; gzip remains at level 6. The largest Lite script is preloaded from its existing fingerprinted path without changing execution order. On a previously trusted origin, fixed public scripts can be reused from the phone's cache after their bytes, active pin and access-key epoch are rechecked. The emergency updater and manifest stay online; installing new code still requires the normal explicit verified update. A new origin or an empty cache still needs its first download. Private conversation and file responses are not added to this public cache.
 
 Concurrent modern-session queue, goal and model reads share only an in-flight request, with a one-second join window and fresh reads after mutations or connection changes. Repeated catalog updates preserve unchanged navigation buttons instead of recreating them. In the recorded desktop-browser tunnel run, static scripts and DOMContentLoaded improved, but first conversation content still took about nine seconds and did not beat the earlier run. Fresh Windows process discovery remains a measured bottleneck. See [Preview.18 acceptance](docs/PREVIEW18-ACCEPTANCE.md) for the actual timings, measurement method and device limits.
-
-<img src="docs/assets/dsh-mobile-preview.png" alt="Pocket Bridge mobile interface with synthetic demonstration content" width="320">
-
-*UI demonstration with synthetic content. This image is not a live account, encrypted connection, or physical-phone acceptance result.*
 
 ## Development and verification
 
