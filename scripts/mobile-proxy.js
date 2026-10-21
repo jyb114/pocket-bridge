@@ -110,6 +110,8 @@ const backupPreparationHttp = require('./backup-preparation-http.js').createBack
   receiverHtml: () => fs.readFileSync(path.join(PWA_DIR, 'backup-prepare.html'), 'utf8'), authCookies
 });
 const dshLiteAttachment = require('./dsh-lite-attachment.js');
+const dshImagePreview = require('./dsh-lite-image-preview.js');
+const renderDshThumbnail = dshImagePreview.createThumbnailRenderer({ tempDir: path.join(LOG_DIR, 'runtime-temp') });
 const dshRuntimeIdentity = require('./dsh-runtime-identity.js').runtimeIdentity;
 // Tiny mobile DSH UI uses only four fixed unary RPCs. The browser never
 // supplies an upstream URL; this transport always targets the verified local
@@ -210,6 +212,16 @@ const serveDshLiteAttachmentE2ee = e2eeWrap(dshLiteAttachment.createDshLiteAttac
     const state = await refreshDshRuntimeState();
     return state.ready ? state.runtime : null;
   }
+}));
+const serveDshLiteAttachmentPreviewE2ee = e2eeWrap(dshLiteAttachment.createDshLiteAttachment({
+  callUpstream: callDshLiteUpstream, transformImage: renderDshThumbnail,
+  resolveRuntime: async () => {
+    const state = await refreshDshRuntimeState();
+    return state.ready ? state.runtime : null;
+  }
+}));
+const serveDshLiteImagePreviewE2ee = e2eeWrap(dshImagePreview.createDshLiteImagePreview({
+  instanceId: () => INSTANCE_ID, logDir: LOG_DIR, thumbnailRenderer: renderDshThumbnail
 }));
 // ── 抓屏：把电脑屏幕送到手机上 ─────────────────────────────────────────────────
 //
@@ -1529,6 +1541,8 @@ const PWA_ROUTES = {
   '/e2ee.js': { file: 'e2ee.js', type: 'application/javascript; charset=utf-8', noCache: true },
   '/dsh-lite.css': { file: 'dsh-lite.css', type: 'text/css; charset=utf-8', noCache: true },
   '/dsh-lite-ui.js': { file: 'dsh-lite-ui.js', type: 'application/javascript; charset=utf-8', noCache: true },
+  '/dsh-artifact-links.js': { file: 'dsh-artifact-links.js', type: 'application/javascript; charset=utf-8', noCache: true },
+  '/dsh-image-view.js': { file: 'dsh-image-view.js', type: 'application/javascript; charset=utf-8', noCache: true },
   '/dsh-lite-adapter.js': { file: 'dsh-lite-adapter.js', type: 'application/javascript; charset=utf-8', noCache: true },
   '/dsh-lite-legacy.js': { file: 'dsh-lite-legacy.js', type: 'application/javascript; charset=utf-8', noCache: true },
   '/dsh-lite-router.js': { file: 'dsh-lite-router.js', type: 'application/javascript; charset=utf-8', noCache: true },
@@ -2776,6 +2790,7 @@ const BOOTSTRAP_PATHS = new Set([
   '/', '/index.html', '/dsh-lite',
   '/polyfill.js', '/compat.js', '/dsh-directory-picker.js', '/i18n.js', '/dsh-lite-lang.js', '/e2ee.js', '/voice.js', '/route.js', '/boot.js',
   '/dsh-lite.css', '/dsh-lite-pin.js', '/dsh-lite-ui.js', '/dsh-lite-adapter.js',
+  '/dsh-artifact-links.js', '/dsh-image-view.js',
   '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-switch.js', '/dsh-lite-update.js', '/dsh-backup-prepare.js', '/backup-prepare.css',
   // ★ 这个漏了会**静默失效**：它在认证之前就要能取到（第一次打开时手机还没
   //   转正）。漏掉的表现是「横幅时有时无」，而且只在真机上、只在第一次出现 ——
@@ -4424,6 +4439,8 @@ const E2EE_CONTENT_PATHS = new Set([
   '/__dsh/lite-download', // 轻量 DSH：限定会话工作区内的文件下载
   '/__dsh/lite-files', // 轻量 DSH：限定会话工作区内的单层文件列表
   '/__dsh/lite-attachment', // Verified session attachment IDs; encrypted image bytes, never raw paths
+  '/__dsh/lite-attachment-preview',
+  '/__dsh/lite-image-preview',
   '/__dsh/screen-shot', // 抓电脑屏幕给手机看 —— 画面本身就是敏感内容，必须加密
   '/__dsh/legacy-rpc', // 旧版 DSH：仅已验证的点号 RPC，密文包裹
   '/__dsh/legacy-interactions', // Official legacy pending requests, never raw SSE to the phone
@@ -5424,6 +5441,7 @@ function handleRequestInner(req, res, proofDeadline) {
       // Lite 页在手机上处理加密消息；官方页注入的入口也可能携带 /k/ 与 #k=。
       // 这些脚本必须与其它桥脚本受同一份 Service Worker 指纹约束。
       '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js', '/dsh-backup-prepare.js',
+      '/dsh-artifact-links.js', '/dsh-image-view.js',
       '/dsh-lite-legacy.js', '/dsh-lite-router.js',
       // ★ 轻量版的三套文案。和 i18n.js 同一类：它决定界面显示什么语言、
       //   说什么话，每个页面都要加载 —— 不钉住就等于留了一个没人看着的口子。
@@ -5546,6 +5564,14 @@ function handleRequestInner(req, res, proofDeadline) {
 
   if (u.pathname === '/__dsh/lite-attachment') {
     serveDshLiteAttachmentE2ee(req, res);
+    return;
+  }
+  if (u.pathname === '/__dsh/lite-attachment-preview') {
+    serveDshLiteAttachmentPreviewE2ee(req, res);
+    return;
+  }
+  if (u.pathname === '/__dsh/lite-image-preview') {
+    serveDshLiteImagePreviewE2ee(req, res);
     return;
   }
 

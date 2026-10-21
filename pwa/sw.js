@@ -25,7 +25,8 @@ const KEY_EPOCH_KEY = '/__dsh-access-key-epoch';
 const DSH_STATIC_CACHE = 'dsh-static-modules-v1';
 const LITE_PIN_REQUIRED = ['/e2ee.js', '/i18n.js', '/dsh-lite-lang.js',
   '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js',
-  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js', '/dsh-lite-switch.js'];
+  '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js', '/dsh-lite-switch.js',
+  '/dsh-artifact-links.js', '/dsh-image-view.js'];
 const PIN_HASH = /^[a-f0-9]{64}$/i;
 // Only fixed public code may use the code-body cache. In particular, a stored
 // pin must never make HTML, API/authentication responses or an unknown URL
@@ -33,10 +34,11 @@ const PIN_HASH = /^[a-f0-9]{64}$/i;
 const PUBLIC_CODE_PATHS = new Set(['/polyfill.js', '/compat.js', '/dsh-directory-picker.js',
   '/e2ee.js', '/i18n.js', '/voice.js', '/route.js', '/boot.js', '/dsh-lite-pin.js',
   '/dsh-lite-adapter.js', '/dsh-lite-ui.js', '/dsh-lite-switch.js', '/dsh-backup-prepare.js',
+  '/dsh-artifact-links.js', '/dsh-image-view.js',
   '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-lang.js', '/first-load.js', '/prove.js']);
 const LITE_CACHE_FIRST_PATHS = new Set(['/e2ee.js', '/i18n.js', '/dsh-lite-lang.js', '/voice.js',
   '/dsh-lite-pin.js', '/dsh-lite-adapter.js', '/dsh-lite-legacy.js', '/dsh-lite-router.js',
-  '/dsh-backup-prepare.js', '/dsh-lite-ui.js']);
+  '/dsh-backup-prepare.js', '/dsh-lite-ui.js', '/dsh-artifact-links.js', '/dsh-image-view.js']);
 let codeStateRevision = 0;
 let codeStateMutations = 0;
 let codeStateWrites = Promise.resolve();

@@ -11,9 +11,10 @@ const source = read('dsh-lite-update.js');
 const i18n = read('i18n.js');
 const dictionary = read('dsh-lite-lang.js');
 const required = ['/dsh-lite-ui.js', '/dsh-lite-adapter.js', '/dsh-lite-pin.js', '/e2ee.js',
+  '/dsh-artifact-links.js', '/dsh-image-view.js',
   '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-switch.js', '/dsh-backup-prepare.js', '/i18n.js', '/dsh-lite-lang.js'];
 const manifest = letter => ({ files: Object.fromEntries(required.map(file => [file, letter.repeat(64)])) });
-const build = letter => Array(4).fill(letter.repeat(8)).join('-');
+const build = letter => Array(6).fill(letter.repeat(8)).join('-');
 const workerReason = '新版本文件未能完整下载并验证；旧版本仍可用。';
 const expected = {
   zh: {

@@ -443,6 +443,21 @@ async function run() {
       return dto;
     }
     const remoteReads = await page.eval(`__actions.calls.filter(x=>x[0]==='download').length`);
+    // Cancelling an unsent image must release its original File. A native
+    // content-addressed host may return the same attachment ID when the same
+    // bytes are selected again under a different filename; a cancelled upload
+    // must not poison that new, independently verified preview.
+    await page.eval(`__actions.nextUploadId='cancelled-reupload-image'`);
+    const cancelledUploads = await page.eval(`__actions.calls.filter(x=>x[0]==='upload').length`);
+    await chooseOriginal('cancel-before-send.png');
+    await wait(`__actions.calls.filter(x=>x[0]==='upload').length===${cancelledUploads + 1}&&!document.getElementById('upload-button').disabled`);
+    await pointer('#attachment-list button');
+    await page.send('HeapProfiler.collectGarbage');
+    check(await page.eval(`__actions.fileRefs.find(x=>x.name==='cancel-before-send.png').ref.deref()===undefined`), true, 'cancelling an image absent from history releases its original File');
+    const renamed = await publishUpload('renamed-after-cancel.png');
+    check(await page.eval(`document.querySelector('[data-record-id="upload-${renamed.attachmentId}"] .record-local-image').dataset.localPreview`), 'available', 'renamed reupload after cancelling identical native attachment ID retains its verified preview');
+    check(await page.eval(`__actions.calls.filter(x=>x[0]==='download').length`), remoteReads, 'cancel and reupload never infer a computer path or issue remote reads');
+    await page.eval(`__actions.nextUploadId=''`);
     const native = await publishUpload('device-first.png');
     const nativeRow = '[data-record-id="upload-' + native.attachmentId + '"]';
     check(await page.eval(`__actions.calls.filter(x=>x[0]==='upload').at(-1).slice(1)`), ['s1', 'device-first.png', originalPng.length, true], 'native upload receives Chromium\'s original File with exact session/name/bytes');

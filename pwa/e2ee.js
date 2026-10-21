@@ -1014,6 +1014,9 @@
     '/__dsh/lite-upload',            // 轻量 DSH：会话、文件名与文件字节
     '/__dsh/lite-download',          // 轻量 DSH：会话与文件路径
     '/__dsh/lite-files',             // 轻量 DSH：工作区文件列表
+    '/__dsh/lite-attachment',
+    '/__dsh/lite-attachment-preview',
+    '/__dsh/lite-image-preview',
     '/__dsh/legacy-rpc',            // 旧版 DSH：受限点号 RPC
     '/__dsh/legacy-interactions',   // Official legacy pending requests
     '/__dsh/legacy-response',       // Session/rpc-bound legacy replies

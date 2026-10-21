@@ -575,3 +575,11 @@ a.record-file { display: inline-flex; align-items: center; text-decoration: none
 .backup-warning{padding:12px;border-radius:8px;background:#fff4de;color:#6c4600;line-height:1.6}
 
 .backup-current{overflow-wrap:anywhere;word-break:break-word}
+.dsh-image-figure { display:block; margin:12px 0; padding:8px; border:1px solid var(--line); border-radius:14px; overflow:hidden; max-width:100%; background:var(--panel,transparent); }
+.dsh-image-preview { display:flex; width:100%; align-items:center; justify-content:center; min-height:100px; max-height:260px; padding:0; border:0; background:transparent; border-radius:9px; overflow:hidden; }
+.dsh-image-thumbnail { display:block; width:100%; max-height:240px; object-fit:contain; }
+.dsh-image-caption { display:block; font-size:12px; line-height:1.45; overflow-wrap:anywhere; color:var(--muted); margin:6px 0 0; }
+.dsh-image-status { display:block; font-size:13px; line-height:1.5; overflow-wrap:anywhere; color:var(--muted); }
+.dsh-image-save,.dsh-image-retry { display:inline-flex; align-items:center; min-height:44px; margin:4px 6px 0 0; font-size:13px; border:1px solid var(--line); border-radius:10px; padding:6px 12px; color:inherit; background:transparent; }
+.dsh-image-viewer { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.dsh-image-original { display:block; width:100%; height:auto; max-height:65vh; object-fit:contain; touch-action:pan-x pan-y pinch-zoom; }
