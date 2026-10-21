@@ -16,7 +16,12 @@ const e2ee = require('./e2ee');
 const origin = require('./request-origin');
 const { createDshLiteAttachment, MAX_IMAGE_BYTES, MAX_RESPONSE_BYTES, MAX_REQUEST_BYTES } = require('./dsh-lite-attachment');
 const source = fs.readFileSync(path.join(__dirname, 'mobile-proxy.js'), 'utf8');
+const contentPathDeclaration = /^const E2EE_CONTENT_PATHS = new Set\(\[[\s\S]*?^\]\);/m.exec(source);
+assert(contentPathDeclaration, 'The production encrypted-content declaration is present');
+const contentPaths = vm.runInNewContext(contentPathDeclaration[0] + '\nE2EE_CONTENT_PATHS;');
+assert(contentPaths.has('/__dsh/lite-attachment-preview'), 'The real preview route is an encrypted-content route');
 const png = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'icon-192.png'));
+const transformedPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0WQAAAAASUVORK5CYII=', 'base64');
 const digest = bytes => 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex');
 const id = digest(png);
 const SECRET = 'isolated-attachment-encryption-secret-0123456789', LOGIN = 'isolated-login';
@@ -34,7 +39,7 @@ const box = vm.createContext({ Buffer, URL, Readable, crypto, path, e2ee, setTim
     { ok: true, device: { id: 'synthetic', label: 'Fixture' } } : { ok: false, reason: 'revoked' } },
   authProvenAt: () => proved, authObserved: new Set(), proofWaitHits: new Map(), proofBootWindowOpen: () => false, proofLooksInProgress: () => false,
   PROOF_WAIT_FULL_MS: 100, PROOF_WAIT_MS: 100, PROOF_WAIT_MAX_PER_DEVICE: 1, PWA_ROUTES: {}, dshLazyImageStore: { imageDigestFromPath: () => null },
-  E2EE_CONTENT_PATHS: new Set(['/__dsh/lite-attachment']), handleConsole: () => false, isBootstrapRequest: () => false,
+  E2EE_CONTENT_PATHS: contentPaths, handleConsole: () => false, isBootstrapRequest: () => false,
   pageLanguage: () => 'en', pageText: () => ({ errors: { noKey: 'Authentication required: ' } }), deviceErrorPage: () => 'Device authentication failed.',
   pickLang: () => 'en', PLAINTEXT_REFUSED: { en: { head: 'Encrypted request required', body: '', how: '' } }, log() {}
 });
@@ -46,8 +51,7 @@ vm.runInContext(names.map(name => {
     return source.slice(at, open) + extractFunction('function body() ' + source.slice(open), 'body').replace('function body() ', ''); }
   const code = extractFunction(source, name); assert(code, name); return code;
 }).join('\n'), box);
-const handler = createDshLiteAttachment({ resolveRuntime: async () => currentRuntime,
-  callUpstream: async call => {
+const callUpstream = async call => {
     calls++;
     assert.equal(call.path, '/api/session/attachment'); assert.equal(call.method, 'POST');
     assert.equal(call.maxResponseBytes, MAX_RESPONSE_BYTES); assert.equal(call.verifiedRuntime, runtime);
@@ -85,8 +89,24 @@ const handler = createDshLiteAttachment({ resolveRuntime: async () => currentRun
       if (fault === 'oversize') ref.bytes = MAX_IMAGE_BYTES + 1;
     }
     return { statusCode: 200, body: JSON.stringify({ type: 'client-response', rpcId: fault === 'rpc' ? 'wrong-response' : wire.rpcId, result }) };
+  };
+const handler = createDshLiteAttachment({ resolveRuntime: async () => currentRuntime, callUpstream });
+let transformCalls = 0, transformFault = null;
+const previewHandler = createDshLiteAttachment({ resolveRuntime: async () => currentRuntime, callUpstream,
+  transformImage: async (image, { signal }) => {
+    transformCalls++;
+    assert.equal(signal instanceof AbortSignal, true);
+    assert.equal(signal.aborted, false);
+    assert.deepEqual(image, { data: png, type: 'image/png' }, 'Only complete officially admitted source bytes reach conversion');
+    assert.equal(digest(image.data), id, 'Source hash is verified before conversion');
+    if (transformFault === 'throw') throw Error('private converter details must remain local');
+    if (transformFault === 'mime') return { data: transformedPng, type: 'image/jpeg' };
+    if (transformFault === 'nonraster') return { data: Buffer.from('private converter output'), type: 'image/png' };
+    if (transformFault === 'oversize') return { data: Buffer.concat([png, Buffer.alloc(MAX_IMAGE_BYTES + 1 - png.length)]), type: 'image/png' };
+    return { data: transformedPng, type: 'image/png' };
   } });
 box.serveDshLiteAttachmentE2ee = box.e2eeWrap(handler);
+box.serveDshLiteAttachmentPreviewE2ee = box.e2eeWrap(previewHandler);
 const server = http.createServer((req, res) => { try { box.handleRequest(req, res); } catch (error) { res.writeHead(500); res.end('Isolated entry failed.'); console.error(error); } });
 async function send(input = { sessionId: 'session-a', attachmentId: id }, options = {}) {
   const body = Buffer.from(options.raw === undefined ? JSON.stringify(input) : options.raw);
@@ -118,6 +138,62 @@ async function check(name, test) { await test(); checks++; console.log('PASS ' +
       assert.equal(response.headers['x-dsh-e2ee-type'], 'image/png'); assert.equal(response.headers['x-dsh-e2ee'], '1');
       assert.deepEqual(response.opened, png); assert.equal(response.headers['x-content-type-options'], 'nosniff');
       assert.equal(response.raw.includes(Buffer.from(id)), false); assert.equal(response.raw.includes(Buffer.from('session-a')), false);
+    });
+    await check('production preview dispatch converts only the officially authorized source and encrypts its distinct result', async () => {
+      const beforeCalls = calls, beforeTransforms = transformCalls;
+      const response = await send(undefined, { url: '/__dsh/lite-attachment-preview' });
+      assert.equal(response.status, 200); assert.equal(calls, beforeCalls + 1); assert.equal(transformCalls, beforeTransforms + 1);
+      assert.notDeepEqual(transformedPng, png);
+      assert.deepEqual(response.opened, transformedPng);
+      assert.equal(response.headers['content-type'], 'application/octet-stream');
+      assert.equal(response.headers['x-dsh-e2ee-type'], 'image/png');
+      assert.equal(response.headers['x-dsh-e2ee'], '1');
+      assert.equal(response.headers['x-content-type-options'], 'nosniff');
+      assert.equal(response.headers['cache-control'], 'no-store');
+      assert.equal(response.raw.includes(transformedPng), false, 'Converted pixels never travel in plaintext');
+    });
+    await check('production preview login, device, proof, AES, MIME and request gates run before upstream or conversion', async () => {
+      const beforeCalls = calls, beforeTransforms = transformCalls, url = '/__dsh/lite-attachment-preview';
+      for (const [extra, expected] of [
+        [{ headers: { cookie: '' } }, 403],
+        [{ headers: { cookie: `fixture-login=${LOGIN}; fixture-device=revoked` } }, 403],
+        [{ headers: { 'x-dsh-e2ee': '0' } }, 403],
+        [{ plain: true }, 400],
+        [{ headers: { 'x-dsh-e2ee-type': 'text/plain' } }, 415],
+        [{ method: 'GET', plain: true, raw: '' }, 405],
+        [{ url: url + '?path=forbidden' }, 400],
+        [{ raw: JSON.stringify({ sessionId: 'session-a', attachmentId: id, path: 'forbidden' }) }, 400]
+      ]) assert.equal((await send(undefined, { url, ...extra })).status, expected);
+      proved = false;
+      try {
+        const response = await send(undefined, { url });
+        assert.equal(response.status, 403); assert.equal(response.headers['x-dsh-need-proof'], '1');
+      } finally { proved = true; }
+      assert.equal(calls, beforeCalls); assert.equal(transformCalls, beforeTransforms);
+    });
+    await check('cross-session, revoked references and invalid official source bytes never reach preview conversion', async () => {
+      const beforeTransforms = transformCalls, url = '/__dsh/lite-attachment-preview';
+      assert.equal((await send({ sessionId: 'session-b', attachmentId: id }, { url })).status, 404);
+      assert.equal((await send({ sessionId: 'session-a', attachmentId: 'sha256:' + '0'.repeat(64) }, { url })).status, 404);
+      revision = 2;
+      try { assert.equal((await send(undefined, { url })).status, 404); } finally { revision = 1; }
+      for (const scenario of ['id', 'bytes', 'base64', 'digest', 'svg', 'mime', 'dimensions', 'rpc', 'raw', 'status']) {
+        fault = scenario;
+        try { assert.equal((await send(undefined, { url })).status, 502, scenario); } finally { fault = null; }
+      }
+      assert.equal(transformCalls, beforeTransforms, 'No invalid or unreferenced source invokes the native converter');
+    });
+    await check('preview transform errors, wrong MIME, nonraster and oversized results fail closed without private details', async () => {
+      const url = '/__dsh/lite-attachment-preview';
+      for (const scenario of ['throw', 'mime', 'nonraster', 'oversize']) {
+        transformFault = scenario;
+        try {
+          const before = transformCalls, response = await send(undefined, { url });
+          assert.equal(transformCalls, before + 1); assert.equal(response.status, 502, scenario);
+          assert.doesNotMatch(response.opened.toString(), /private|converter|details/);
+          assert.equal(response.opened.includes(png), false); assert.equal(response.opened.includes(transformedPng), false);
+        } finally { transformFault = null; }
+      }
     });
     await check('cross-session and unreferenced IDs are official-denied and never cached', async () => {
       const before = calls;
@@ -197,6 +273,27 @@ async function check(name, test) { await test(); checks++; console.log('PASS ' +
       const work = pending(req, res); await ready;
       res.destroyed = true; res.emit('close');
       await work; assert.equal(signal.aborted, true); assert.equal(dispatched, 1); assert.equal(writes, 0);
+      assert.equal(req.listenerCount('aborted'), 0); assert.equal(res.listenerCount('close'), 0);
+    });
+    await check('closing a response aborts the pending authorized transform and ignores its eventual pixels', async () => {
+      let signal, started, release, writes = 0, transforms = 0;
+      const ready = new Promise(resolve => { started = resolve; });
+      const pending = createDshLiteAttachment({ resolveRuntime: async () => runtime, callUpstream,
+        transformImage: (image, options) => {
+          transforms++; signal = options.signal;
+          assert.equal(digest(image.data), id); assert.deepEqual(image.data, png);
+          started(); return new Promise(resolve => { release = resolve; });
+        } });
+      const body = Buffer.from(JSON.stringify({ sessionId: 'session-a', attachmentId: id }));
+      const req = Readable.from([body]); req.method = 'POST'; req.url = '/__dsh/lite-attachment-preview';
+      req.headers = { 'content-type': 'application/json', 'content-length': body.length, 'x-dsh-e2ee': '1' }; req.__dshE2eeDecrypted = true;
+      const res = new EventEmitter(); res.destroyed = false; res.writableEnded = false;
+      res.writeHead = res.end = () => { writes++; };
+      const work = pending(req, res); await ready;
+      res.destroyed = true; res.emit('close'); await work;
+      assert.equal(signal.aborted, true); assert.equal(transforms, 1); assert.equal(writes, 0);
+      release({ data: transformedPng, type: 'image/png' }); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(writes, 0, 'A late conversion result cannot write to the retired response');
       assert.equal(req.listenerCount('aborted'), 0); assert.equal(res.listenerCount('close'), 0);
     });
     console.log(checks + ' encrypted durable-image groups passed; no production/native/model/filesystem attachment actions.');

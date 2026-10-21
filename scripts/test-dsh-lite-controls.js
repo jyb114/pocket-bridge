@@ -40,6 +40,7 @@ window.DshLiteAdapter={
  async selectMode(){},
  async readGoal(id){__controls.calls.push(['goalRead',id]);return __controls.goal?structuredClone(__controls.goal):null;},
  async goalAction(id,kind,payload){__controls.calls.push(['goalWrite',id,kind,structuredClone(payload)]);
+  if(__controls.goalWriteMode==='hold')return new Promise(resolve=>{__controls.finishGoalWrite=resolve;});
   if(__controls.goalWriteMode==='unchanged')return{accepted:true};
   __controls.goal={id:kind==='create'?'new-goal-'+(++__controls.goalSequence):payload.id,revision:kind==='create'?1:(payload.revision+1),objective:payload.objective,phase:'active'};
   return{accepted:true,goal:structuredClone(__controls.goal)};},
@@ -60,10 +61,21 @@ async function run() {
     ['/dsh-lite-lang.js', 'text/javascript'], ['/i18n.js', 'text/javascript'],
     ['/dsh-lite.css', 'text/css'], ['/pocket-bridge.svg', 'image/svg+xml']
   ]);
+  const uiSource = fs.readFileSync(path.join(root, 'pwa', 'dsh-lite-ui.js'), 'utf8');
+  const trackingMarker = 'var mountNodes = [];';
+  assert.equal(uiSource.split(trackingMarker).length, 2, 'the owned-node observation point must be unique');
+  // Read-only observation for this isolated fixture, never a production API.
+  // DOM collection timing is not guaranteed by WeakRef or forced browser GC;
+  // check our actual owning collection rather than accepting retained nodes.
+  const observedUiSource = uiSource.replace(trackingMarker, trackingMarker + `
+    window.__controls.trackedNodes=function(){return{count:mountNodes.length,closedPanels:mountNodes.filter(function(node){return node&&node.classList.contains('screen-overlay')&&!node.isConnected;}).length};};`);
   const server = http.createServer((req, res) => {
     const route = new URL(req.url, 'http://127.0.0.1').pathname;
     if (route === '/dsh-lite-adapter.js') {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' }); res.end(controlledAdapter); return;
+    }
+    if (route === '/dsh-lite-ui.js') {
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' }); res.end(observedUiSource); return;
     }
     if (assets.has(route)) {
       res.writeHead(200, { 'content-type': assets.get(route) + '; charset=utf-8', 'cache-control': 'no-store' });
@@ -189,6 +201,70 @@ async function run() {
     check(await page.eval(`__controls.goal.id==='old-completed'||__controls.goal.phase==='complete'`), false, 'confirmed Create reads back a distinct unfinished goal');
     check(await page.eval(`document.getElementById('message-input').value`), messageDraft, 'goal submit preserves message draft');
     await close();
+
+    // The form must retain the goal identity and revision actually shown to
+    // the user. A background status refresh must not silently retarget Save.
+    for (const replacement of [
+      { label: 'replacement goal', id: 'goal-B', revision: 4, objective: 'Replacement goal B', phase: 'paused' },
+      { label: 'new revision', id: 'goal-A', revision: 2, objective: 'Original goal A', phase: 'paused' },
+      { label: 'new objective', id: 'goal-A', revision: 1, objective: 'Externally changed objective', phase: 'paused' }
+    ]) {
+      await page.eval(`__controls.goal={id:'goal-A',revision:1,objective:'Original goal A',phase:'paused'};__controls.event({type:'session-status',sessionId:'s1',running:false})`);
+      await page.eval(`new Promise(resolve=>requestAnimationFrame(()=>resolve(true)))`);
+      await pointer('[data-kind="goal"]');
+      const goalDraft = 'Retained phone draft for A';
+      await type('.goal-form textarea', goalDraft);
+      const beforeWrites = await page.eval(`__controls.calls.filter(row=>row[0]==='goalWrite').length`);
+      const changed = { id: replacement.id, revision: replacement.revision, objective: replacement.objective, phase: replacement.phase };
+      await page.eval(`__controls.goal=${JSON.stringify(changed)};__controls.event({type:'session-status',sessionId:'s1',running:false})`);
+      await page.eval(`new Promise(resolve=>requestAnimationFrame(()=>resolve(true)))`);
+      await pointer('.goal-form button', '保存目标');
+      await wait(`__controls.calls.filter(row=>row[0]==='goalWrite').length>${beforeWrites}||document.querySelector('.goal-form .files-status').textContent.includes('目标已改变')`);
+      check(await page.eval(`__controls.calls.filter(row=>row[0]==='goalWrite').length`), beforeWrites, replacement.label + ' cannot admit a stale goal mutation');
+      check(await page.eval(`document.querySelector('.goal-form .files-status').textContent.includes('目标已改变')`), true, replacement.label + ' explains the conflict without claiming a save');
+      check(await page.eval(`__controls.goal`), changed, replacement.label + ' is not overwritten by the old form');
+      check(await page.eval(`document.querySelector('.goal-form textarea').value`), goalDraft, replacement.label + ' preserves the independent goal draft');
+      check(await page.eval(`document.querySelector('.goal-form button').disabled`), true, replacement.label + ' requires explicit read-only recovery');
+      await pointer('.goal-form button', '重新读取目标');
+      await wait(`document.querySelector('.goal-form button').disabled===false`);
+      check(await page.eval(`document.querySelector('[data-control-pane="goal"]').textContent.includes(${JSON.stringify(replacement.objective)})`), true, replacement.label + ' recovery displays the current objective for review');
+      check(await page.eval(`document.querySelector('.goal-form textarea').value`), goalDraft, replacement.label + ' readback keeps the unsaved draft');
+      check(await page.eval(`__controls.calls.filter(row=>row[0]==='goalWrite').length`), beforeWrites, replacement.label + ' recovery never resubmits or writes automatically');
+      await close();
+    }
+
+    // An admitted write keeps the reference the user reviewed. A later reply
+    // cannot treat a replacement goal as confirmation or write to it again.
+    await page.eval(`__controls.goal={id:'inflight-A',revision:9,objective:'Reviewed inflight goal',phase:'paused'};__controls.goalWriteMode='hold';__controls.event({type:'session-status',sessionId:'s1',running:false})`);
+    await page.eval(`new Promise(resolve=>requestAnimationFrame(()=>resolve(true)))`);
+    await pointer('[data-kind="goal"]');
+    await type('.goal-form textarea', 'Unconfirmed inflight phone draft');
+    const inflightStart = await page.eval(`__controls.calls.filter(row=>row[0]==='goalWrite').length`);
+    await pointer('.goal-form button', '保存目标');
+    await wait(`typeof __controls.finishGoalWrite==='function'`);
+    const replacementGoal = { id: 'inflight-B', revision: 12, objective: 'Replacement while request is in flight', phase: 'paused' };
+    await page.eval(`__controls.goal=${JSON.stringify(replacementGoal)};__controls.event({type:'session-status',sessionId:'s1',running:false});__controls.finishGoalWrite({accepted:true})`);
+    await wait(`document.querySelector('.goal-form .files-status').textContent.includes('未确认')`);
+    check(await page.eval(`__controls.calls.filter(row=>row[0]==='goalWrite').slice(${inflightStart})`),
+      [['goalWrite', 's1', 'edit', { id: 'inflight-A', revision: 9, objective: 'Unconfirmed inflight phone draft' }]],
+      'an in-flight goal write retains only the captured identity and expected revision');
+    check(await page.eval(`__controls.goal`), replacementGoal, 'a late write response cannot overwrite the replacement goal');
+    check(await page.eval(`document.querySelector('.goal-form textarea').value`), 'Unconfirmed inflight phone draft', 'a late response retains the independent goal draft');
+    check(await page.eval(`document.querySelector('.goal-form button').disabled`), true, 'replacement readback cannot falsely confirm an in-flight save');
+    await page.eval(`__controls.goalWriteMode='normal'`);
+    await close();
+
+    // Repeated pointer operations must release their entries from the actual
+    // mount-owned collection, even while the page remains mounted and usable.
+    const trackedBeforeCards = await page.eval(`__controls.trackedNodes().count`);
+    for (let index = 0; index < 3; index++) {
+      await pointer('[data-kind="model"]');
+      await wait(`document.querySelectorAll('.control-card .pick-row').length===2`);
+      await close();
+    }
+    check(await page.eval(`__controls.trackedNodes().closedPanels`), 0, 'closed cards are released rather than retained until a full remount');
+    check(await page.eval(`__controls.trackedNodes().count`), trackedBeforeCards, 'opening and closing cards cannot grow the mount-owned node collection');
+    check(await page.eval(`document.getElementById('app').inert`), false, 'releasing closed cards preserves background interaction');
 
     // Unknown plan status offers explicit opposite actions. While one action
     // is admitted, both are disabled and a second click cannot race it.

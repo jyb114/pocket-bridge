@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0-preview.21 - Thumbnail-first conversation images (candidate)
+
+- Recognize supported local Markdown image and file links as safe DOM controls. Keep link parsing separate from file authorization; do not turn a model-provided path into an unrestricted browser link or automatically fetch remote image URLs.
+- Load authorized images near the transcript viewport as JPEG thumbnails, with a maximum edge of 960 pixels and a 200 KiB limit. The Windows converter may choose a smaller image to fit the limit. Keep original viewing and downloading explicit, with at most two page image reads and one Windows conversion per gateway at a time.
+- Keep bounded image caches in page memory, release object URLs and cancel pending work on context changes, and preserve explicit retry/error states. Do not place image bytes in browser persistent storage or the public asset cache, and do not silently fetch an original when thumbnail conversion fails.
+- Preserve session-authorized attachment reads and the real workspace boundary for local paths. Require an exact, locally signed 24-hour approval for an outside-workspace raster, bound to the gateway instance, session, canonical workspace and file, SHA-256 and file identity. Recheck approval before returning bytes and serialize registry changes so concurrent updates cannot restore a successfully revoked grant. Model text cannot grant access.
+- Clear stale goal state, release resources retained by closed dialogs, and cancel temporary previews that no longer belong to an unsent attachment. Keep malformed image references from interrupting the remaining conversation.
+- Record actual candidate operation against DSH 0.2.1-rc.2 in a 390 by 650 desktop-browser phone viewport: a real session's tool image loaded automatically and its original opened in the page. Do not treat isolated authorization/renderer tests as physical-phone, final-installer or old npm-host acceptance. Exact version admission remains unchanged.
+- Keep npm publication deferred pending the intended npm account and package-name authorization. DSH sign-in does not authorize npm publication; package preparation and a website listing do not establish public Discover availability.
+
 ## 1.0.0-preview.20 - Faster compact conversation controls
 
 - Keep model and reasoning choices in one compact card with a back action instead of replacing the dialog. Close successful picker choices after 150 ms rather than 700 ms.

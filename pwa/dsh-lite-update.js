@@ -107,7 +107,8 @@
   var pendingRequestId = '';
   var capability = null;
   var resultTimer = null;
-  var buildFiles = ['/dsh-lite-ui.js', '/dsh-lite-adapter.js', '/dsh-lite-pin.js', '/e2ee.js'];
+  var buildFiles = ['/dsh-lite-ui.js', '/dsh-lite-adapter.js', '/dsh-lite-pin.js', '/e2ee.js',
+    '/dsh-artifact-links.js', '/dsh-image-view.js'];
   var requiredFiles = buildFiles.concat(['/dsh-lite-legacy.js', '/dsh-lite-router.js',
     '/dsh-lite-switch.js', '/dsh-backup-prepare.js', '/i18n.js', '/dsh-lite-lang.js']);
 
@@ -217,8 +218,11 @@
     bar = document.createElement('div');
     bar.id = 'dsh-lite-update-notice';
     bar.setAttribute('role', 'alert');
-    bar.style.cssText = 'position:fixed;inset:0 0 auto;z-index:2147483647;display:flex;' +
-      'flex-wrap:wrap;align-items:center;gap:10px;padding:12px 14px;' +
+    // The worker's code-mismatch warning stays at the top. Keep the explicit
+    // update action at the bottom so either insertion order remains clickable.
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;display:flex;' +
+      'flex-wrap:wrap;align-items:center;gap:10px;box-sizing:border-box;padding:12px 14px;' +
+      'padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));' +
       'background:#4a1614;color:#fff;font:14px/1.5 system-ui,-apple-system,sans-serif';
 
     var text = document.createElement('span');
@@ -230,7 +234,7 @@
     var go = document.createElement('button');
     go.type = 'button';
     writeText(go, '更新到最新版');
-    go.style.cssText = 'min-height:38px;padding:7px 14px;border:0;border-radius:9px;' +
+    go.style.cssText = 'min-height:44px;min-width:44px;padding:7px 14px;border:0;border-radius:9px;' +
       'background:#fff;color:#4a1614;font:inherit;font-weight:650;cursor:pointer';
 
     go.addEventListener('click', function () {

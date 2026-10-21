@@ -623,6 +623,7 @@
     listSessions: function (projectId) { return Promise.resolve(sessionRows(String(projectId))); },
     loadSession: loadSession, loadOlder: loadOlder, listDirectories: listDirectories,
     listWorkspaceFiles: listWorkspaceFiles, downloadFile: downloadFile,
+    previewImage: function (input) { return global.DshLiteRemoteAdapter.previewImage(input); },
     createProject: createProject, createSession: createSession,
     sendMessage: sendMessage, cancelSession: cancelSession, respondToInteraction: respondToInteraction, uploadFile: uploadFile,
     listModels: listModels, selectModel: selectModel, listModes: listModes, selectMode: selectMode, readSelection: readSelection

@@ -951,6 +951,108 @@
     var mountObservers = [];
     var mountCleanups = [];
     function keep(node) { if (node) mountNodes.push(node); return node; }
+    var imageViews = window.DshImageView && typeof adapter.previewImage === 'function' ? window.DshImageView.create({
+      root: refs.transcript, translate: t,
+      getContext: function () {
+        return state.disposed || !state.sessionId || !window.__dshE2eeSecret ? null :
+          JSON.stringify([state.sessionId, state.contextVersion, window.__dshE2eeSecret]);
+      },
+      load: function (source, variant, options) {
+        return adapter.previewImage(Object.assign({}, source, { sessionId: state.sessionId,
+          variant: variant, signal: options.signal }));
+      },
+      openOverlay: function (title, build) {
+        var box = overlay(title, function (body, surface) {
+          build({ body: body, close: function () { surface.__liteClose(); }, onClose: function (callback) {
+            var previous = surface.__liteClose;
+            surface.__liteClose = function (focus) { callback(); previous(focus); };
+          } });
+        });
+        return { close: function () { box.__liteClose(); } };
+      }
+    }) : null;
+    var imageViewContext = imageViews ? imageViews.syncContext() : null;
+    function invalidateImageRows() {
+      if (!recordSnapshots) return;
+      state.recordElements.forEach(function (row, id) {
+        if (row.querySelector('.dsh-image-figure')) recordSnapshots.delete(id);
+      });
+    }
+    function syncImageViews() {
+      if (!imageViews) return false;
+      var next = imageViews.syncContext();
+      if (next === imageViewContext) return false;
+      imageViewContext = next;
+      invalidateImageRows();
+      return true;
+    }
+    function buildImagePreview(source) {
+      try { return imageViews.build(source).figure; }
+      catch (_) { return el('span', 'record-status', t('图片路径无效，无法预览。')); }
+    }
+    function renderMessageBody(body, text) {
+      var links = imageViews && window.DshArtifactLinks ? window.DshArtifactLinks.scan(text) : [];
+      if (!links.length) { body.innerHTML = markdownToHtml(text); return; }
+      // The scanner supplies metadata, never file authority. Placeholders are
+      // unpredictable and replaced with safe DOM only after HTML escaping.
+      var token = 'PBART' + Math.random().toString(36).slice(2) + 'X';
+      while (text.indexOf(token) >= 0) token += 'X';
+      var cursor = 0, marked = '';
+      links.forEach(function (link, i) {
+        marked += text.slice(cursor, link.start) + token + i + 'Z'; cursor = link.end;
+      });
+      marked += text.slice(cursor);
+      body.innerHTML = markdownToHtml(marked);
+      var walker = document.createTreeWalker(body, 4), nodes = [], node;
+      while ((node = walker.nextNode())) if (node.nodeValue.indexOf(token) >= 0) nodes.push(node);
+      var images = new Map();
+      nodes.forEach(function (textNode) {
+        var value = textNode.nodeValue, fragment = document.createDocumentFragment(), offset = 0;
+        var expression = new RegExp(token + '(\\d+)Z', 'g'), match;
+        while ((match = expression.exec(value))) {
+          fragment.append(document.createTextNode(value.slice(offset, match.index)));
+          var link = links[Number(match[1])];
+          if (link.kind === 'image') {
+            if (images.has(link.path)) {
+              var existing = images.get(link.path), open = el('button', 'record-file', link.label || link.path.split('/').pop());
+              open.type = 'button';
+              open.addEventListener('click', function (target) {
+                var preview = target.querySelector('.dsh-image-preview');
+                if (preview) preview.click();
+              }.bind(null, existing));
+              fragment.append(open);
+            } else {
+              var figure = buildImagePreview({ kind: 'path', path: link.path, name: link.path.split('/').pop() });
+              figure.setAttribute('aria-label', link.label || link.path.split('/').pop());
+              images.set(link.path, figure); fragment.append(figure);
+            }
+          } else {
+            var button = el('button', 'record-file', link.label || link.path.split('/').pop());
+            button.type = 'button';
+            button.addEventListener('click', openMessageFile.bind(null, link, button));
+            fragment.append(button);
+          }
+          offset = expression.lastIndex;
+        }
+        fragment.append(document.createTextNode(value.slice(offset)));
+        textNode.replaceWith(fragment);
+      });
+    }
+    async function openMessageFile(link, button) {
+      var sessionId = state.sessionId, contextVersion = state.contextVersion;
+      button.disabled = true;
+      try {
+        var entry = await cacheDownload(link.path, link.label, sessionId);
+        if (!entry || state.disposed || state.sessionId !== sessionId || state.contextVersion !== contextVersion || !button.isConnected) return;
+        overlay(entry.name, function (body) {
+          var save = el('a', 'record-file', t('↓ 保存 ') + entry.name);
+          save.href = entry.url; save.download = entry.name; body.append(save);
+          if (entry.preview) body.append(el('pre', 'files-preview-text', entry.preview.text || t('空文本文件。')));
+          else body.append(el('p', '', t('此文件不支持文本预览，可保存后打开。')));
+        });
+      } catch (error) { if (button.isConnected) button.textContent = t(safeError(error, '读取文件失败，请重试。')); }
+      finally { if (button.isConnected) button.disabled = false; }
+    }
     // Keep failures beside the action that caused them. The global error bar is
     // behind a modal and cannot be seen while the folder picker is open.
     refs.projectFeedback = keep(el('p', 'files-status'));
@@ -1306,7 +1408,7 @@
           // 思考过程和工具调用**保持纯文本** —— 工具参数常常是 JSON，
           // 套 markdown 只会把它打乱。
           var body = el('div', 'record-text record-markdown');
-          body.innerHTML = markdownToHtml(recordText);
+          renderMessageBody(body, recordText);
           item.append(body);
         }
         if (Array.isArray(record.attachments) && record.attachments.length) {
@@ -1315,7 +1417,12 @@
             if (!attachment || typeof attachment !== 'object') return;
             var name = label(attachment.name, t('文件'));
             var path = typeof attachment.path === 'string' ? attachment.path : '';
-            var officialImage = !path && officialImageAttachment(attachment);
+            var officialImage = officialImageAttachment(attachment);
+            if (imageViews && (officialImage || /\.(png|jpe?g|webp|gif)$/i.test(path))) {
+              attachments.append(buildImagePreview(officialImage ? { kind: 'attachment',
+                attachmentId: attachment.id, name: name } : { kind: 'path', path: path, name: name }));
+              return;
+            }
             if ((!path || typeof adapter.downloadFile !== 'function') && !officialImage) {
               if (!path && localImageAttachment(attachment)) {
                 attachments.append(buildLocalUploadImage(attachment, name));
@@ -1447,6 +1554,7 @@
       return item;
     }
     function renderRecords(prepend, force) {
+      syncImageViews();
       cancelRecordFrame();
       var oldHeight = refs.records.scrollHeight;
       var oldTop = refs.records.scrollTop;
@@ -1537,6 +1645,7 @@
       renderRecords(prepend);
     }
     function clearDownloadUrls() {
+      if (imageViews) { imageViews.reset(); imageViewContext = imageViews.syncContext(); invalidateImageRows(); }
       clearLocalUploadPreviews(false);
       officialImageEpoch++;
       officialImagePending.forEach(function (entry) { entry.controller.abort(); });
@@ -1666,6 +1775,7 @@
       return Array.from(new Uint8Array(hash), function (n) { return n.toString(16).padStart(2, '0'); }).join('');
     }
     function checkLocalUploadPreviewKey() {
+      if (syncImageViews()) renderRecords();
       if (!localUploadPreviews || (!localUploadPreviews.size && !Array.from(state.downloadUrls.values()).some(function (entry) {
         return entry.kind === 'official-image';
       }))) return;
@@ -2965,6 +3075,14 @@
         remove.setAttribute('aria-label', t('移除附件') + ' ' + label(upload.file && upload.file.name, t('文件')));
         remove.addEventListener('click', function () {
           invalidateSendReview();
+          var metadata = upload.file;
+          var preview = metadata && localUploadPreview({ id: metadata.attachmentId,
+            name: metadata.name, size: metadata.bytes });
+          if (preview && !state.records.concat(state.pendingRecords || []).some(function (record) {
+            return record && Array.isArray(record.attachments) && record.attachments.some(function (attachment) {
+              return attachment && attachment.id === metadata.attachmentId;
+            });
+          })) removeLocalUploadPreview(metadata.attachmentId);
           state.uploads.splice(index, 1);
           saveCurrentDraft();
           renderUploads(); renderControls();
@@ -3050,6 +3168,8 @@
         if (closed) return;
         closed = true;
         openOverlays.delete(box);
+        var tracked = mountNodes.indexOf(box);
+        if (tracked >= 0) mountNodes.splice(tracked, 1);
         box.remove();
         if (screenOverlay === box) screenOverlay = null;
         if (app && !document.querySelector('.screen-overlay')) app.inert = false;
@@ -3804,6 +3924,27 @@
         if (typeof adapter.goalAction !== 'function') {
           body.append(el('p', 'panel-line', t('此版本不支持目标，请在电脑端操作。')));
         } else {
+          function goalSnapshot(goal) {
+            return goal ? { id: goal.id, revision: goal.revision, objective: goal.objective, phase: goal.phase } : null;
+          }
+          var displayedGoal = goalSnapshot(state.goal);
+          function matchesDisplayedGoal() {
+            var latest = state.goal;
+            return !state.goalError && (displayedGoal ? !!latest && latest.id === displayedGoal.id &&
+              latest.revision === displayedGoal.revision && latest.objective === displayedGoal.objective &&
+              latest.phase === displayedGoal.phase : !latest);
+          }
+          function showCurrentGoal() {
+            var editing = displayedGoal && displayedGoal.phase !== 'complete';
+            save.textContent = editing ? t('保存目标') : t('设定目标');
+            goalStateNote.textContent = editing ? goalPhaseText(displayedGoal.phase) + ' · ' + displayedGoal.objective : t('还没有设定目标。');
+            goalStateNote.style.whiteSpace = 'pre-line'; goalStateNote.style.overflowWrap = 'anywhere';
+          }
+          function rejectStaleGoal() {
+            uncertainGoal = true; save.disabled = true; reread.hidden = false;
+            goalFeedback.textContent = t('目标已改变，草稿已保留。请重新读取并核对当前目标后再保存。');
+            goalFeedback.dataset.state = 'error'; goalFeedback.hidden = false;
+          }
           var input = el('textarea', 'goal-input');
           input.rows = 3;
           input.setAttribute('aria-label', t('目标内容'));
@@ -3814,19 +3955,22 @@
           var goalPending = false;
           var goalFeedback = el('p', 'files-status');
           goalFeedback.hidden = true;
+          goalFeedback.setAttribute('role', 'status');
           save.type = 'button';
           save.disabled = uncertainGoal;
           save.addEventListener('click', function () {
             if (!current() || uncertainGoal || goalPending) return;
             var text = input.value.trim();
             if (!text) { goalFeedback.textContent = t('目标不能是空的。'); goalFeedback.hidden = false; return; }
+            if (!matchesDisplayedGoal()) { rejectStaleGoal(); return; }
             save.disabled = true;
             goalPending = true;
             goalFeedback.hidden = true;
-            var previousGoal = state.goal;
+            var previousGoal = displayedGoal;
             var editing = !!(previousGoal && previousGoal.phase !== 'complete');
             var done = Promise.resolve().then(function () {
               if (!current()) throw new Error(t('对话已切换，请重新打开。'));
+              if (!matchesDisplayedGoal()) throw new Error(t('目标已改变，草稿已保留。请重新读取并核对当前目标后再保存。'));
               return editing
                 ? adapter.goalAction(sessionId, 'edit',
                   { id: previousGoal.id, revision: previousGoal.revision, objective: text })
@@ -3840,8 +3984,8 @@
                 (editing ? state.goal.id === previousGoal.id : !previousGoal || state.goal.id !== previousGoal.id);
               uncertainGoal = !confirmed; save.disabled = uncertainGoal; reread.hidden = confirmed;
               if (confirmed) {
-                save.textContent = t('保存目标');
-                goalStateNote.textContent = t('目标显示在输入框上方那条里，点铅笔可以改。');
+                displayedGoal = goalSnapshot(state.goal);
+                showCurrentGoal();
               }
               goalFeedback.textContent = confirmed ? t('目标已保存。') : t('目标请求已发送，当前结果未确认，请重新读取。');
               goalFeedback.dataset.state = confirmed ? 'success' : 'error';
@@ -3864,6 +4008,7 @@
               if (!current()) return;
               reread.disabled = false; uncertainGoal = !!state.goalError; save.disabled = uncertainGoal;
               reread.hidden = !uncertainGoal;
+              if (!uncertainGoal) { displayedGoal = goalSnapshot(state.goal); showCurrentGoal(); }
               goalFeedback.textContent = uncertainGoal ? t('目标状态暂时无法读取。') : t('已重新读取目标，请检查后保存。');
               goalFeedback.dataset.state = uncertainGoal ? 'error' : 'success'; goalFeedback.hidden = false;
             });
@@ -5199,6 +5344,7 @@
         Array.from(openOverlays).forEach(function (box) { if (box.__liteClose) box.__liteClose(false); });
         mountCleanups.forEach(function (cleanup) { try { cleanup(); } catch (_) {} });
         clearDownloadUrls();
+        if (imageViews) imageViews.dispose();
         listeners.forEach(function (entry) { entry[0].removeEventListener(entry[1], entry[2]); });
         mountTimers.forEach(function (timer) { clearInterval(timer); });
         mountObservers.forEach(function (observer) { observer.disconnect(); });

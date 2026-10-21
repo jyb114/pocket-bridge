@@ -57,6 +57,14 @@ function dimensions(data, type) {
   }
   return null;
 }
+function inspectRaster(data) {
+  if (!Buffer.isBuffer(data) || !data.length || data.length > MAX_IMAGE_BYTES) return null;
+  for (const type of TYPES) {
+    const size = dimensions(data, type);
+    if (size && validDimensions(...size)) return { type, width: size[0], height: size[1] };
+  }
+  return null;
+}
 function validateValue(value, attachmentId) {
   if (!exact(value, ['attachment', 'data']) || !exact(value.attachment,
     ['attachmentId', 'mediaType', 'bytes', 'width', 'height'], ['name', 'originalDimensions'])) return null;
@@ -140,8 +148,13 @@ function createDshLiteAttachment(options = {}) {
       const value = decoded.result.value;
       if (Number.isSafeInteger(value?.attachment?.bytes) && value.attachment.bytes > MAX_IMAGE_BYTES ||
         typeof value?.data === 'string' && value.data.length > 4 * Math.ceil(MAX_IMAGE_BYTES / 3)) return reply(413, 'image-too-large');
-      const image = validateValue(value, input.attachmentId);
+      let image = validateValue(value, input.attachmentId);
       if (!image) return reply(502, 'upstream-attachment-invalid');
+      if (typeof options.transformImage === 'function') {
+        image = await Promise.race([options.transformImage(image, { signal: controller.signal }), aborted]);
+        const checked = image && inspectRaster(image.data);
+        if (!checked || checked.type !== image.type) return reply(502, 'image-preview-invalid');
+      }
       if (controller.signal.aborted || res.destroyed || res.writableEnded) return;
       res.writeHead(200, { 'content-type': image.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
       res.end(image.data);
@@ -153,5 +166,5 @@ function createDshLiteAttachment(options = {}) {
     }
   };
 }
-module.exports = { createDshLiteAttachment, MAX_REQUEST_BYTES, MAX_IMAGE_BYTES, MAX_RESPONSE_BYTES,
+module.exports = { createDshLiteAttachment, inspectRaster, MAX_REQUEST_BYTES, MAX_IMAGE_BYTES, MAX_RESPONSE_BYTES,
   MAX_DIMENSION, MAX_IMAGE_PIXELS, METHOD };

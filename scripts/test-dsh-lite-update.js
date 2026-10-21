@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const script = fs.readFileSync(path.join(__dirname, '..', 'pwa', 'dsh-lite-update.js'), 'utf8');
 const manifest = (hash) => ({ files: Object.fromEntries(
   ['/dsh-lite-ui.js', '/dsh-lite-adapter.js', '/dsh-lite-pin.js', '/e2ee.js',
+    '/dsh-artifact-links.js', '/dsh-image-view.js',
     '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-switch.js',
     '/i18n.js', '/dsh-lite-lang.js', '/dsh-backup-prepare.js']
     .map((name) => [name, hash.repeat(64)])) });
@@ -247,6 +248,31 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
     'activation timeout must leave the old pin untouched, without probing old worker');
   assert.equal(stalledButton.disabled, false, 'activation timeout allows refresh and retry');
   assert.equal(stalled.reloads, 0);
+
+  for (const file of ['/dsh-artifact-links.js', '/dsh-image-view.js']) {
+    const imageOnly = fixture();
+    await tick(); await tick();
+    const baseline = imageOnly.storage.get('dsh-lite:build');
+    const changed = manifest('a'); changed.files[file] = 'b'.repeat(64);
+    imageOnly.setManifest(changed); imageOnly.foreground();
+    await tick(); await tick();
+    assert.ok(imageOnly.nodes.get('dsh-lite-update-notice'), file + ' alone must trigger an update notice');
+    assert.equal(imageOnly.sent.length, 0, 'an image-only change still requires explicit consent');
+    assert.equal(imageOnly.storage.get('dsh-lite:build'), baseline);
+    for (const invalid of [undefined, 'invalid-hash']) {
+      const absent = fixture(); await tick(); await tick();
+      const oldBuild = absent.storage.get('dsh-lite:build'), incomplete = manifest('a');
+      if (invalid === undefined) delete incomplete.files[file]; else incomplete.files[file] = invalid;
+      absent.setManifest(incomplete);
+      absent.emit({ type: 'dsh-code-mismatch', path: file });
+      await tick(); await tick();
+      const retry = absent.nodes.get('dsh-lite-update-notice').querySelector('button');
+      retry.click(); await tick(); await tick();
+      assert.equal(absent.sent.length, 0, 'missing or invalid required image hash never reaches a worker');
+      assert.equal(retry.disabled, false, 'invalid required manifest remains retryable');
+      assert.equal(absent.reloads, 0); assert.equal(absent.storage.get('dsh-lite:build'), oldBuild);
+    }
+  }
 
   console.log('PASS: verified update waits for replacement activation and slow staging');
 })().catch((error) => { console.error(error.stack || error); process.exitCode = 1; });

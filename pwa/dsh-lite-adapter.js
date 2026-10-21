@@ -1201,7 +1201,7 @@
     }); };
     var response = await invoke();
     if (response.status === 403 && await e2ee.prove(true)) response = await invoke();
-    if (!response.ok) throw error(response.status === 404 ? '文件不存在，或桥服务尚未更新下载功能。' :
+    if (!response.ok) throw error(response.status === 403 ? '该文件不在当前项目目录内，无法从此对话下载。' : response.status === 404 ? '文件不存在，或桥服务尚未更新下载功能。' :
       '文件下载失败（HTTP ' + response.status + '）。');
     return { blob: await response.blob(), name: filePath.split(/[\\/]/).pop() || 'download' };
   }
@@ -1232,6 +1232,49 @@
     if (!blob || !Number.isSafeInteger(blob.size) || blob.size <= 0 || blob.size > 8 * 1024 * 1024 ||
         String(blob.type || '').toLowerCase() !== type) throw error('图片超过安全预览限制。');
     return { blob: blob, sessionId: sessionId, attachmentId: attachmentId };
+  }
+  async function previewImage(input) {
+    var sessionId = input && input.sessionId;
+    var variant = input && input.variant;
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 ||
+        /[\u0000-\u0020\u007f]/.test(sessionId) || !/^(thumbnail|original)$/.test(variant))
+      throw error('图片预览请求无效。');
+    var official = input.kind === 'attachment';
+    var body;
+    if (official) {
+      if (!/^sha256:[a-f0-9]{64}$/.test(input.attachmentId || '')) throw error('图片附件标识无效。');
+      body = { sessionId: sessionId, attachmentId: input.attachmentId };
+    } else {
+      if (input.kind !== 'path' || typeof input.path !== 'string' || !input.path || input.path.length > 4096)
+        throw error('没有可读取的电脑图片路径。');
+      body = { sessionId: sessionId, path: input.path, variant: variant };
+    }
+    var e2ee = global.DshE2EE, secret = global.__dshE2eeSecret;
+    if (!e2ee || !secret || typeof e2ee.encryptedFetch !== 'function')
+      throw error('缺少加密连接密钥，请重新打开完整地址。');
+    var route = official ? (variant === 'thumbnail' ? '/__dsh/lite-attachment-preview' : '/__dsh/lite-attachment') : '/__dsh/lite-image-preview';
+    var invoke = function () { return e2ee.encryptedFetch(secret, route, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store', signal: input.signal,
+      headers: { 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(body)
+    }); };
+    var response = await invoke();
+    if (response.status === 403 && !(input.signal && input.signal.aborted) &&
+        secret === global.__dshE2eeSecret && typeof e2ee.prove === 'function' && await e2ee.prove(true)) response = await invoke();
+    if (secret !== global.__dshE2eeSecret || input.signal && input.signal.aborted) throw error('图片读取已取消。');
+    if (!response.headers || response.headers.get('x-dsh-e2ee-decrypted') !== '1' ||
+        response.headers.get('x-dsh-e2ee') === '1') throw error('图片响应没有通过加密验证。');
+    if (!response.ok) throw error(response.status === 403 ? '这张图片不在当前项目中，需在电脑端单独授权后才能显示。' :
+      response.status === 404 ? '电脑上找不到这张图片，或图片不属于当前对话。' :
+      response.status === 413 ? '图片超过安全预览限制。' :
+      response.status === 501 ? '当前电脑暂不支持小图预览，请选择读取原图。' :
+      response.status === 409 ? '图片已更改，请在电脑端重新授权。' : '图片读取失败，请检查连接后重试。');
+    var type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(type)) throw error('图片格式不受支持。');
+    var blob = await response.blob();
+    if (!blob || !Number.isSafeInteger(blob.size) || blob.size <= 0 || blob.size > 8 * 1024 * 1024 ||
+        String(blob.type || '').toLowerCase() !== type) throw error('图片超过安全预览限制。');
+    return { blob: blob, sessionId: sessionId,
+      name: official ? (typeof input.name === 'string' && input.name || 'image') : input.path.split(/[\\/]/).pop() || 'image' };
   }
   async function respondToInteraction(input) {
     var interaction = pendingInteractions.get(String(input.id));
@@ -1559,7 +1602,7 @@
     createProject: createProject, createSession: createSession,
     sendMessage: sendMessage, listPromptOperations: listPromptOperations, resolvePromptOperation: resolvePromptOperation,
     uploadFile: uploadFile, downloadFile: downloadFile,
-    downloadImageAttachment: downloadImageAttachment,
+    downloadImageAttachment: downloadImageAttachment, previewImage: previewImage,
     cancelSession: cancelSession, respondToInteraction: respondToInteraction
   };
   global.DshLiteRemoteAdapter = global.DshLiteAdapter;

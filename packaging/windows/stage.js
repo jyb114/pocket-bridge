@@ -72,6 +72,8 @@ for (const required of [
   "scripts/dsh-lite-download.js",
   "scripts/dsh-lite-files.js",
   "scripts/dsh-lite-attachment.js",
+  "scripts/dsh-lite-image-preview.js",
+  "scripts/approve-dsh-image.js",
   "scripts/dsh-runtime-identity.js",
   "desktop/open-desktop.vbs",
   "desktop/open-desktop-app.js",
@@ -82,6 +84,8 @@ for (const required of [
   "pwa/console.html",
   "pwa/dsh-lite.html",
   "pwa/dsh-lite-ui.js",
+  "pwa/dsh-artifact-links.js",
+  "pwa/dsh-image-view.js",
   "pwa/dsh-lite-lang.js",
   "pwa/dsh-lite.css",
   "pwa/e2ee.js"

@@ -6,6 +6,7 @@
   if (!('serviceWorker' in navigator)) return;
   var required = ['/e2ee.js', '/dsh-lite-pin.js', '/dsh-lite-adapter.js',
     '/dsh-lite-legacy.js', '/dsh-lite-router.js', '/dsh-lite-ui.js', '/dsh-backup-prepare.js',
+    '/dsh-artifact-links.js', '/dsh-image-view.js',
     // 界面文案（中/英/西）也钉住：它是**决定界面说什么话**的那个文件，
     // 而且每个页面都会加载 —— 不在名单里就等于"有人换掉它，谁都不会发现"。
     '/i18n.js', '/dsh-lite-lang.js'];
@@ -60,14 +61,19 @@
     bar = document.createElement('div');
     bar.id = 'dsh-lite-pin-notice';
     bar.setAttribute('role', 'alert');
-    bar.style.cssText = 'position:fixed;inset:0 0 auto;z-index:2147483647;' +
-      'padding:12px 16px;background:#4a1614;color:#fff;font:14px/1.5 system-ui,sans-serif';
+    // Leave the worker's mismatch warning visible at the top and place this
+    // explicit recovery action above the phone's bottom safe area.
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;display:flex;' +
+      'flex-wrap:wrap;align-items:center;gap:10px;box-sizing:border-box;padding:12px 16px;' +
+      'padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));' +
+      'background:#4a1614;color:#fff;font:14px/1.5 system-ui,sans-serif';
     var message = document.createElement('span');
+    message.style.cssText = 'flex:1 1 220px;min-width:0';
     message.textContent = detail;
     var button = document.createElement('button');
     button.type = 'button';
     button.textContent = '我刚更新过，信任新版本';
-    button.style.cssText = 'margin-left:12px;padding:7px 10px;cursor:pointer';
+    button.style.cssText = 'min-height:44px;min-width:44px;padding:7px 10px;cursor:pointer';
     button.addEventListener('click', function () {
       // 只要一次点击就够：按钮文字本身已经写明了条件（「我刚更新过，信任新版本」），
       // 那已经是明确 informed consent。原来还叠一层 confirm() 系统弹窗，
